@@ -724,15 +724,19 @@ def draw_axis_aligned_km_grid(
 
         x_digits = (int(round(x_m)) // 1000) % 100
         x_label = f"{x_digits:02d}"
-        # Верх
+        
+        # Сдвиг подписей вправо на половину шага сетки (к середине стороны квадрата)
+        half_step_px = (step_m / 2) * ppm
+        
+        # Верх - сдвигаем вправо
         draw_label_with_bg(
-            draw, (x_px, GRID_TEXT_MARGIN), x_label, font=font,
+            draw, (x_px + half_step_px, GRID_TEXT_MARGIN), x_label, font=font,
             anchor="ma", img_size=(w, h), bg_color=GRID_LABEL_BG_COLOR, padding=GRID_LABEL_BG_PADDING
         )
         grid_progress.step_sync(1)
-        # Низ
+        # Низ - сдвигаем вправо
         draw_label_with_bg(
-            draw, (x_px, h - GRID_TEXT_MARGIN), x_label, font=font,
+            draw, (x_px + half_step_px, h - GRID_TEXT_MARGIN), x_label, font=font,
             anchor="ms", img_size=(w, h), bg_color=GRID_LABEL_BG_COLOR, padding=GRID_LABEL_BG_PADDING
         )
         grid_progress.step_sync(1)
@@ -748,15 +752,19 @@ def draw_axis_aligned_km_grid(
 
         y_digits = (int(round(y_m)) // 1000) % 100
         y_label = f"{y_digits:02d}"
-        # Лево
+        
+        # Сдвиг подписей вверх на половину шага сетки (к середине стороны квадрата)
+        half_step_px = (step_m / 2) * ppm
+        
+        # Лево - сдвигаем вверх
         draw_label_with_bg(
-            draw, (GRID_TEXT_MARGIN, y_px), y_label, font=font,
+            draw, (GRID_TEXT_MARGIN, y_px + half_step_px), y_label, font=font,
             anchor="lm", img_size=(w, h), bg_color=GRID_LABEL_BG_COLOR, padding=GRID_LABEL_BG_PADDING
         )
         grid_progress.step_sync(1)
-        # Право
+        # Право - сдвигаем вверх
         draw_label_with_bg(
-            draw, (w - GRID_TEXT_MARGIN, y_px), y_label, font=font,
+            draw, (w - GRID_TEXT_MARGIN, y_px + half_step_px), y_label, font=font,
             anchor="rm", img_size=(w, h), bg_color=GRID_LABEL_BG_COLOR, padding=GRID_LABEL_BG_PADDING
         )
         grid_progress.step_sync(1)
