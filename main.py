@@ -6,6 +6,7 @@ import sys
 import time
 import asyncio
 import threading
+from string import Formatter
 from typing import Tuple, List, Optional
 
 import httpx
@@ -71,27 +72,28 @@ API_KEY_ENV_VAR = "API_KEY"       # Имя переменной окружени
 
 # Координаты области по углам (СК-42 Гаусса-Крюгера, метры)
 
-BOTTOM_LEFT_X_HIGH = 54
-BOTTOM_LEFT_Y_HIGH = 74
-TOP_RIGHT_X_HIGH = 54
-TOP_RIGHT_Y_HIGH = 74
+# Старшие разряды
+FROM_X_HIGH = 54
+FROM_Y_HIGH = 74
+TO_X_HIGH = 54
+TO_Y_HIGH = 74
 
-FROM_X = 14
-FROM_Y = 43
-
-TO_X = 18
-TO_Y = 49
+# Младшие разряды
+FROM_X_LOW = 14
+FROM_Y_LOW = 43
+TO_X_LOW = 18
+TO_Y_LOW = 49
 
 ADDITIVE_RATIO = 0.3
 
 # X координата левого нижнего угла
-BOTTOM_LEFT_X_SK42_GK = 1e3 * (FROM_X - ADDITIVE_RATIO) + 1e5 * BOTTOM_LEFT_X_HIGH
+BOTTOM_LEFT_X_SK42_GK = 1e3 * (FROM_X_LOW - ADDITIVE_RATIO) + 1e5 * FROM_X_HIGH
 # Y координата левого нижнего угла
-BOTTOM_LEFT_Y_SK42_GK = 1e3 * (FROM_Y - ADDITIVE_RATIO) + 1e5 * BOTTOM_LEFT_Y_HIGH
+BOTTOM_LEFT_Y_SK42_GK = 1e3 * (FROM_Y_LOW - ADDITIVE_RATIO) + 1e5 * FROM_Y_HIGH
 # X координата правого верхнего угла
-TOP_RIGHT_X_SK42_GK = 1e3 * (TO_X + ADDITIVE_RATIO) + 1e5 * TOP_RIGHT_X_HIGH
+TOP_RIGHT_X_SK42_GK = 1e3 * (TO_X_LOW + ADDITIVE_RATIO) + 1e5 * TO_X_HIGH
 # Y координата правого верхнего угла
-TOP_RIGHT_Y_SK42_GK = 1e3 * (TO_Y + ADDITIVE_RATIO) + 1e5 * TOP_RIGHT_Y_HIGH
+TOP_RIGHT_Y_SK42_GK = 1e3 * (TO_Y_LOW + ADDITIVE_RATIO) + 1e5 * TO_Y_HIGH
 
 
 # # Координаты области по углам (СК-42 Гаусса-Крюгера, метры)
