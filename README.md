@@ -29,32 +29,6 @@ Mil Mapper — загрузка спутниковых тайлов Google Stati
 3) Запуск:
    python main.py
 
-Настройки (main.py)
-- GOOGLE_STATIC_MAPS_URL — базовый URL Google Static Maps API.
-- STATIC_SIZE_PX — размер статик-тайла (px), по умолчанию 640 (со scale=2 фактически ~1280).
-- STATIC_SCALE — масштаб статик-тайла (1 или 2).
-- MAX_ZOOM — верхняя граница зума; реальный зум может уменьшиться автоматически при больших размерах.
-- EARTH_RADIUS_M, TILE_SIZE — параметры Web Mercator.
-- ASYNC_MAX_CONCURRENCY — параллелизм загрузки.
-- MAX_OUTPUT_PIXELS — лимит итогового кадра по количеству пикселей (без припусков).
-- PIL_DISABLE_LIMIT — отключить защиту Pillow от «бомб декомпрессии».
-- ROTATION_PAD_RATIO, ROTATION_PAD_MIN_PX — припуск под поворот (чтобы не «резало» углы).
-- API_KEY_ENV_VAR — имя переменной окружения для ключа (по умолчанию API_KEY).
-- CENTER_LAT_SK42, CENTER_LNG_SK42 — центр прямоугольника в СК‑42 (градусы).
-- WIDTH_M, HEIGHT_M — размеры области (метры).
-- OUTPUT_PATH — путь к сохранению.
-- ZOOM — желаемый зум.
-- GRID_STEP_M — шаг сетки (метры, 1000 м = 1 км).
-- GRID_COLOR, GRID_WIDTH_PX — стиль линий сетки.
-- GRID_FONT_SIZE — размер шрифта подписей (px).
-- GRID_FONT_PATH — путь к TTF/OTF обычного шрифта (если None — используется DejaVu*).
-- GRID_FONT_BOLD, GRID_FONT_PATH_BOLD — использовать жирный и/или указать путь к жирному шрифту.
-- GRID_TEXT_COLOR — цвет текста.
-- GRID_TEXT_OUTLINE_COLOR, GRID_TEXT_OUTLINE_WIDTH — обводка текста для читаемости.
-- GRID_TEXT_MARGIN — отступ текста от края.
-- GRID_LABEL_BG_COLOR, GRID_LABEL_BG_PADDING — жёлтая подложка под подписью и её внутр. отступ.
-- ENABLE_WHITE_MASK, MASK_OPACITY — включение и прозрачность белой маски.
-
 Логика работы
 1) Подготовка:
    - Чтение .env, получение API ключа.
