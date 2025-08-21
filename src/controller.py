@@ -13,6 +13,7 @@ from constants import (
     ENABLE_WHITE_MASK,
     GRID_COLOR,
     GRID_STEP_M,
+    MAX_GK_ZONE,
     MAX_OUTPUT_PIXELS,
     MAX_ZOOM,
     PIL_DISABLE_LIMIT,
@@ -60,9 +61,9 @@ async def download_satellite_rectangle(
     sp.start()
     # Определяем зону Гаусса-Крюгера из X координаты (номер зоны содержится в старших разрядах)
     zone = int(center_x_sk42_gk // 1000000)  # Зона из первых цифр X координаты
-    if zone < 1 or zone > 60:
+    if zone < 1 or zone > MAX_GK_ZONE:
         # Fallback: пытаемся определить зону из координаты
-        zone = max(1, min(60, int((center_x_sk42_gk - 500000) // 1000000) + 1))
+        zone = max(1, min(MAX_GK_ZONE, int((center_x_sk42_gk - 500000) // 1000000) + 1))
     crs_sk42_gk = CRS.from_epsg(28400 + zone)
     sp.stop('Подготовка: зона определена')
 
@@ -70,9 +71,7 @@ async def download_satellite_rectangle(
     sp.start()
     # Конвертируем из Гаусса-Крюгера в географические СК-42
     t_sk42_from_gk = Transformer.from_crs(crs_sk42_gk, crs_sk42_geog, always_xy=True)
-    center_lng_sk42, center_lat_sk42 = t_sk42_from_gk.transform(
-        center_x_sk42_gk, center_y_sk42_gk
-    )
+    center_lng_sk42, center_lat_sk42 = t_sk42_from_gk.transform(center_x_sk42_gk, center_y_sk42_gk)
     sp.stop('Подготовка: координаты СК-42 готовы')
 
     sp = LiveSpinner('Подготовка: создание трансформеров')
@@ -83,9 +82,7 @@ async def download_satellite_rectangle(
 
     sp = LiveSpinner('Подготовка: конвертация центра в WGS84')
     sp.start()
-    center_lng_wgs, center_lat_wgs = t_sk42_to_wgs.transform(
-        center_lng_sk42, center_lat_sk42
-    )
+    center_lng_wgs, center_lat_wgs = t_sk42_to_wgs.transform(center_lng_sk42, center_lat_sk42)
     sp.stop('Подготовка: центр WGS84 готов')
 
     sp = LiveSpinner('Подготовка: подбор zoom')
@@ -105,9 +102,7 @@ async def download_satellite_rectangle(
 
     sp = LiveSpinner('Подготовка: оценка размера')
     sp.start()
-    target_w_px, target_h_px, _ = estimate_crop_size_px(
-        center_lat_wgs, width_m, height_m, zoom, scale
-    )
+    target_w_px, target_h_px, _ = estimate_crop_size_px(center_lat_wgs, width_m, height_m, zoom, scale)
     sp.stop('Подготовка: размер оценён')
 
     sp = LiveSpinner('Подготовка: расчёт сетки')
@@ -131,7 +126,7 @@ async def download_satellite_rectangle(
     semaphore = asyncio.Semaphore(ASYNC_MAX_CONCURRENCY)
     async with httpx.AsyncClient(http2=True) as client:
 
-        async def bound_fetch(idx_lat_lng):
+        async def bound_fetch(idx_lat_lng: tuple[int, tuple[float, float]]) -> tuple[int, Image.Image]:
             idx, (lt, ln) = idx_lat_lng
             async with semaphore:
                 img = await async_fetch_static_map(
@@ -200,15 +195,20 @@ async def download_satellite_rectangle(
     sp = LiveSpinner('Сохранение файла')
     sp.start()
     try:
-        os.makedirs(os.path.dirname(os.path.abspath(output_path)) or '.', exist_ok=True)
-        result.save(output_path)
+        from pathlib import Path
+
+        out_path = Path(output_path)
+        out_path.resolve().parent.mkdir(parents=True, exist_ok=True)
+        result.save(out_path)
         try:
-            fd = os.open(output_path, os.O_RDONLY)
+            fd = os.open(out_path, os.O_RDONLY)
             try:
                 os.fsync(fd)
             finally:
                 os.close(fd)
         except Exception:
+            # Игнорируем ошибки fsync на некоторых файловых системах
             pass
     finally:
         sp.stop('Сохранение файла: готово')
+    return output_path

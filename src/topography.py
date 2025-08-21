@@ -33,11 +33,11 @@ height_m = settings.top_right_x_sk42_gk - settings.bottom_left_x_sk42_gk
 
 def build_transformers_sk42(
     zone_from_lon: float,
-    custom_helmert: tuple[float, float, float, float, float, float, float]
-    | None = None,
+    custom_helmert: tuple[float, float, float, float, float, float, float] | None = None,
 ) -> tuple[Transformer, Transformer, CRS]:
     """
     Собирает трансформеры:
+
     - СК‑42 географические <-> WGS84 (с учётом доступных параметров);
     - СК‑42 / Гаусса–Крюгера (EPSG:284xx) для выбранной 6-градусной зоны.
     """
@@ -50,12 +50,8 @@ def build_transformers_sk42(
         proj4_sk42_custom = CRS.from_proj4(
             f'+proj=longlat +a=6378245.0 +rf=298.3 +towgs84={dx},{dy},{dz},{rx_as},{ry_as},{rz_as},{ds_ppm} +no_defs'
         )
-        t_sk42_to_wgs = Transformer.from_crs(
-            proj4_sk42_custom, crs_wgs84, always_xy=True
-        )
-        t_wgs_to_sk42 = Transformer.from_crs(
-            crs_wgs84, proj4_sk42_custom, always_xy=True
-        )
+        t_sk42_to_wgs = Transformer.from_crs(proj4_sk42_custom, crs_wgs84, always_xy=True)
+        t_wgs_to_sk42 = Transformer.from_crs(crs_wgs84, proj4_sk42_custom, always_xy=True)
     else:
         t_sk42_to_wgs = Transformer.from_crs(crs_sk42_geog, crs_wgs84, always_xy=True)
         t_wgs_to_sk42 = Transformer.from_crs(crs_wgs84, crs_sk42_geog, always_xy=True)
@@ -69,14 +65,10 @@ def build_transformers_sk42(
 def meters_per_pixel(lat_deg: float, zoom: int, scale: int = STATIC_SCALE) -> float:
     """Возвращает метров на пиксель в проекции Web Mercator на заданной широте и уровне зума."""
     lat_rad = math.radians(lat_deg)
-    return (math.cos(lat_rad) * 2 * math.pi * EARTH_RADIUS_M) / (
-        TILE_SIZE * (2**zoom) * scale
-    )
+    return (math.cos(lat_rad) * 2 * math.pi * EARTH_RADIUS_M) / (TILE_SIZE * (2**zoom) * scale)
 
 
-def latlng_to_pixel_xy(
-    lat_deg: float, lng_deg: float, zoom: int
-) -> tuple[float, float]:
+def latlng_to_pixel_xy(lat_deg: float, lng_deg: float, zoom: int) -> tuple[float, float]:
     """Преобразует WGS84 (lat, lng) в координаты «мира» (пиксели) Web Mercator."""
     siny = math.sin(math.radians(lat_deg))
     siny = min(max(siny, -0.9999), 0.9999)
@@ -146,11 +138,12 @@ def compute_grid(
     list[tuple[float, float]],
     tuple[int, int],
     tuple[int, int],
-    tuple[int, int],
+    tuple[int, int, int, int],
     tuple[float, float, float, int, int, int, int],
 ]:
     """
     Строит сетку центров статик-квадратов, и возвращает параметры для последующей сборки.
+
     pad_px — припуск на сторону в пикселях холста для компенсации поворота/кропа.
     """
     eff_tile_px = tile_size_px * scale
@@ -181,7 +174,7 @@ def compute_grid(
     crop_h = round(padded_h_px)
 
     # Позиции тайлов в «мировых» координатах
-    base_step_world = tile_size_px
+    base_step_world = float(tile_size_px)
     grid_w_world = tiles_x * base_step_world
     grid_h_world = tiles_y * base_step_world
     origin_x_world = cx - (grid_w_world / 2.0) + (base_step_world / 2.0)
@@ -239,13 +232,11 @@ async def async_fetch_static_map(
         'format': 'png',
         'key': api_key,
     }
-    last_exc = None
+    last_exc: Exception | None = None
     for attempt in range(retries):
         try:
-            resp = await client.get(
-                GOOGLE_STATIC_MAPS_URL, params=params, timeout=timeout
-            )
-            if resp.status_code == 200:
+            resp = await client.get(GOOGLE_STATIC_MAPS_URL, params=params, timeout=timeout)
+            if resp.status_code == httpx.codes.OK:
                 return Image.open(BytesIO(resp.content)).convert('RGB')
             last_exc = RuntimeError(f'HTTP {resp.status_code}: {resp.text[:300]}...')
         except Exception as e:
@@ -262,9 +253,7 @@ def latlng_to_final_pixel(
     lat: float, lng: float, map_params: tuple[float, float, float, int, int, int, int]
 ) -> tuple[float, float]:
     """Преобразует точку WGS84 в координаты пикселей итогового изображения."""
-    origin_x_world, origin_y_world, base_step_world, scale, crop_x, crop_y, zoom = (
-        map_params
-    )
+    origin_x_world, origin_y_world, base_step_world, scale, crop_x, crop_y, zoom = map_params
     wx, wy = latlng_to_pixel_xy(lat, lng, zoom)
     canvas_x = (wx - (origin_x_world - base_step_world / 2.0)) * scale
     canvas_y = (wy - (origin_y_world - base_step_world / 2.0)) * scale
@@ -289,12 +278,8 @@ def compute_rotation_deg_for_east_axis(
     Вычисляет угол, на который нужно повернуть исходное изображение,
     чтобы ось «восток» (X в СК‑42/ГК) стала строго горизонтальной.
     """
-    t_sk42gk_from_sk42 = Transformer.from_crs(
-        crs_sk42_geog, crs_sk42_gk, always_xy=True
-    )
-    t_sk42_from_sk42gk = Transformer.from_crs(
-        crs_sk42_gk, crs_sk42_geog, always_xy=True
-    )
+    t_sk42gk_from_sk42 = Transformer.from_crs(crs_sk42_geog, crs_sk42_gk, always_xy=True)
+    t_sk42_from_sk42gk = Transformer.from_crs(crs_sk42_gk, crs_sk42_geog, always_xy=True)
 
     x0_gk, y0_gk = t_sk42gk_from_sk42.transform(center_lng_sk42, center_lat_sk42)
     x1_gk, y1_gk = x0_gk + 200.0, y0_gk  # точка на 200 м восточнее

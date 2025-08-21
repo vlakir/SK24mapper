@@ -72,6 +72,7 @@ class ConsoleProgress:
         self.done = 0
         self.start = time.monotonic()
         self.label = label
+        self._lock: asyncio.Lock | None
         try:
             self._lock = asyncio.Lock()
         except Exception:

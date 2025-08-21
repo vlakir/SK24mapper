@@ -1,6 +1,7 @@
 # ------------------------------
 # Склейка и обрезка (пошаговый прогресс)
 # ------------------------------
+import logging
 import math
 
 from PIL import Image, ImageDraw, ImageFont
@@ -59,11 +60,10 @@ def assemble_and_crop(
 # ------------------------------
 # Поворот (спиннер) и центр‑кроп (спиннер)
 # ------------------------------
-def rotate_keep_size(
-    img: Image.Image, angle_deg: float, fill=(255, 255, 255)
-) -> Image.Image:
+def rotate_keep_size(img: Image.Image, angle_deg: float, fill: tuple[int, int, int] = (255, 255, 255)) -> Image.Image:
     """
-    Поворачивает изображение с expand=True и центр-кропает к исходному размеру,
+    Поворачивает изображение с expand=True и центр-кропает к исходному размеру,.
+
     чтобы избежать «срезанных» углов.
     """
     spinner = LiveSpinner('Поворот карты')
@@ -118,9 +118,7 @@ def draw_text_with_outline(
             for dy in range(-outline_width, outline_width + 1):
                 if dx == 0 and dy == 0:
                     continue
-                draw.text(
-                    (x + dx, y + dy), text, font=font, fill=outline, anchor=anchor
-                )
+                draw.text((x + dx, y + dy), text, font=font, fill=outline, anchor=anchor)
     draw.text((x, y), text, font=font, fill=fill, anchor=anchor)
 
 
@@ -136,6 +134,7 @@ def draw_label_with_bg(
 ) -> None:
     """
     Рисует жёлтую подложку под подписью, затем сам текст (с обводкой).
+
     Подложка рисуется только если после обрезки по границам изображения прямоугольник не вырожден.
     """
     x, y = xy
@@ -153,6 +152,7 @@ def draw_label_with_bg(
 def load_grid_font() -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     """
     Подгружает масштабируемый шрифт для подписей (предпочтительно — жирный).
+
     Порядок:
       1) GRID_FONT_PATH_BOLD (если задан) — жирный шрифт.
       2) GRID_FONT_PATH (если задан) — обычный шрифт.
@@ -163,21 +163,25 @@ def load_grid_font() -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
         try:
             return ImageFont.truetype(GRID_FONT_PATH_BOLD, settings.grid_font_size)
         except Exception:
-            pass
+            logger = logging.getLogger(__name__)
+            logger.debug('Failed to load bold grid font from %s', GRID_FONT_PATH_BOLD)
     if GRID_FONT_PATH:
         try:
             return ImageFont.truetype(GRID_FONT_PATH, settings.grid_font_size)
         except Exception:
-            pass
+            logger = logging.getLogger(__name__)
+            logger.debug('Failed to load grid font from %s', GRID_FONT_PATH)
     if GRID_FONT_BOLD:
         try:
             return ImageFont.truetype('DejaVuSans-Bold.ttf', settings.grid_font_size)
         except Exception:
-            pass
+            logger = logging.getLogger(__name__)
+            logger.debug('Failed to load DejaVuSans-Bold.ttf, will try regular')
     try:
         return ImageFont.truetype('DejaVuSans.ttf', settings.grid_font_size)
     except Exception:
-        pass
+        logger = logging.getLogger(__name__)
+        logger.debug('Failed to load DejaVuSans.ttf, using default font')
     return ImageFont.load_default()
 
 
@@ -197,9 +201,11 @@ def draw_axis_aligned_km_grid(
     width_px: int = settings.grid_width_px,
 ) -> None:
     """
-    Рисует сетку 1 км (СК‑42/Гаусса–Крюгера) строго по осям экрана и подписывает
+    Рисует сетку 1 км (СК‑42/Гаусса–Крюгера) строго по осям экрана и подписывает.
+
     только 4-й и 5-й младшие знаки (две последние цифры тысяч метров).
     """
+    _ = t_sk42_to_wgs  # аргумент предусмотрен для возможных будущих преобразований
     draw = ImageDraw.Draw(img)
     font = load_grid_font()
     w, h = img.size
@@ -209,13 +215,11 @@ def draw_axis_aligned_km_grid(
 
     cx, cy = w / 2.0, h / 2.0
 
-    t_sk42gk_from_sk42 = Transformer.from_crs(
-        crs_sk42_geog, crs_sk42_gk, always_xy=True
-    )
+    t_sk42gk_from_sk42 = Transformer.from_crs(crs_sk42_geog, crs_sk42_gk, always_xy=True)
     x0_gk, y0_gk = t_sk42gk_from_sk42.transform(center_lng_sk42, center_lat_sk42)
 
     def floor_to_step(v: float, step: float) -> int:
-        return math.floor(v / step) * step
+        return int(math.floor(v / step) * step)
 
     half_w_m = (w / 2.0) / ppm
     half_h_m = (h / 2.0) / ppm
