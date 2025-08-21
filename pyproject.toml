@@ -10,6 +10,10 @@ python = "^3.13"
 pillow = "^11.3.0"
 httpx = {extras = ["http2"], version = "^0.28.1"}
 pyproj = "^3.7.2"
+pydantic = "^2.9.0"
+python-dotenv = "^1.1.1"
+ruff = "^0.12.10"
+mypy = "^1.17.1"
 
 
 [build-system]
