@@ -1,0 +1,23 @@
+.idea/
+venv/
+env/
+doc/
+temp/
+*.log
+*.log.*
+__pycache__/
+~*.*
+~*
+.~*
+*.sqlite
+*.kate-swp
+.coverage
+copy_to_remote.sh
+# Ignore dynaconf secret files
+.secrets.*
+log/
+.secrets.toml
+big_image_*.*
+vanilla_docker.sh
+.env
+*.png
