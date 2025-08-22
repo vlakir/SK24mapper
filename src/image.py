@@ -8,6 +8,7 @@ from PIL import Image, ImageDraw, ImageFont
 from pyproj import CRS, Transformer
 
 from constants import (
+    CURRENT_PROFILE,
     GRID_COLOR,
     GRID_FONT_BOLD,
     GRID_FONT_PATH,
@@ -18,11 +19,11 @@ from constants import (
     GRID_TEXT_OUTLINE_COLOR,
     STATIC_SCALE,
 )
+from profiles import load_profile
 from progress import ConsoleProgress, LiveSpinner
-from settings import MapSettings
 from topography import crs_sk42_geog, meters_per_pixel
 
-settings = MapSettings()
+settings = load_profile(CURRENT_PROFILE)
 
 
 def assemble_and_crop(
@@ -61,7 +62,9 @@ def assemble_and_crop(
 # Поворот (спиннер) и центр‑кроп (спиннер)
 # ------------------------------
 def rotate_keep_size(
-    img: Image.Image, angle_deg: float, fill: tuple[int, int, int] = (255, 255, 255)
+    img: Image.Image,
+    angle_deg: float,
+    fill: tuple[int, int, int] = (255, 255, 255),
 ) -> Image.Image:
     """
     Поворачивает изображение с expand=True и центр-кропает к исходному размеру,.
@@ -118,7 +121,11 @@ def draw_text_with_outline(  # noqa: PLR0913
                 if dx == 0 and dy == 0:
                     continue
                 draw.text(
-                    (x + dx, y + dy), text, font=font, fill=outline, anchor=anchor
+                    (x + dx, y + dy),
+                    text,
+                    font=font,
+                    fill=outline,
+                    anchor=anchor,
                 )
     draw.text((x, y), text, font=font, fill=fill, anchor=anchor)
 
@@ -215,7 +222,9 @@ def draw_axis_aligned_km_grid(  # noqa: PLR0913
     cx, cy = w / 2.0, h / 2.0
 
     t_sk42gk_from_sk42 = Transformer.from_crs(
-        crs_sk42_geog, crs_sk42_gk, always_xy=True
+        crs_sk42_geog,
+        crs_sk42_gk,
+        always_xy=True,
     )
     x0_gk, y0_gk = t_sk42gk_from_sk42.transform(center_lng_sk42, center_lat_sk42)
 

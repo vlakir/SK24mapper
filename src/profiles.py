@@ -1,0 +1,54 @@
+from pathlib import Path
+
+import tomlkit
+
+from constants import PROFILES_DIR
+from model import MapSettings
+
+PROFILES_DIR = Path(PROFILES_DIR)
+
+
+def ensure_profiles_dir() -> Path:
+    PROFILES_DIR.mkdir(parents=True, exist_ok=True)
+    return PROFILES_DIR
+
+
+def list_profiles() -> list[str]:
+    """Список имён профилей без расширения."""
+    folder = ensure_profiles_dir()
+    return sorted(p.stem for p in folder.glob('.toml') if p.is_file())
+
+
+def profile_path(name: str) -> Path:
+    """Путь к файлу профиля по имени."""
+    return ensure_profiles_dir() / f'{name}.toml'
+
+
+def load_profile(name: str) -> MapSettings:
+    """Загрузка и валидация профиля TOML -> MapSettings."""
+    path = profile_path(name)
+    if not path.exists():
+        msg = f'Профиль не найден: {path}'
+        raise FileNotFoundError(msg)
+    text = path.read_text(encoding='utf-8')
+    data = tomlkit.parse(text)
+
+    return MapSettings.model_validate(data)  # type: ignore[no-any-return]
+
+
+def save_profile(name: str, settings: MapSettings) -> Path:
+    """Сохранение профиля в TOML (без атомарности и бэкапов)."""
+    path = profile_path(name)
+    data = settings.model_dump()
+    text = tomlkit.dumps(data)
+    path.write_text(text, encoding='utf-8')
+    return path
+
+
+def delete_profile(name: str) -> None:
+    """Удаление файла профиля, если он существует."""
+    path = profile_path(name)
+    if path.exists():
+        path = profile_path(name)
+    if path.exists():
+        path.unlink()

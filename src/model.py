@@ -8,33 +8,33 @@ class MapSettings(BaseModel):
 
     # Координаты области по углам (СК-42 Гаусса-Крюгера, метры)
     # Старшие разряды
-    from_x_high: int = 54
-    from_y_high: int = 74
-    to_x_high: int = 54
-    to_y_high: int = 74
+    from_x_high: int
+    from_y_high: int
+    to_x_high: int
+    to_y_high: int
 
     # Младшие разряды
-    from_x_low: int = 14
-    from_y_low: int = 43
-    to_x_low: int = 18
-    to_y_low: int = 49
+    from_x_low: int
+    from_y_low: int
+    to_x_low: int
+    to_y_low: int
 
     # Путь к итоговому файлу
-    output_path: str = '../map.png'
+    output_path: str
     # Желательный зум (будет снижен автоматически при превышении лимитов)
     zoom: int = MAX_ZOOM
     # Толщина линий сетки (px)
-    grid_width_px: int = 20
+    grid_width_px: int
     # Размер шрифта подписей (px)
-    grid_font_size: int = 86
+    grid_font_size: int
     # Толщина обводки текста (px)
-    grid_text_outline_width: int = 2
+    grid_text_outline_width: int
     # Отступ подписи от края изображения (px)
-    grid_text_margin: int = 43
+    grid_text_margin: int
     # Внутренний отступ подложки вокруг текста (px)
-    grid_label_bg_padding: int = 6
+    grid_label_bg_padding: int
     # Прозрачность белой маски (0.0 — прозрачная, 1.0 — непрозрачная)
-    mask_opacity: float = 0.35
+    mask_opacity: float
 
     # Валидации через Pydantic validators
     @field_validator('mask_opacity')

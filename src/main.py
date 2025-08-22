@@ -3,11 +3,12 @@ import os
 
 from dotenv import load_dotenv
 
+from constants import CURRENT_PROFILE
 from controller import download_satellite_rectangle
-from settings import MapSettings
+from profiles import load_profile
 from topography import center_x_sk42_gk, center_y_sk42_gk, height_m, width_m
 
-settings = MapSettings()
+settings = load_profile(CURRENT_PROFILE)
 
 
 def main() -> None:

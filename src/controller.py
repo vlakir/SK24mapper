@@ -11,6 +11,7 @@ from pyproj import CRS, Transformer
 
 from constants import (
     ASYNC_MAX_CONCURRENCY,
+    CURRENT_PROFILE,
     ENABLE_WHITE_MASK,
     GRID_COLOR,
     GRID_STEP_M,
@@ -30,8 +31,8 @@ from image import (
     draw_axis_aligned_km_grid,
     rotate_keep_size,
 )
+from profiles import load_profile
 from progress import ConsoleProgress, LiveSpinner
-from settings import MapSettings
 from topography import (
     async_fetch_static_map,
     build_transformers_sk42,
@@ -42,7 +43,7 @@ from topography import (
     estimate_crop_size_px,
 )
 
-settings = MapSettings()
+settings = load_profile(CURRENT_PROFILE)
 
 
 async def download_satellite_rectangle(  # noqa: PLR0915, PLR0913
@@ -73,7 +74,8 @@ async def download_satellite_rectangle(  # noqa: PLR0915, PLR0913
     # Конвертируем из Гаусса-Крюгера в географические СК-42
     t_sk42_from_gk = Transformer.from_crs(crs_sk42_gk, crs_sk42_geog, always_xy=True)
     center_lng_sk42, center_lat_sk42 = t_sk42_from_gk.transform(
-        center_x_sk42_gk, center_y_sk42_gk
+        center_x_sk42_gk,
+        center_y_sk42_gk,
     )
     sp.stop('Подготовка: координаты СК-42 готовы')
 
@@ -86,7 +88,8 @@ async def download_satellite_rectangle(  # noqa: PLR0915, PLR0913
     sp = LiveSpinner('Подготовка: конвертация центра в WGS84')
     sp.start()
     center_lng_wgs, center_lat_wgs = t_sk42_to_wgs.transform(
-        center_lng_sk42, center_lat_sk42
+        center_lng_sk42,
+        center_lat_sk42,
     )
     sp.stop('Подготовка: центр WGS84 готов')
 
@@ -108,7 +111,11 @@ async def download_satellite_rectangle(  # noqa: PLR0915, PLR0913
     sp = LiveSpinner('Подготовка: оценка размера')
     sp.start()
     target_w_px, target_h_px, _ = estimate_crop_size_px(
-        center_lat_wgs, width_m, height_m, zoom, scale
+        center_lat_wgs,
+        width_m,
+        height_m,
+        zoom,
+        scale,
     )
     sp.stop('Подготовка: размер оценён')
 

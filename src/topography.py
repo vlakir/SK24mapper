@@ -7,6 +7,7 @@ from PIL import Image
 from pyproj import CRS, Transformer
 
 from constants import (
+    CURRENT_PROFILE,
     EARTH_RADIUS_M,
     GOOGLE_STATIC_MAPS_URL,
     SK42_CODE,
@@ -15,9 +16,9 @@ from constants import (
     TILE_SIZE,
     WGS84_CODE,
 )
-from settings import MapSettings
+from profiles import load_profile
 
-settings = MapSettings()
+settings = load_profile(CURRENT_PROFILE)
 
 # ------------------------------
 # СК‑42 <-> WGS84 (pyproj)
@@ -57,10 +58,14 @@ def build_transformers_sk42(
             ),
         )
         t_sk42_to_wgs = Transformer.from_crs(
-            proj4_sk42_custom, crs_wgs84, always_xy=True
+            proj4_sk42_custom,
+            crs_wgs84,
+            always_xy=True,
         )
         t_wgs_to_sk42 = Transformer.from_crs(
-            crs_wgs84, proj4_sk42_custom, always_xy=True
+            crs_wgs84,
+            proj4_sk42_custom,
+            always_xy=True,
         )
     else:
         t_sk42_to_wgs = Transformer.from_crs(crs_sk42_geog, crs_wgs84, always_xy=True)
@@ -81,7 +86,9 @@ def meters_per_pixel(lat_deg: float, zoom: int, scale: int = STATIC_SCALE) -> fl
 
 
 def latlng_to_pixel_xy(
-    lat_deg: float, lng_deg: float, zoom: int
+    lat_deg: float,
+    lng_deg: float,
+    zoom: int,
 ) -> tuple[float, float]:
     """Преобразует WGS84 (lat, lng) в координаты «мира» (пиксели) Web Mercator."""
     siny = math.sin(math.radians(lat_deg))
@@ -250,7 +257,9 @@ async def async_fetch_static_map(  # noqa: PLR0913
     for attempt in range(retries):
         try:
             resp = await client.get(
-                GOOGLE_STATIC_MAPS_URL, params=params, timeout=async_timeout
+                GOOGLE_STATIC_MAPS_URL,
+                params=params,
+                timeout=async_timeout,
             )
             if resp.status_code == httpx.codes.OK:
                 return Image.open(BytesIO(resp.content)).convert('RGB')
@@ -299,10 +308,14 @@ def compute_rotation_deg_for_east_axis(
     стала строго горизонтальной.
     """
     t_sk42gk_from_sk42 = Transformer.from_crs(
-        crs_sk42_geog, crs_sk42_gk, always_xy=True
+        crs_sk42_geog,
+        crs_sk42_gk,
+        always_xy=True,
     )
     t_sk42_from_sk42gk = Transformer.from_crs(
-        crs_sk42_gk, crs_sk42_geog, always_xy=True
+        crs_sk42_gk,
+        crs_sk42_geog,
+        always_xy=True,
     )
 
     x0_gk, y0_gk = t_sk42gk_from_sk42.transform(center_lng_sk42, center_lat_sk42)

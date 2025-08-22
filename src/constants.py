@@ -27,7 +27,7 @@ ASYNC_MAX_CONCURRENCY = 20
 MAX_OUTPUT_PIXELS = 150_000_000
 
 # Отключить защиту Pillow от «бомб декомпрессии» (используйте с осторожностью)
-PIL_DISABLE_LIMIT = False
+PIL_DISABLE_LIMIT = True
 
 # Доля припуска на сторону под поворот (7% от меньшей стороны)
 ROTATION_PAD_RATIO = 0.07
@@ -67,3 +67,7 @@ ENABLE_WHITE_MASK = True
 
 WGS84_CODE = 4284
 SK42_CODE = 4326
+
+CURRENT_PROFILE = 'default'
+
+PROFILES_DIR = '../configs/profiles'
