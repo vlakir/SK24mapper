@@ -39,7 +39,7 @@ class MapSettings(BaseModel):
     # Валидации через Pydantic validators
     @field_validator('mask_opacity')
     @classmethod
-    def validate_mask_opacity(cls, v):
+    def validate_mask_opacity(cls, v: float | str) -> float:
         v = float(v)
         if not (0.0 <= v <= 1.0):
             msg = 'mask_opacity должен быть в диапазоне [0.0, 1.0]'
@@ -48,7 +48,7 @@ class MapSettings(BaseModel):
 
     @field_validator('zoom')
     @classmethod
-    def validate_zoom(cls, v):
+    def validate_zoom(cls, v: int | str) -> int:
         v = int(v)
         if v < 0:
             msg = 'zoom не может быть отрицательным'

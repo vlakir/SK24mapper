@@ -32,7 +32,7 @@ def assemble_and_crop(
     eff_tile_px: int,
     crop_rect: tuple[int, int, int, int],
 ) -> Image.Image:
-    """Склеивает все тайлы в общий холст и обрезает «расширенную» область (с припуском)."""
+    """Склеивает все тайлы в общий холст и обрезает область с припуском."""
     grid_w_px = tiles_x * eff_tile_px
     grid_h_px = tiles_y * eff_tile_px
 
@@ -60,7 +60,9 @@ def assemble_and_crop(
 # ------------------------------
 # Поворот (спиннер) и центр‑кроп (спиннер)
 # ------------------------------
-def rotate_keep_size(img: Image.Image, angle_deg: float, fill: tuple[int, int, int] = (255, 255, 255)) -> Image.Image:
+def rotate_keep_size(
+    img: Image.Image, angle_deg: float, fill: tuple[int, int, int] = (255, 255, 255)
+) -> Image.Image:
     """
     Поворачивает изображение с expand=True и центр-кропает к исходному размеру,.
 
@@ -98,10 +100,7 @@ def center_crop(img: Image.Image, out_w: int, out_h: int) -> Image.Image:
         spinner.stop('Финальный центр-кроп: готово')
 
 
-# ------------------------------
-# Рисование текста с обводкой и жёлтым фоном
-# ------------------------------
-def draw_text_with_outline(
+def draw_text_with_outline(  # noqa: PLR0913
     draw: ImageDraw.ImageDraw,
     xy: tuple[float, float],
     text: str,
@@ -118,11 +117,13 @@ def draw_text_with_outline(
             for dy in range(-outline_width, outline_width + 1):
                 if dx == 0 and dy == 0:
                     continue
-                draw.text((x + dx, y + dy), text, font=font, fill=outline, anchor=anchor)
+                draw.text(
+                    (x + dx, y + dy), text, font=font, fill=outline, anchor=anchor
+                )
     draw.text((x, y), text, font=font, fill=fill, anchor=anchor)
 
 
-def draw_label_with_bg(
+def draw_label_with_bg(  # noqa: PLR0913
     draw: ImageDraw.ImageDraw,
     xy: tuple[float, float],
     text: str,
@@ -135,7 +136,8 @@ def draw_label_with_bg(
     """
     Рисует жёлтую подложку под подписью, затем сам текст (с обводкой).
 
-    Подложка рисуется только если после обрезки по границам изображения прямоугольник не вырожден.
+    Подложка рисуется только если после обрезки по границам изображения прямоугольник
+    не вырожден.
     """
     x, y = xy
     w, h = img_size
@@ -185,10 +187,7 @@ def load_grid_font() -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     return ImageFont.load_default()
 
 
-# ------------------------------
-# Рисование сетки (пошаговый прогресс) + подписи (две последние цифры тысяч)
-# ------------------------------
-def draw_axis_aligned_km_grid(
+def draw_axis_aligned_km_grid(  # noqa: PLR0913
     img: Image.Image,
     center_lat_sk42: float,
     center_lng_sk42: float,
@@ -215,7 +214,9 @@ def draw_axis_aligned_km_grid(
 
     cx, cy = w / 2.0, h / 2.0
 
-    t_sk42gk_from_sk42 = Transformer.from_crs(crs_sk42_geog, crs_sk42_gk, always_xy=True)
+    t_sk42gk_from_sk42 = Transformer.from_crs(
+        crs_sk42_geog, crs_sk42_gk, always_xy=True
+    )
     x0_gk, y0_gk = t_sk42gk_from_sk42.transform(center_lng_sk42, center_lat_sk42)
 
     def floor_to_step(v: float, step: float) -> int:

@@ -1,56 +1,65 @@
-# ------------------------------
-# Единая строка прогресса + спиннер (для «монолитных» шагов)
-# ------------------------------
 import asyncio
 import sys
 import threading
 import time
-
-_PROGRESS_SINGLE_LINE = True  # Рисовать всё в одной строке
-_LAST_PROGRESS_LINE_LEN = 0  # Длина последней строки прогресса
-_SINGLE_LINE_LOCK = threading.Lock()  # Блокировка на вывод в единую строку
+from typing import ClassVar
 
 
-def _clear_line() -> None:
-    """Полностью очистить текущую строку прогресса."""
-    global _LAST_PROGRESS_LINE_LEN
-    with _SINGLE_LINE_LOCK:
-        if _PROGRESS_SINGLE_LINE and _LAST_PROGRESS_LINE_LEN > 0:
-            sys.stdout.write('\r' + ' ' * _LAST_PROGRESS_LINE_LEN + '\r')
+class SingleLineRenderer:
+    """Потокобезопасный рендерер для вывода в одну строку."""
+
+    def __init__(self, *, single_line: bool = True) -> None:
+        self.single_line = single_line
+        self._last_len = 0
+        self._lock = threading.Lock()
+
+    def clear_line(self) -> None:
+        """Полностью очистить текущую строку прогресса."""
+        with self._lock:
+            if self.single_line and self._last_len > 0:
+                sys.stdout.write('\r' + ' ' * self._last_len + '\r')
+                sys.stdout.flush()
+                self._last_len = 0
+
+    def write_line(self, msg: str) -> None:
+        """Перерисовать текущую строку прогресса."""
+        with self._lock:
+            if self.single_line:
+                pad = max(0, self._last_len - len(msg))
+                sys.stdout.write('\r' + msg + (' ' * pad))
+            else:
+                sys.stdout.write('\r' + msg)
             sys.stdout.flush()
-            _LAST_PROGRESS_LINE_LEN = 0
+            self._last_len = len(msg)
 
 
-def _write_line(msg: str) -> None:
-    """Перерисовать текущую строку прогресса."""
-    global _LAST_PROGRESS_LINE_LEN
-    with _SINGLE_LINE_LOCK:
-        if _PROGRESS_SINGLE_LINE:
-            pad = max(0, _LAST_PROGRESS_LINE_LEN - len(msg))
-            sys.stdout.write('\r' + msg + (' ' * pad))
-        else:
-            sys.stdout.write('\r' + msg)
-        sys.stdout.flush()
-        _LAST_PROGRESS_LINE_LEN = len(msg)
+# Экземпляр по умолчанию (можно передать свой при создании классов)
+DEFAULT_WRITER = SingleLineRenderer()
 
 
 class LiveSpinner:
-    """«Крутилка» для операций, у которых нет естественных шагов (поворот, сохранение и т.п.)."""
+    """«Крутилка» для операций, у которых нет естественных шагов."""
 
-    frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+    frames: ClassVar[list[str]] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
 
-    def __init__(self, label: str = 'Выполнение', interval: float = 0.1):
+    def __init__(
+        self,
+        label: str = 'Выполнение',
+        interval: float = 0.1,
+        writer: SingleLineRenderer | None = None,
+    ) -> None:
         self.label = label
         self.interval = interval
         self._stop = threading.Event()
+        self._writer = writer or DEFAULT_WRITER
         self._th = threading.Thread(target=self._run, daemon=True)
 
     def _run(self) -> None:
-        _clear_line()
+        self._writer.clear_line()
         i = 0
         while not self._stop.is_set():
             msg = f'{self.label}: {self.frames[i % len(self.frames)]}'
-            _write_line(msg)
+            self._writer.write_line(msg)
             time.sleep(self.interval)
             i += 1
 
@@ -61,23 +70,29 @@ class LiveSpinner:
         self._stop.set()
         self._th.join()
         if final_message is not None:
-            _write_line(final_message)
+            self._writer.write_line(final_message)
 
 
 class ConsoleProgress:
-    """Прогресс-бар для пошаговых операций (загрузка тайлов, склейка, рисование сетки)."""
+    """Прогресс-бар для пошаговых операций."""
 
-    def __init__(self, total: int, label: str = 'Прогресс'):
+    def __init__(
+        self,
+        total: int,
+        label: str = 'Прогресс',
+        writer: SingleLineRenderer | None = None,
+    ) -> None:
         self.total = max(1, int(total))
         self.done = 0
         self.start = time.monotonic()
         self.label = label
+        self._writer = writer or DEFAULT_WRITER
         self._lock: asyncio.Lock | None
         try:
             self._lock = asyncio.Lock()
         except Exception:
             self._lock = None
-        _clear_line()
+        self._writer.clear_line()
         self._render()  # показать 0%
 
     def _format_eta(self, remaining: float) -> str:
@@ -96,8 +111,11 @@ class ConsoleProgress:
         bar_len = 30
         filled = int(bar_len * self.done / self.total)
         bar = '█' * filled + '░' * (bar_len - filled)
-        msg = f'{self.label}: [{bar}] {self.done}/{self.total} | {rps:4.1f}/s | ETA {self._format_eta(remaining)}'
-        _write_line(msg)
+        msg = (
+            f'{self.label}: [{bar}] {self.done}/{self.total} | {rps:4.1f}/s | ETA'
+            f' {self._format_eta(remaining)}'
+        )
+        self._writer.write_line(msg)
 
     def step_sync(self, n: int = 1) -> None:
         self.done = min(self.total, self.done + n)

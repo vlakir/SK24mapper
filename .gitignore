@@ -19,5 +19,5 @@ log/
 .secrets.toml
 big_image_*.*
 vanilla_docker.sh
-.env
+secrets.env
 *.png

@@ -11,12 +11,12 @@ settings = MapSettings()
 
 
 def main() -> None:
-    load_dotenv('../.env')
+    load_dotenv('../.secrets.env')
 
     api_key = os.getenv('API_KEY', '').strip()
     if not api_key:
         msg = (
-            'Не найден API ключ. Создайте файл .env с содержимым вида:\n'
+            'Не найден API ключ. Создайте файл secrets.env с содержимым вида:\n'
             'API_KEY=ваш_ключ\n'
             'Либо задайте переменную окружения API_KEY перед запуском.'
         )
@@ -32,10 +32,8 @@ def main() -> None:
             api_key=api_key,
             output_path=settings.output_path,
             max_zoom=settings.zoom,
-        )
+        ),
     )
-
-    print(f'\nСохранено: {settings.output_path}')
 
 
 if __name__ == '__main__':
