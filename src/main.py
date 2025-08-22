@@ -38,4 +38,6 @@ def main() -> None:
 
 
 if __name__ == '__main__':
-    main()
+    # Точка входа приложения: запуск GUI
+    from gui.app import run_app
+    run_app(main)
