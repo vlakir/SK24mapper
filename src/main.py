@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 
 from constants import CURRENT_PROFILE
 from controller import download_satellite_rectangle
+from gui.app import run_app
 from profiles import load_profile
 from topography import center_x_sk42_gk, center_y_sk42_gk, height_m, width_m
 
@@ -39,5 +40,4 @@ def main() -> None:
 
 if __name__ == '__main__':
     # Точка входа приложения: запуск GUI
-    from gui.app import run_app
     run_app(main)

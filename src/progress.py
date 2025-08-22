@@ -1,7 +1,9 @@
 import asyncio
+import contextlib
 import sys
 import threading
 import time
+from collections.abc import Callable
 from typing import ClassVar
 
 
@@ -36,6 +38,27 @@ class SingleLineRenderer:
 # Экземпляр по умолчанию (можно передать свой при создании классов)
 DEFAULT_WRITER = SingleLineRenderer()
 
+# Глобальные колбэки для интеграции с GUI (опционально)
+_PROGRESS_CB: Callable[[int, int, str], None] | None = None
+_SPINNER_START_CB: Callable[[str], None] | None = None
+_SPINNER_STOP_CB: Callable[[str], None] | None = None
+
+
+def set_progress_callback(cb: Callable[[int, int, str], None] | None) -> None:
+    """Устанавливает глобальный колбэк прогресса: (done, total, label)."""
+    global _PROGRESS_CB
+    _PROGRESS_CB = cb
+
+
+def set_spinner_callbacks(
+    on_start: Callable[[str], None] | None,
+    on_stop: Callable[[str], None] | None,
+) -> None:
+    """Устанавливает глобальные колбэки для старта/остановки спиннера."""
+    global _SPINNER_START_CB, _SPINNER_STOP_CB
+    _SPINNER_START_CB = on_start
+    _SPINNER_STOP_CB = on_stop
+
 
 class LiveSpinner:
     """«Крутилка» для операций, у которых нет естественных шагов."""
@@ -64,11 +87,19 @@ class LiveSpinner:
             i += 1
 
     def start(self) -> None:
+        # Сообщаем GUI о начале неопределённой операции
+        if _SPINNER_START_CB is not None:
+            with contextlib.suppress(Exception):
+                _SPINNER_START_CB(self.label)
         self._th.start()
 
     def stop(self, final_message: str | None = None) -> None:
         self._stop.set()
         self._th.join()
+        # Сообщаем GUI о завершении неопределённой операции
+        if _SPINNER_STOP_CB is not None:
+            with contextlib.suppress(Exception):
+                _SPINNER_STOP_CB(self.label)
         if final_message is not None:
             self._writer.write_line(final_message)
 
@@ -116,6 +147,10 @@ class ConsoleProgress:
             f' {self._format_eta(remaining)}'
         )
         self._writer.write_line(msg)
+        # Сообщаем GUI о прогрессе
+        if _PROGRESS_CB is not None:
+            with contextlib.suppress(Exception):
+                _PROGRESS_CB(self.done, self.total, self.label)
 
     def step_sync(self, n: int = 1) -> None:
         self.done = min(self.total, self.done + n)
