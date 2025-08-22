@@ -9,240 +9,213 @@ from tkinter import messagebox, ttk
 from progress import set_progress_callback, set_spinner_callbacks
 
 
-def run_app(on_create_map: Callable[[], None]) -> None:
-    """
-    Запускает простое GUI-приложение Tkinter с одной кнопкой
-    "Создать карту", которая вызывает переданный колбэк on_create_map().
+class _Animator:
+    def __init__(self, root: tk.Misc, progress: ttk.Progressbar) -> None:
+        self.root = root
+        self.progress = progress
+        self.job_id: str | None = None
+        self.val: int = 0
+        self.direction: int = 1
+        self.max_val: int = 100
+        self.step: int = 1
+        self.interval_ms: int = 40
 
-    Колбэк выполняется в отдельном потоке, чтобы не блокировать GUI.
-    """
-    root = tk.Tk()
-    root.title('Mil Mapper')
-
-    frame = tk.Frame(root, padx=12, pady=12)
-    frame.pack(fill=tk.BOTH, expand=True)
-
-    btn = tk.Button(frame, text='Создать карту', width=24)
-    btn.pack(pady=(0, 8))
-
-    status_var = tk.StringVar(value='Готов к созданию карты')
-    status_lbl = tk.Label(frame, textvariable=status_var, anchor='w')
-    status_lbl.pack(fill=tk.X)
-
-    # Прогресс-бар
-    progress = ttk.Progressbar(
-        frame, orient='horizontal', mode='determinate', length=280
-    )
-    progress.pack(fill=tk.X, pady=(6, 0))
-
-    # Флаг завершения текущей задачи, чтобы игнорировать поздние обновления
-    finished = {'done': False}
-
-    def on_done(ok: bool, err_text: str | None = None) -> None:
-        # Эта функция вызывается в главном потоке через root.after
-        # Помечаем, что задача завершена — игнорировать все поздние обновления
-        finished['done'] = True
+    def _tick(self, is_active: Callable[[], bool]) -> None:
+        # Если спиннеры неактивны — прекращаем анимацию
+        if not is_active():
+            self.job_id = None
+            return
+        # Обновляем значение и направление
+        v = self.val + self.direction * self.step
+        if v >= self.max_val:
+            v = self.max_val
+            self.direction = -1
+        elif v <= 0:
+            v = 0
+            self.direction = 1
+        self.val = v
         with contextlib.suppress(Exception):
-            progress.stop()
-        # Сбрасываем прогресс-бар полностью, чтобы не оставался закрашенный сегмент
-        try:
-            progress.config(mode='determinate', maximum=100)
-            progress['value'] = 0
-        except Exception:
-            pass
-        # Очистить буфер отложенного прогресса
-        try:
-            pending_progress['data'] = None  # type: ignore[name-defined]
-        except Exception:
-            pass
-        # Отписываем GUI от колбэков прогресса/спиннера на всякий случай
-        try:
-            set_progress_callback(None)
-            set_spinner_callbacks(None, None)
-        except Exception:
-            pass
-        btn.config(state=tk.NORMAL)
-        if ok:
-            status_var.set('Готово')
-        else:
-            status_var.set('Ошибка при создании карты')
-            messagebox.showerror('Ошибка', err_text or 'Неизвестная ошибка')
+            if str(self.progress['mode']) != 'determinate':
+                self.progress.config(mode='determinate')
+            self.progress.config(maximum=self.max_val)
+            self.progress['value'] = v
+        self.job_id = self.root.after(self.interval_ms, self._tick, is_active)
 
-    def run_task() -> None:
+    def start_if_needed(self, is_active: Callable[[], bool]) -> None:
+        if self.job_id is None:
+            self.job_id = self.root.after(self.interval_ms, self._tick, is_active)
+
+    def stop(self) -> None:
+        if self.job_id is not None:
+            with contextlib.suppress(Exception):
+                self.root.after_cancel(self.job_id)
+        self.job_id = None
+
+
+class _UI:
+    def __init__(self, on_create_map: Callable[[], None]) -> None:
+        self.on_create_map = on_create_map
+        self.root = tk.Tk()
+        self.root.title('Mil Mapper')
+
+        frame = tk.Frame(self.root, padx=12, pady=12)
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        self.btn = tk.Button(frame, text='Создать карту', width=24)
+        self.btn.pack(pady=(0, 8))
+
+        self.status_var = tk.StringVar(value='Готов к созданию карты')
+        status_lbl = tk.Label(frame, textvariable=self.status_var, anchor='w')
+        status_lbl.pack(fill=tk.X)
+
+        self.progress = ttk.Progressbar(
+            frame, orient='horizontal', mode='determinate', length=280
+        )
+        self.progress.pack(fill=tk.X, pady=(6, 0))
+
+        # State
+        self.finished: bool = False
+        self.spinner_count: int = 0
+        self.progress_running: bool = False
+        self.last_spinner_stop_ts: float = 0.0
+        self.spinner_cooldown_s: float = 0.2
+        self.pending_progress: tuple[int, int, str] | None = None
+        self.spinner_mode: str | None = None  # 'pingpong' | 'marquee'
+
+        self.animator = _Animator(self.root, self.progress)
+
+        self.btn.config(command=self.handle_click)
+
+    # Thread target
+    def _run_task(self) -> None:
         try:
-            on_create_map()
+            self.on_create_map()
         except SystemExit as e:
-            # Сообщаем пользователю причину завершения (например, отсутствует API_KEY)
             err_text = str(e) or 'Приложение завершилось'
-            root.after(0, on_done, False, err_text)
+            self.root.after(0, lambda: self._on_done(ok=False, err_text=err_text))
             return
         except Exception:
             err_text = traceback.format_exc()
-            root.after(0, on_done, False, err_text)
+            self.root.after(0, lambda: self._on_done(ok=False, err_text=err_text))
             return
-        root.after(0, on_done, True, None)
+        self.root.after(0, lambda: self._on_done(ok=True, err_text=None))
 
-    def handle_click() -> None:
-        btn.config(state=tk.DISABLED)
-        status_var.set('Создание карты… Подождите…')
+    # Main-thread: finalize
+    def _on_done(self, *, ok: bool, err_text: str | None = None) -> None:
+        self.finished = True
+        with contextlib.suppress(Exception):
+            self.progress.stop()
+        with contextlib.suppress(Exception):
+            self.progress.config(mode='determinate', maximum=100)
+            self.progress['value'] = 0
+        self.pending_progress = None
+        with contextlib.suppress(Exception):
+            set_progress_callback(None)
+            set_spinner_callbacks(None, None)
+        self.btn.config(state=tk.NORMAL)
+        if ok:
+            self.status_var.set('Готово')
+        else:
+            self.status_var.set('Ошибка при создании карты')
+            messagebox.showerror('Ошибка', err_text or 'Неизвестная ошибка')
 
-        # Сбрасываем флаг завершения на случай повторного запуска
-        finished['done'] = False
+    def _apply_progress(self, done: int, total: int, label: str) -> None:
+        if self.finished:
+            return
+        if str(self.progress['mode']) != 'determinate':
+            self.progress.config(mode='determinate')
+            if self.progress_running:
+                with contextlib.suppress(Exception):
+                    self.progress.stop()
+                self.progress_running = False
+        self.progress.config(maximum=total)
+        self.progress['value'] = done
+        self.status_var.set(f'{label}: {done}/{total}')
 
-        # Локальное состояние для управления режимами прогресс-бара
-        spinner_active = {'count': 0}  # используем dict, чтобы замкнуть по ссылке
-        progress_running = {'on': False}
-        last_spinner_stop_ts = {'t': 0.0}
-        spinner_cooldown_s = (
-            0.2  # игнорировать детерминированные обновления сразу после спиннера
-        )
-        pending_progress = {
-            'data': None
-        }  # буфер последнего проигнорированного прогресса
-        spinner_mode = {'type': None}  # 'pingpong' или 'marquee' (для сохранения файла)
+    def _flush_pending_if_any(self) -> None:
+        if self.finished:
+            return
+        if self.spinner_count > 0:
+            return
+        if self.pending_progress is None:
+            return
+        done, total, label = self.pending_progress
+        self.pending_progress = None
+        with contextlib.suppress(Exception):
+            self._apply_progress(done, total, label)
 
-        # Состояние анимации «вперёд-назад» для проблемных этапов (спиннеров)
-        anim = {'job': None, 'val': 0, 'dir': 1}
-        anim_max = 100
-        anim_step = 1
-        anim_interval_ms = 40
+    # Public button handler
+    def handle_click(self) -> None:
+        self.btn.config(state=tk.DISABLED)
+        self.status_var.set('Создание карты… Подождите…')
+        self.finished = False
 
-        def _apply_progress(done: int, total: int, label: str) -> None:
-            if finished['done']:
+        set_progress_callback(self.progress_cb)
+        set_spinner_callbacks(self.spinner_start_cb, self.spinner_stop_cb)
+
+        self.progress.config(mode='determinate', maximum=100)
+        self.progress['value'] = 0
+
+        threading.Thread(target=self._run_task, daemon=True).start()
+
+    # Callbacks passed to progress/spinner
+    def progress_cb(self, done: int, total: int, label: str) -> None:
+        def _apply() -> None:
+            if self.finished:
                 return
-            # Режим: определённый прогресс
-            if str(progress['mode']) != 'determinate':
-                progress.config(mode='determinate')
-                if progress_running['on']:
+            recently_stopped = (
+                time.time() - self.last_spinner_stop_ts
+            ) < self.spinner_cooldown_s
+            if self.spinner_count > 0 or recently_stopped:
+                self.pending_progress = (done, total, label)
+                return
+            self.pending_progress = None
+            self._apply_progress(done, total, label)
+
+        self.root.after(0, _apply)
+
+    def spinner_start_cb(self, label: str) -> None:
+        def _apply() -> None:
+            if self.finished:
+                return
+            self.status_var.set(label)
+            self.spinner_count += 1
+            if 'Сохранение файла' in label:
+                self.spinner_mode = 'marquee'
+                with contextlib.suppress(Exception):
+                    if str(self.progress['mode']) != 'indeterminate':
+                        self.progress.config(mode='indeterminate')
+                    self.progress.start(50)
+                    self.progress_running = True
+            else:
+                self.spinner_mode = 'pingpong'
+                self.animator.start_if_needed(lambda: self.spinner_count > 0)
+
+        self.root.after(0, _apply)
+
+    def spinner_stop_cb(self, _label: str) -> None:
+        def _apply() -> None:
+            if self.finished:
+                return
+            self.spinner_count = max(0, self.spinner_count - 1)
+            if self.spinner_count == 0:
+                self.last_spinner_stop_ts = time.time()
+                if self.spinner_mode == 'pingpong':
+                    self.animator.stop()
+                elif self.spinner_mode == 'marquee':
                     with contextlib.suppress(Exception):
-                        progress.stop()
-                    progress_running['on'] = False
-            progress.config(maximum=total)
-            progress['value'] = done
-            status_var.set(f'{label}: {done}/{total}')
+                        self.progress.stop()
+                    self.progress_running = False
+                delay_ms = int(self.spinner_cooldown_s * 1000)
+                self.root.after(delay_ms, self._flush_pending_if_any)
 
-        def _flush_pending_if_any() -> None:
-            # Вызывается после кулдауна, чтобы дорисовать первый 0/total
-            if finished['done']:
-                return
-            if spinner_active['count'] > 0:
-                return
-            data = pending_progress['data']
-            if data is None:
-                return
-            done, total, label = data
-            pending_progress['data'] = None
-            with contextlib.suppress(Exception):
-                _apply_progress(done, total, label)
+        self.root.after(0, _apply)
 
-        def _animate_pingpong() -> None:
-            # Если всё уже завершено — прекращаем анимацию
-            if finished['done']:
-                anim['job'] = None
-                return
-            # Если спиннеры неактивны — прекращаем анимацию
-            if spinner_active['count'] <= 0:
-                anim['job'] = None
-                return
-            # Обновляем значение и направление
-            v = anim['val'] + anim['dir'] * anim_step
-            if v >= anim_max:
-                v = anim_max
-                anim['dir'] = -1
-            elif v <= 0:
-                v = 0
-                anim['dir'] = 1
-            anim['val'] = v
-            # Рисуем «сегмент» путем изменения value в determinate-режиме
-            try:
-                if str(progress['mode']) != 'determinate':
-                    progress.config(mode='determinate')
-                progress.config(maximum=anim_max)
-                progress['value'] = v
-            except Exception:
-                pass
-            # Планируем следующий тик
-            anim['job'] = root.after(anim_interval_ms, _animate_pingpong)
+    def mainloop(self) -> None:
+        self.root.mainloop()
 
-        def _start_animation_if_needed() -> None:
-            if anim['job'] is None:
-                anim['job'] = root.after(anim_interval_ms, _animate_pingpong)
 
-        # Колбэк прогресса (из фонового потока) -> обновления в GUI-потоке
-        def progress_cb(done: int, total: int, label: str) -> None:
-            def _apply() -> None:
-                if finished['done']:
-                    return
-                # Если активен спиннер или кулдаун — сохраняем прогресс в буфер
-                if (
-                    spinner_active['count'] > 0
-                    or (time.time() - last_spinner_stop_ts['t']) < spinner_cooldown_s
-                ):
-                    pending_progress['data'] = (done, total, label)
-                    return
-                # Иначе применяем сразу
-                pending_progress['data'] = None
-                _apply_progress(done, total, label)
-
-            root.after(0, _apply)
-
-        # Колбэки спиннера -> запустить/остановить индикатор в режиме indeterminate
-        def spinner_start_cb(label: str) -> None:
-            def _apply() -> None:
-                if finished['done']:
-                    return
-                status_var.set(label)
-                spinner_active['count'] += 1
-                # Для этапа сохранения используем «маркировку» (один сегмент ttk)
-                if 'Сохранение файла' in label:
-                    spinner_mode['type'] = 'marquee'
-                    try:
-                        if str(progress['mode']) != 'indeterminate':
-                            progress.config(mode='indeterminate')
-                        progress.start(50)  # стандартная индикация одного сегмента
-                    except Exception:
-                        pass
-                else:
-                    spinner_mode['type'] = 'pingpong'
-                    # Запускаем нашу анимацию «вперёд-назад» при первом входе в спиннер
-                    _start_animation_if_needed()
-
-            root.after(0, _apply)
-
-        def spinner_stop_cb(_label: str) -> None:
-            def _apply() -> None:
-                if finished['done']:
-                    return
-                # Уменьшаем вложенность спиннеров и останавливаем анимацию
-                # только когда все спиннеры завершены
-                spinner_active['count'] = max(0, spinner_active['count'] - 1)
-                if spinner_active['count'] == 0:
-                    last_spinner_stop_ts['t'] = time.time()
-                    if spinner_mode['type'] == 'pingpong':
-                        # Останавливаем пинг-понг анимацию
-                        if anim['job'] is not None:
-                            with contextlib.suppress(Exception):
-                                root.after_cancel(anim['job'])
-                            anim['job'] = None
-                    elif spinner_mode['type'] == 'marquee':
-                        # Останавливаем стандартный индикатор ttk
-                        with contextlib.suppress(Exception):
-                            progress.stop()
-                    # Планируем принудительную дорисовку буферизованного прогресса
-                    root.after(int(spinner_cooldown_s * 1000), _flush_pending_if_any)
-
-            root.after(0, _apply)
-
-        # Регистрируем колбэки перед запуском задачи
-        set_progress_callback(progress_cb)
-        set_spinner_callbacks(spinner_start_cb, spinner_stop_cb)
-
-        # Сбрасываем прогресс-бар
-        progress.config(mode='determinate', maximum=100)
-        progress['value'] = 0
-
-        threading.Thread(target=run_task, daemon=True).start()
-
-    btn.config(command=handle_click)
-
-    root.mainloop()
+def run_app(on_create_map: Callable[[], None]) -> None:
+    """Запуск GUI-приложения."""
+    ui = _UI(on_create_map)
+    ui.mainloop()
