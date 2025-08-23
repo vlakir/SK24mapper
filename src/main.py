@@ -1,3 +1,4 @@
+import argparse
 import asyncio
 import os
 
@@ -39,5 +40,18 @@ def main() -> None:
 
 
 if __name__ == '__main__':
-    # Точка входа приложения: запуск GUI
-    run_app(main)
+    parser = argparse.ArgumentParser(description='Mil Mapper - создание топографических карт')
+    parser.add_argument(
+        '--mode', 
+        choices=['gui', 'console'], 
+        default='console',
+        help='Режим запуска приложения: gui или console (по умолчанию)'
+    )
+    
+    args = parser.parse_args()
+
+    
+    if args.mode == 'gui':
+        run_app(main)
+    else:
+        main()
