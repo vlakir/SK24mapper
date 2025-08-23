@@ -81,3 +81,34 @@ PROFILES_DIR = '../configs/profiles'
 # HTTP диапазоны ошибок сервера
 HTTP_5XX_MIN = 500
 HTTP_5XX_MAX = 600
+
+# --- Options previously in profile (moved to constants)
+# Marked with '# -' in default.toml
+# Desired zoom level (will be reduced automatically if limits are exceeded)
+DESIRED_ZOOM = 22
+# Mapbox style identifier
+MAPBOX_STYLE_ID = 'mapbox/satellite-v9'
+# XYZ tile size preference (256 or 512)
+XYZ_TILE_SIZE = 512
+# Use @2x retina tiles
+XYZ_USE_RETINA = True
+# Parallel HTTP concurrency
+DOWNLOAD_CONCURRENCY = 20
+# Static source compatibility values
+STATIC_TILE_WIDTH_PX_PROFILE = 1024
+STATIC_TILE_HEIGHT_PX_PROFILE = 1024
+IMAGE_FORMAT_PROFILE = 'png'
+
+# --- Cache options (moved from profile [cache] section into constants)
+HTTP_CACHE_ENABLED = True
+# Cache directory (relative paths are resolved from project root)
+HTTP_CACHE_DIR = '.cache/tiles'
+# TTL in hours
+HTTP_CACHE_EXPIRE_HOURS = 168
+# Respect HTTP Cache-Control/ETag/Last-Modified headers
+HTTP_CACHE_RESPECT_HEADERS = True
+# Allow using stale cache when network errors occur (hours); 0 to disable
+HTTP_CACHE_STALE_IF_ERROR_HOURS = 72
+
+# --- Grid text outline width (moved from profile to constants)
+GRID_TEXT_OUTLINE_WIDTH = 2

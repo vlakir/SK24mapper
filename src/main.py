@@ -5,13 +5,11 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from constants import CURRENT_PROFILE
+import topography
+from constants import CURRENT_PROFILE, DESIRED_ZOOM
 from controller import download_satellite_rectangle
 from gui.app import run_app
 from profiles import load_profile
-from topography import center_x_sk42_gk, center_y_sk42_gk, height_m, width_m
-
-settings = load_profile(CURRENT_PROFILE)
 
 
 def _load_secrets() -> list[str]:
@@ -47,15 +45,16 @@ def main() -> None:
         raise SystemExit(msg)
 
     # 3) Запуск конвейера
+    settings = load_profile(CURRENT_PROFILE)
     asyncio.run(
         download_satellite_rectangle(
-            center_x_sk42_gk=center_x_sk42_gk,
-            center_y_sk42_gk=center_y_sk42_gk,
-            width_m=width_m,
-            height_m=height_m,
+            center_x_sk42_gk=topography.center_x_sk42_gk,
+            center_y_sk42_gk=topography.center_y_sk42_gk,
+            width_m=topography.width_m,
+            height_m=topography.height_m,
             api_key=api_key,
             output_path=settings.output_path,
-            max_zoom=settings.zoom,
+            max_zoom=DESIRED_ZOOM,
         ),
     )
 

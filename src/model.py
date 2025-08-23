@@ -1,14 +1,6 @@
 from pydantic import BaseModel, field_validator
 
-from constants import ADDITIVE_RATIO, MAX_ZOOM
-
-
-class CacheSettings(BaseModel):
-    enabled: bool = True
-    dir: str = '.cache/tiles'
-    expire_hours: int = 168
-    respect_cache_control: bool = True
-    stale_if_error_hours: int = 72
+from constants import ADDITIVE_RATIO
 
 
 class MapSettings(BaseModel):
@@ -29,42 +21,17 @@ class MapSettings(BaseModel):
 
     # Путь к итоговому файлу
     output_path: str
-    # Желательный зум (будет снижен автоматически при превышении лимитов)
-    zoom: int = MAX_ZOOM
-
-    # Источник тайлов Mapbox (Styles/XYZ)
-    # Идентификатор стиля, например:
-    #   "mapbox/satellite-v9" или "mapbox/satellite-streets-v12"
-    style_id: str = 'mapbox/satellite-v9'
-    # Размер тайла стиля (256 или 512) — влияет на плотность пикселей
-    tile_size: int = 512
-    # HiDPI: если true — добавлять "@2x" к URL (в 2 раза больше физических пикселей)
-    use_retina: bool = True
-    # Параллелизм загрузки
-    concurrency: int = 20
-
-    # Параметры старого статического источника (сохраняем для обратной совместимости)
-    # Размер кадра (px) — ширина/высота (лимит 1280)
-    static_tile_width_px: int = 1024
-    static_tile_height_px: int = 1024
-    # Формат изображения: png или jpg
-    image_format: str = 'png'
-
-    # Кэш HTTP-запросов
-    cache: CacheSettings | None = CacheSettings()
 
     # Толщина линий сетки (px)
-    grid_width_px: int = 4
+    grid_width_px: int
     # Размер шрифта подписей (px)
-    grid_font_size: int = 36
-    # Толщина обводки текста (px)
-    grid_text_outline_width: int = 2
+    grid_font_size: int
     # Отступ подписи от края изображения (px)
-    grid_text_margin: int = 24
+    grid_text_margin: int
     # Внутренний отступ подложки вокруг текста (px)
-    grid_label_bg_padding: int = 6
+    grid_label_bg_padding: int
     # Прозрачность белой маски (0.0 — прозрачная, 1.0 — непрозрачная)
-    mask_opacity: float = 0.35
+    mask_opacity: float
 
     # Валидации через Pydantic validators
     @field_validator('mask_opacity')
@@ -73,15 +40,6 @@ class MapSettings(BaseModel):
         v = float(v)
         if not (0.0 <= v <= 1.0):
             msg = 'mask_opacity должен быть в диапазоне [0.0, 1.0]'
-            raise ValueError(msg)
-        return v
-
-    @field_validator('zoom')
-    @classmethod
-    def validate_zoom(cls, v: int | str) -> int:
-        v = int(v)
-        if v < 0:
-            msg = 'zoom не может быть отрицательным'
             raise ValueError(msg)
         return v
 

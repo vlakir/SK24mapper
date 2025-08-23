@@ -17,6 +17,7 @@ from constants import (
     GRID_STEP_M,
     GRID_TEXT_COLOR,
     GRID_TEXT_OUTLINE_COLOR,
+    GRID_TEXT_OUTLINE_WIDTH,
     STATIC_SCALE,
 )
 from profiles import load_profile
@@ -110,7 +111,7 @@ def draw_text_with_outline(  # noqa: PLR0913
     font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
     fill: tuple[int, int, int] = GRID_TEXT_COLOR,
     outline: tuple[int, int, int] = GRID_TEXT_OUTLINE_COLOR,
-    outline_width: int = settings.grid_text_outline_width,
+    outline_width: int = GRID_TEXT_OUTLINE_WIDTH,
     anchor: str = 'lt',
 ) -> None:
     """Рисует текст с «обводкой» для лучшей читаемости."""

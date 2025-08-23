@@ -28,15 +28,24 @@ except Exception as e:
 from constants import (
     ASYNC_MAX_CONCURRENCY,
     CURRENT_PROFILE,
+    DOWNLOAD_CONCURRENCY,
     ENABLE_WHITE_MASK,
     GRID_COLOR,
     GRID_STEP_M,
+    HTTP_CACHE_DIR,
+    HTTP_CACHE_ENABLED,
+    HTTP_CACHE_EXPIRE_HOURS,
+    HTTP_CACHE_RESPECT_HEADERS,
+    HTTP_CACHE_STALE_IF_ERROR_HOURS,
+    MAPBOX_STYLE_ID,
     MAX_GK_ZONE,
     MAX_OUTPUT_PIXELS,
     MAX_ZOOM,
     PIL_DISABLE_LIMIT,
     ROTATION_PAD_MIN_PX,
     ROTATION_PAD_RATIO,
+    XYZ_TILE_SIZE,
+    XYZ_USE_RETINA,
 )
 from image import (
     apply_white_mask,
@@ -46,7 +55,7 @@ from image import (
     rotate_keep_size,
 )
 from profiles import load_profile
-from progress import ConsoleProgress, LiveSpinner
+from progress import ConsoleProgress, LiveSpinner, publish_preview_image
 from topography import (
     async_fetch_xyz_tile,
     build_transformers_sk42,
@@ -61,7 +70,7 @@ from topography import (
 settings = load_profile(CURRENT_PROFILE)
 
 
-async def download_satellite_rectangle(  # noqa: PLR0915, PLR0913, C901
+async def download_satellite_rectangle(  # noqa: PLR0915, PLR0913
     center_x_sk42_gk: float,
     center_y_sk42_gk: float,
     width_m: float,
@@ -72,9 +81,7 @@ async def download_satellite_rectangle(  # noqa: PLR0915, PLR0913, C901
 ) -> str:
     """Полный конвейер."""
     # Переопределяем параметры из профиля
-    eff_scale = effective_scale_for_xyz(
-        settings.tile_size, use_retina=settings.use_retina
-    )
+    eff_scale = effective_scale_for_xyz(XYZ_TILE_SIZE, use_retina=XYZ_USE_RETINA)
     # Подготовка — конвертация из Гаусса-Крюгера в географические координаты СК-42
     sp = LiveSpinner('Подготовка: определение зоны')
     sp.start()
@@ -152,27 +159,24 @@ async def download_satellite_rectangle(  # noqa: PLR0915, PLR0913, C901
     sp.stop('Подготовка: покрытие рассчитано')
 
     tile_progress = ConsoleProgress(total=len(tiles), label='Загрузка XYZ-тайлов')
-    semaphore = asyncio.Semaphore(settings.concurrency or ASYNC_MAX_CONCURRENCY)
+    semaphore = asyncio.Semaphore(DOWNLOAD_CONCURRENCY or ASYNC_MAX_CONCURRENCY)
 
     # HTTP session with optional persistent cache
-    use_cache = getattr(settings, 'cache', None) is not None and getattr(
-        settings.cache, 'enabled', True
-    )
+    use_cache = HTTP_CACHE_ENABLED
 
     # Resolve cache directory to an absolute path anchored at project root if relative
     cache_dir_resolved: Path | None = None
-    if getattr(settings, 'cache', None) is not None:
-        raw_dir = Path(settings.cache.dir)
-        if raw_dir.is_absolute():
-            cache_dir_resolved = raw_dir
-        else:
-            # Project root is one level above src/
-            repo_root = Path(__file__).resolve().parent.parent
-            cache_dir_resolved = (repo_root / raw_dir).resolve()
-        # If caching is enabled, ensure the directory exists
-        # regardless of backend availability
-        if use_cache:
-            cache_dir_resolved.mkdir(parents=True, exist_ok=True)
+    raw_dir = Path(HTTP_CACHE_DIR)
+    if raw_dir.is_absolute():
+        cache_dir_resolved = raw_dir
+    else:
+        # Project root is one level above src/
+        repo_root = Path(__file__).resolve().parent.parent
+        cache_dir_resolved = (repo_root / raw_dir).resolve()
+    # If caching is enabled, ensure the dir exists
+    # regardless of backend availability
+    if use_cache and cache_dir_resolved is not None:
+        cache_dir_resolved.mkdir(parents=True, exist_ok=True)
 
     if (
         use_cache
@@ -188,10 +192,8 @@ async def download_satellite_rectangle(  # noqa: PLR0915, PLR0913, C901
                 with sqlite3.connect(cache_path) as _conn:
                     _conn.execute('PRAGMA journal_mode=WAL;')
 
-        expire_td = timedelta(
-            hours=max(0, int(getattr(settings.cache, 'expire_hours', 0)))
-        )
-        stale_hours = int(getattr(settings.cache, 'stale_if_error_hours', 0))
+        expire_td = timedelta(hours=max(0, int(HTTP_CACHE_EXPIRE_HOURS)))
+        stale_hours = int(HTTP_CACHE_STALE_IF_ERROR_HOURS)
         stale_param: bool | timedelta
         stale_param = timedelta(hours=stale_hours) if stale_hours > 0 else False
 
@@ -202,16 +204,11 @@ async def download_satellite_rectangle(  # noqa: PLR0915, PLR0913, C901
         session_ctx = cast('Any', CachedSession)(
             cache=backend,
             expire_after=expire_td,
-            cache_control=bool(getattr(settings.cache, 'respect_cache_control', True)),
+            cache_control=bool(HTTP_CACHE_RESPECT_HEADERS),
             stale_if_error=stale_param,
         )
     else:
         # Fallback to regular session if cache backend isn't available or disabled
-        if use_cache and (CachedSession is None or SQLiteBackend is None):
-            # Provide a hint if cache lib is not available
-            pass
-        elif not use_cache:
-            pass
         session_ctx = aiohttp.ClientSession()
 
     async with session_ctx as client:
@@ -224,12 +221,12 @@ async def download_satellite_rectangle(  # noqa: PLR0915, PLR0913, C901
                 img = await async_fetch_xyz_tile(
                     client=client,
                     api_key=api_key,
-                    style_id=settings.style_id,
-                    tile_size=settings.tile_size,
+                    style_id=MAPBOX_STYLE_ID,
+                    tile_size=XYZ_TILE_SIZE,
                     z=zoom,
                     x=tx,
                     y=ty,
-                    use_retina=settings.use_retina,
+                    use_retina=XYZ_USE_RETINA,
                 )
                 await tile_progress.step(1)
                 return idx, img
@@ -240,7 +237,7 @@ async def download_satellite_rectangle(  # noqa: PLR0915, PLR0913, C901
         results.sort(key=lambda t: t[0])
         images: list[Image.Image] = [img for _, img in results]
 
-    eff_tile_px = settings.tile_size * (2 if settings.use_retina else 1)
+    eff_tile_px = XYZ_TILE_SIZE * (2 if XYZ_USE_RETINA else 1)
     result = assemble_and_crop(
         images=images,
         tiles_x=tiles_x,
@@ -276,6 +273,10 @@ async def download_satellite_rectangle(  # noqa: PLR0915, PLR0913, C901
         width_px=settings.grid_width_px,
         scale=eff_scale,
     )
+
+    # Показать предпросмотр до сохранения файла
+    with contextlib.suppress(Exception):
+        publish_preview_image(result)
 
     sp = LiveSpinner('Сохранение файла')
     sp.start()

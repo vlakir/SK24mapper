@@ -16,7 +16,7 @@ def ensure_profiles_dir() -> Path:
 def list_profiles() -> list[str]:
     """Список имён профилей без расширения."""
     folder = ensure_profiles_dir()
-    return sorted(p.stem for p in folder.glob('.toml') if p.is_file())
+    return sorted(p.stem for p in folder.glob('*.toml') if p.is_file())
 
 
 def profile_path(name: str) -> Path:
@@ -24,9 +24,17 @@ def profile_path(name: str) -> Path:
     return ensure_profiles_dir() / f'{name}.toml'
 
 
-def load_profile(name: str) -> MapSettings:
-    """Загрузка и валидация профиля TOML -> MapSettings."""
-    path = profile_path(name)
+def load_profile(name_or_path: str) -> MapSettings:
+    """
+    Загрузка и валидация профиля TOML -> MapSettings.
+
+    Поддерживает как имя профиля (без .toml) из каталога profiles,
+    так и абсолютный/относительный путь до TOML файла.
+    """
+    p = Path(name_or_path)
+    path = (
+        p if p.suffix.lower() == '.toml' and p.exists() else profile_path(name_or_path)
+    )
     if not path.exists():
         msg = f'Профиль не найден: {path}'
         raise FileNotFoundError(msg)

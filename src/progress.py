@@ -44,6 +44,7 @@ class _CbStore:
     progress: Callable[[int, int, str], None] | None = None
     spinner_start: Callable[[str], None] | None = None
     spinner_stop: Callable[[str], None] | None = None
+    preview_image: Callable[[object], None] | None = None
 
 
 def set_progress_callback(cb: Callable[[int, int, str], None] | None) -> None:
@@ -58,6 +59,23 @@ def set_spinner_callbacks(
     """Устанавливает глобальные колбэки для старта/остановки спиннера."""
     _CbStore.spinner_start = on_start
     _CbStore.spinner_stop = on_stop
+
+
+def set_preview_image_callback(cb: Callable[[object], None] | None) -> None:
+    """Устанавливает колбэк предпросмотра (получает PIL.Image)."""
+    _CbStore.preview_image = cb
+
+
+def publish_preview_image(img: object) -> None:
+    """
+    Публикует изображение предпросмотра в GUI, если колбэк установлен.
+
+    Тип img — PIL.Image.Image (используем object во избежание жёсткой зависимости).
+    """
+    cb = _CbStore.preview_image
+    if cb is not None:
+        with contextlib.suppress(Exception):
+            cb(img)
 
 
 class LiveSpinner:

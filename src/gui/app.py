@@ -1,4 +1,5 @@
 import contextlib
+import logging
 import threading
 import time
 import tkinter as tk
@@ -6,12 +7,26 @@ import traceback
 from collections.abc import Callable
 from pathlib import Path
 from tkinter import messagebox, ttk
+from typing import Protocol, cast
 
 from PIL import Image, ImageTk
 
-from constants import CURRENT_PROFILE
+import constants
 from profiles import load_profile
-from progress import set_progress_callback, set_spinner_callbacks
+from progress import (
+    set_preview_image_callback,
+    set_progress_callback,
+    set_spinner_callbacks,
+)
+
+logger = logging.getLogger(__name__)
+
+
+class _SettingsProto(Protocol):
+    bottom_left_x_sk42_gk: float
+    bottom_left_y_sk42_gk: float
+    top_right_x_sk42_gk: float
+    top_right_y_sk42_gk: float
 
 
 class _Animator:
@@ -105,6 +120,9 @@ class _UI:
         # Масштабирование предпросмотра при изменении размеров — слушаем контейнер
         self.preview_container.bind('<Configure>', self._on_preview_resize)
 
+        # Флаг: предпросмотр уже показан из памяти
+        self._preview_from_memory: bool = False
+
         # State
         self.finished: bool = False
         self.spinner_count: int = 0
@@ -115,6 +133,16 @@ class _UI:
         self.spinner_mode: str | None = None  # 'pingpong' | 'marquee'
 
         self.animator = _Animator(self.root, self.progress)
+
+        # Menu: profile loading
+        with contextlib.suppress(Exception):
+            menubar = tk.Menu(self.root)
+            profile_menu = tk.Menu(menubar, tearoff=0)
+            profile_menu.add_command(
+                label='Загрузить профиль из файла…', command=self._choose_profile_file
+            )
+            menubar.add_cascade(label='Профиль', menu=profile_menu)
+            self.root.config(menu=menubar)
 
         self.btn.config(command=self.handle_click)
 
@@ -144,11 +172,13 @@ class _UI:
         with contextlib.suppress(Exception):
             set_progress_callback(None)
             set_spinner_callbacks(None, None)
+            set_preview_image_callback(None)
         self.btn.config(state=tk.NORMAL)
         if ok:
             self.status_var.set('Готово')
-            # Отобразить предпросмотр итоговой карты
-            self._show_preview_if_available()
+            # Если предпросмотр уже был показан из памяти — не перезагружаем из файла
+            if self.preview_src_img is None:
+                self._show_preview_if_available()
         else:
             self.status_var.set('Ошибка при создании карты')
             messagebox.showerror('Ошибка', err_text or 'Неизвестная ошибка')
@@ -186,6 +216,7 @@ class _UI:
 
         set_progress_callback(self.progress_cb)
         set_spinner_callbacks(self.spinner_start_cb, self.spinner_stop_cb)
+        set_preview_image_callback(self.preview_image_cb)
 
         self.progress.config(mode='determinate', maximum=100)
         self.progress['value'] = 0
@@ -193,6 +224,7 @@ class _UI:
         # Сброс предпросмотра перед новым запуском
         self.preview_img = None
         self.preview_src_img = None
+        self._preview_from_memory = False
         # Отменим отложенную подгонку, если она была
         if self._resize_job_id is not None:
             with contextlib.suppress(Exception):
@@ -203,6 +235,12 @@ class _UI:
             text='Создание… Предпросмотр появится после завершения',
         )
 
+        # Обновим настройки модулей на случай, если профиль меняли
+        try:
+            cur_settings = load_profile(constants.CURRENT_PROFILE)
+            self._refresh_modules_with_settings(cur_settings)
+        except Exception as e:
+            logger.debug('Failed to refresh modules with current profile: %s', e)
         threading.Thread(target=self._run_task, daemon=True).start()
 
     # Callbacks passed to progress/spinner
@@ -258,8 +296,130 @@ class _UI:
 
         self.root.after(0, _apply)
 
+    def preview_image_cb(self, img_obj: object) -> None:
+        """Получает PIL.Image и отображает предпросмотр до сохранения файла."""
+
+        def _apply() -> None:
+            if img_obj is None:
+                return
+            try:
+                img = cast('Image.Image', img_obj)
+            except Exception:
+                return
+            # Сохраняем источником предпросмотра и помечаем как показанный из памяти
+            self.preview_src_img = img
+            self._preview_from_memory = True
+            # Рассчитываем текущие доступные размеры и подгоняем
+            self.root.update_idletasks()
+            max_w = max(200, self.preview_container.winfo_width() or 0)
+            max_h = max(200, self.preview_container.winfo_height() or 0)
+            max_w = min(max_w, 1000)
+            max_h = min(max_h, 800)
+            self._resize_preview_to(max_w, max_h)
+
+        self.root.after(0, _apply)
+
     def mainloop(self) -> None:
         self.root.mainloop()
+
+    def _choose_profile_file(self) -> None:
+        """Открыть диалог выбора TOML и применить профиль."""
+        from tkinter import filedialog  # noqa: PLC0415
+
+        from profiles import (  # noqa: PLC0415
+            profile_path,  # локальный импорт, чтобы избежать циклов
+        )
+
+        # Определяем директорию по умолчанию:
+        # 1) Если текущий профиль — путь к файлу и он существует, используем его папку.
+        # 2) Иначе — папку, где лежит default.toml.
+        # 3) Фолбэк — текущая рабочая директория.
+        cur = Path(str(constants.CURRENT_PROFILE))
+        if cur.suffix.lower() == '.toml' and cur.exists():
+            initialdir = cur.parent
+        else:
+            default_dir: Path | None = None
+            with contextlib.suppress(Exception):
+                default_dir = profile_path('default').parent
+            initialdir = (
+                default_dir if (default_dir and default_dir.exists()) else Path.cwd()
+            )
+
+        file_path = filedialog.askopenfilename(
+            parent=self.root,
+            title='Выберите файл профиля TOML',
+            initialdir=str(initialdir),
+            filetypes=[('TOML файлы', '*.toml'), ('Все файлы', '*.*')],
+        )
+        if not file_path:
+            return
+        try:
+            # Пробуем загрузить для валидации
+            new_settings = load_profile(file_path)
+        except Exception as e:
+            messagebox.showerror(
+                'Ошибка профиля', f'Не удалось загрузить профиль:\n{e}'
+            )
+            return
+
+        # Сохраняем выбранный путь в глобальной константе и обновляем модули
+        try:
+            constants.CURRENT_PROFILE = file_path
+            self._refresh_modules_with_settings(new_settings)
+            self.status_var.set(f'Профиль загружен: {Path(file_path).name}')
+            # Сброс предпросмотра: по требованию превью должно исчезнуть
+            # и не показываться до формирования новой карты.
+            self.preview_img = None
+            self.preview_src_img = None
+            self._preview_from_memory = False
+            self.preview_label.config(
+                image='',
+                text='Профиль загружен. Предпросмотр появится после создания карты',
+            )
+            # Не показываем картинку из старого output_path
+            # чтобы избежать «застывшей» картинки
+        except Exception as e:
+            messagebox.showwarning(
+                'Профиль применён частично',
+                f'Профиль загружен, но возникла проблема при применении:\n{e}',
+            )
+
+    def _refresh_modules_with_settings(self, settings: _SettingsProto) -> None:
+        """
+        Попробовать обновить загруженные модули глобальными settings.
+
+        Это позволяет использовать новый профиль без перезапуска.
+        Обновляются значения в модулях: main, controller, image, topography.
+        """
+        with contextlib.suppress(ImportError):
+            import main as _main  # noqa: PLC0415
+
+            _main.settings = settings
+        with contextlib.suppress(ImportError):
+            import controller as _controller  # noqa: PLC0415
+
+            _controller.settings = settings
+        with contextlib.suppress(ImportError):
+            import image as _image  # noqa: PLC0415
+
+            _image.settings = settings
+        with contextlib.suppress(ImportError):
+            import topography as _topo  # noqa: PLC0415
+
+            _topo.settings = settings
+            # Пересчёт производных значений
+            _topo.center_x_sk42_gk = (
+                settings.bottom_left_x_sk42_gk + settings.top_right_x_sk42_gk
+            ) / 2
+            _topo.center_y_sk42_gk = (
+                settings.bottom_left_y_sk42_gk + settings.top_right_y_sk42_gk
+            ) / 2
+            _topo.width_m = (
+                settings.top_right_x_sk42_gk - settings.bottom_left_x_sk42_gk
+            )
+            _topo.height_m = (
+                settings.top_right_y_sk42_gk - settings.bottom_left_y_sk42_gk
+            )
 
     # Helpers
     def _on_preview_resize(self, event: tk.Event) -> None:
@@ -316,8 +476,11 @@ class _UI:
 
     def _show_preview_if_available(self) -> None:
         """Показывает предпросмотр карты из пути профиля, если файл существует."""
+        if self._preview_from_memory:
+            # Уже показали из памяти — ничего не делаем
+            return
         try:
-            settings = load_profile(CURRENT_PROFILE)
+            settings = load_profile(constants.CURRENT_PROFILE)
             path = Path(settings.output_path)
             # При необходимости создать абсолютный путь
             path = path if path.is_absolute() else Path.cwd() / path
