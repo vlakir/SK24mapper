@@ -2,12 +2,28 @@
 # Основной асинхронный процесс
 # ------------------------------
 import asyncio
+import contextlib
 import os
+import sqlite3
+from datetime import timedelta
 from pathlib import Path
+from typing import Any, cast
 
-import httpx
+import aiohttp
 from PIL import Image
 from pyproj import CRS, Transformer
+
+try:
+    from aiohttp_client_cache import CachedSession as _CachedSession
+    from aiohttp_client_cache import SQLiteBackend as _SQLiteBackend
+
+    CachedSession: object | None = _CachedSession
+    SQLiteBackend: object | None = _SQLiteBackend
+    _CACHE_IMPORT_ERROR: Exception | None = None
+except Exception as e:
+    CachedSession = None
+    SQLiteBackend = None
+    _CACHE_IMPORT_ERROR = e
 
 from constants import (
     ASYNC_MAX_CONCURRENCY,
@@ -45,7 +61,7 @@ from topography import (
 settings = load_profile(CURRENT_PROFILE)
 
 
-async def download_satellite_rectangle(  # noqa: PLR0915, PLR0913
+async def download_satellite_rectangle(  # noqa: PLR0915, PLR0913, C901
     center_x_sk42_gk: float,
     center_y_sk42_gk: float,
     width_m: float,
@@ -137,7 +153,68 @@ async def download_satellite_rectangle(  # noqa: PLR0915, PLR0913
 
     tile_progress = ConsoleProgress(total=len(tiles), label='Загрузка XYZ-тайлов')
     semaphore = asyncio.Semaphore(settings.concurrency or ASYNC_MAX_CONCURRENCY)
-    async with httpx.AsyncClient(http2=True) as client:
+
+    # HTTP session with optional persistent cache
+    use_cache = getattr(settings, 'cache', None) is not None and getattr(
+        settings.cache, 'enabled', True
+    )
+
+    # Resolve cache directory to an absolute path anchored at project root if relative
+    cache_dir_resolved: Path | None = None
+    if getattr(settings, 'cache', None) is not None:
+        raw_dir = Path(settings.cache.dir)
+        if raw_dir.is_absolute():
+            cache_dir_resolved = raw_dir
+        else:
+            # Project root is one level above src/
+            repo_root = Path(__file__).resolve().parent.parent
+            cache_dir_resolved = (repo_root / raw_dir).resolve()
+        # If caching is enabled, ensure the directory exists
+        # regardless of backend availability
+        if use_cache:
+            cache_dir_resolved.mkdir(parents=True, exist_ok=True)
+
+    if (
+        use_cache
+        and CachedSession is not None
+        and SQLiteBackend is not None
+        and cache_dir_resolved is not None
+    ):
+        cache_path = cache_dir_resolved / 'http_cache.sqlite'
+        # Ensure SQLite DB file exists even before first cached response
+        with contextlib.suppress(Exception):
+            if not cache_path.exists():
+                cache_path.parent.mkdir(parents=True, exist_ok=True)
+                with sqlite3.connect(cache_path) as _conn:
+                    _conn.execute('PRAGMA journal_mode=WAL;')
+
+        expire_td = timedelta(
+            hours=max(0, int(getattr(settings.cache, 'expire_hours', 0)))
+        )
+        stale_hours = int(getattr(settings.cache, 'stale_if_error_hours', 0))
+        stale_param: bool | timedelta
+        stale_param = timedelta(hours=stale_hours) if stale_hours > 0 else False
+
+        backend = cast('Any', SQLiteBackend)(
+            str(cache_path),
+            expire_after=expire_td,
+        )
+        session_ctx = cast('Any', CachedSession)(
+            cache=backend,
+            expire_after=expire_td,
+            cache_control=bool(getattr(settings.cache, 'respect_cache_control', True)),
+            stale_if_error=stale_param,
+        )
+    else:
+        # Fallback to regular session if cache backend isn't available or disabled
+        if use_cache and (CachedSession is None or SQLiteBackend is None):
+            # Provide a hint if cache lib is not available
+            pass
+        elif not use_cache:
+            pass
+        session_ctx = aiohttp.ClientSession()
+
+    async with session_ctx as client:
 
         async def bound_fetch(
             idx_xy: tuple[int, tuple[int, int]],

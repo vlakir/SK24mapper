@@ -1,8 +1,9 @@
 import asyncio
 import math
+from http import HTTPStatus
 from io import BytesIO
 
-import httpx
+import aiohttp
 from PIL import Image
 from pyproj import CRS, Transformer
 
@@ -339,7 +340,7 @@ def compute_xyz_coverage(  # noqa: PLR0913
 # Асинхронная загрузка XYZ тайла (Mapbox Styles)
 # ------------------------------
 async def async_fetch_xyz_tile(  # noqa: PLR0913
-    client: httpx.AsyncClient,
+    client: aiohttp.ClientSession,
     api_key: str,
     style_id: str,
     tile_size: int,
@@ -370,23 +371,26 @@ async def async_fetch_xyz_tile(  # noqa: PLR0913
     last_exc: Exception | None = None
     for attempt in range(retries):
         try:
-            resp = await client.get(url, timeout=async_timeout)
-            sc = resp.status_code
-            if sc == httpx.codes.OK:
+            timeout = aiohttp.ClientTimeout(total=async_timeout)
+            resp = await client.get(url, timeout=timeout)
+            sc = resp.status
+            if sc == HTTPStatus.OK:
+                data = await resp.read()
                 # Content may be png/jpg/webp — PIL opens all; convert to RGB
-                return Image.open(BytesIO(resp.content)).convert('RGB')
-            if sc in (httpx.codes.UNAUTHORIZED, httpx.codes.FORBIDDEN):
+                return Image.open(BytesIO(data)).convert('RGB')
+            if sc in (HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN):
                 msg = (
                     f'Доступ запрещён (HTTP {sc}). Проверьте токен и права. '
                     f'z/x/y={z}/{x}/{y} path={path}'
                 )
                 _fail(msg)
-            if sc == httpx.codes.NOT_FOUND:
+            if sc == HTTPStatus.NOT_FOUND:
                 msg = f'Ресурс не найден (404) для тайла z/x/y={z}/{x}/{y} path={path}'
                 _fail(msg)
-            if (sc == httpx.codes.TOO_MANY_REQUESTS) or (
+            is_rate_or_5xx = (sc == HTTPStatus.TOO_MANY_REQUESTS) or (
                 HTTP_5XX_MIN <= sc < HTTP_5XX_MAX
-            ):
+            )
+            if is_rate_or_5xx:
                 last_exc = RuntimeError(
                     f'HTTP {sc} при загрузке тайла z/x/y={z}/{x}/{y} path={path}'
                 )

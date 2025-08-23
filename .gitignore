@@ -21,3 +21,4 @@ big_image_*.*
 vanilla_docker.sh
 secrets.env
 *.png
+.cache/

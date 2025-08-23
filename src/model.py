@@ -3,6 +3,14 @@ from pydantic import BaseModel, field_validator
 from constants import ADDITIVE_RATIO, MAX_ZOOM
 
 
+class CacheSettings(BaseModel):
+    enabled: bool = True
+    dir: str = '.cache/tiles'
+    expire_hours: int = 168
+    respect_cache_control: bool = True
+    stale_if_error_hours: int = 72
+
+
 class MapSettings(BaseModel):
     """Установки, которые раньше были разбросаны по модулю, собраны в один датакласс."""
 
@@ -42,18 +50,21 @@ class MapSettings(BaseModel):
     # Формат изображения: png или jpg
     image_format: str = 'png'
 
+    # Кэш HTTP-запросов
+    cache: CacheSettings | None = CacheSettings()
+
     # Толщина линий сетки (px)
-    grid_width_px: int
+    grid_width_px: int = 4
     # Размер шрифта подписей (px)
-    grid_font_size: int
+    grid_font_size: int = 36
     # Толщина обводки текста (px)
-    grid_text_outline_width: int
+    grid_text_outline_width: int = 2
     # Отступ подписи от края изображения (px)
-    grid_text_margin: int
+    grid_text_margin: int = 24
     # Внутренний отступ подложки вокруг текста (px)
-    grid_label_bg_padding: int
+    grid_label_bg_padding: int = 6
     # Прозрачность белой маски (0.0 — прозрачная, 1.0 — непрозрачная)
-    mask_opacity: float
+    mask_opacity: float = 0.35
 
     # Валидации через Pydantic validators
     @field_validator('mask_opacity')

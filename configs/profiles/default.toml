@@ -16,6 +16,17 @@ tile_size = 512
 use_retina = true
 concurrency = 20
 
+[cache]
+enabled = true
+# Папка для хранения файла кэша (SQLite)
+dir = ".cache/tiles"
+# TTL (в часах)
+expire_hours = 168
+# Уважать HTTP Cache-Control/ETag/Last-Modified
+respect_cache_control = true
+# Разрешать использовать просроченный кэш при сетевой ошибке (часы)
+stale_if_error_hours = 72
+
 grid_width_px = 10
 grid_font_size = 86
 grid_text_outline_width = 2
