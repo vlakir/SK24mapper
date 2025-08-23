@@ -4,8 +4,13 @@ import time
 import tkinter as tk
 import traceback
 from collections.abc import Callable
+from pathlib import Path
 from tkinter import messagebox, ttk
 
+from PIL import Image, ImageTk
+
+from constants import CURRENT_PROFILE
+from profiles import load_profile
 from progress import set_progress_callback, set_spinner_callbacks
 
 
@@ -57,6 +62,9 @@ class _UI:
         self.on_create_map = on_create_map
         self.root = tk.Tk()
         self.root.title('Mil Mapper')
+        # Ensure the window is not too small so the preview placeholder is visible
+        with contextlib.suppress(Exception):
+            self.root.minsize(640, 480)
 
         frame = tk.Frame(self.root, padx=12, pady=12)
         frame.pack(fill=tk.BOTH, expand=True)
@@ -72,6 +80,30 @@ class _UI:
             frame, orient='horizontal', mode='determinate', length=280
         )
         self.progress.pack(fill=tk.X, pady=(6, 0))
+
+        # Preview area (use container to avoid geometry feedback from image size)
+        # Give it an initial reasonable height so the placeholder text is visible
+        self.preview_container = tk.Frame(frame, height=320)
+        self.preview_container.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
+        # Prevent the container from resizing to fit its children (fixes jitter)
+        self.preview_container.pack_propagate(flag=False)
+
+        self.preview_label = tk.Label(
+            self.preview_container,
+            text='Предпросмотр появится после создания карты',
+            anchor='center',
+            justify='center',
+            relief='sunken',
+            bd=1,
+            padx=6,
+            pady=6,
+        )
+        self.preview_label.pack(fill=tk.BOTH, expand=True)
+        self.preview_img: ImageTk.PhotoImage | None = None
+        self.preview_src_img: Image.Image | None = None
+        self._resize_job_id: str | None = None
+        # Масштабирование предпросмотра при изменении размеров — слушаем контейнер
+        self.preview_container.bind('<Configure>', self._on_preview_resize)
 
         # State
         self.finished: bool = False
@@ -115,6 +147,8 @@ class _UI:
         self.btn.config(state=tk.NORMAL)
         if ok:
             self.status_var.set('Готово')
+            # Отобразить предпросмотр итоговой карты
+            self._show_preview_if_available()
         else:
             self.status_var.set('Ошибка при создании карты')
             messagebox.showerror('Ошибка', err_text or 'Неизвестная ошибка')
@@ -155,6 +189,19 @@ class _UI:
 
         self.progress.config(mode='determinate', maximum=100)
         self.progress['value'] = 0
+
+        # Сброс предпросмотра перед новым запуском
+        self.preview_img = None
+        self.preview_src_img = None
+        # Отменим отложенную подгонку, если она была
+        if self._resize_job_id is not None:
+            with contextlib.suppress(Exception):
+                self.root.after_cancel(self._resize_job_id)
+        self._resize_job_id = None
+        self.preview_label.config(
+            image='',
+            text='Создание… Предпросмотр появится после завершения',
+        )
 
         threading.Thread(target=self._run_task, daemon=True).start()
 
@@ -213,6 +260,96 @@ class _UI:
 
     def mainloop(self) -> None:
         self.root.mainloop()
+
+    # Helpers
+    def _on_preview_resize(self, event: tk.Event) -> None:
+        """
+        Изменение размеров области предпросмотра.
+
+        Делает отложенную (debounce) подгонку, чтобы не масштабировать слишком часто.
+        """
+        if self.preview_src_img is None:
+            return
+        # Игнорируем слишком маленькие события
+        width = max(
+            1, int(getattr(event, 'width', self.preview_container.winfo_width()))
+        )
+        height = max(
+            1, int(getattr(event, 'height', self.preview_container.winfo_height()))
+        )
+        # Отменим предыдущие задания
+        if self._resize_job_id is not None:
+            with contextlib.suppress(Exception):
+                self.root.after_cancel(self._resize_job_id)
+            self._resize_job_id = None
+        # Небольшая задержка для сглаживания серий событий
+        self._resize_job_id = self.root.after(
+            60, lambda: self._resize_preview_to(width, height)
+        )
+
+    def _resize_preview_to(self, max_w: int, max_h: int) -> None:
+        if self.preview_src_img is None:
+            return
+        # Учитываем внутренние отступы Label (padx/pady) — попытаемся вычесть по 2*6
+        try:
+            padx = int(self.preview_label.cget('padx'))
+            pady = int(self.preview_label.cget('pady'))
+        except Exception:
+            padx = 0
+            pady = 0
+        avail_w = max(1, max_w - 2 * padx)
+        avail_h = max(1, max_h - 2 * pady)
+        src_w, src_h = self.preview_src_img.size
+        if src_w <= 0 or src_h <= 0:
+            return
+        scale = min(avail_w / src_w, avail_h / src_h)
+        scale = max(scale, 0.01)
+        dst_w = max(1, int(src_w * scale))
+        dst_h = max(1, int(src_h * scale))
+        with contextlib.suppress(Exception):
+            resized = self.preview_src_img.resize(
+                (dst_w, dst_h), Image.Resampling.LANCZOS
+            )
+            self.preview_img = ImageTk.PhotoImage(resized)
+            self.preview_label.config(image=self.preview_img, text='')
+        self._resize_job_id = None
+
+    def _show_preview_if_available(self) -> None:
+        """Показывает предпросмотр карты из пути профиля, если файл существует."""
+        try:
+            settings = load_profile(CURRENT_PROFILE)
+            path = Path(settings.output_path)
+            # При необходимости создать абсолютный путь
+            path = path if path.is_absolute() else Path.cwd() / path
+            if not path.exists():
+                # Файл не найден — покажем текст
+                self.preview_img = None
+                self.preview_src_img = None
+                self.preview_label.config(
+                    image='',
+                    text=f'Файл не найден:\n{path}',
+                )
+                return
+
+            # Определим желаемый размер предпросмотра исходя из текущей ширины
+            self.root.update_idletasks()
+            max_w = max(200, self.preview_container.winfo_width() or 0)
+            max_h = max(200, self.preview_container.winfo_height() or 0)
+            # Ограничим разумным максимумом
+            max_w = min(max_w, 1000)
+            max_h = min(max_h, 800)
+
+            img = Image.open(path)
+            self.preview_src_img = img
+            # Немедленно подгоним под текущие размеры
+            self._resize_preview_to(max_w, max_h)
+        except Exception as e:  # Поймаем и покажем как текст
+            self.preview_img = None
+            self.preview_src_img = None
+            self.preview_label.config(
+                image='',
+                text=f'Не удалось показать предпросмотр:\n{e}',
+            )
 
 
 def run_app(on_create_map: Callable[[], None]) -> None:
