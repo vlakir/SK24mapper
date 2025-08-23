@@ -1,10 +1,11 @@
-# Базовый URL Google Static Maps API
-GOOGLE_STATIC_MAPS_URL = 'https://maps.googleapis.com/maps/api/staticmap'
+# Базовый URL Mapbox Static Images API
+MAPBOX_STATIC_BASE = 'https://api.mapbox.com/styles/v1'
 
-# Базовый размер тайла по одной стороне (px) для statics (максимум: обычно 640)
-STATIC_SIZE_PX = 640
+# Базовый размер тайла по одной стороне (px) для статичных изображений
+# По умолчанию используем 1024 (вмещается в лимит 1280 и хорошо сочетается с @2x)
+STATIC_SIZE_PX = 1024
 
-# Масштаб 2 => фактический тайл ~1280x1280 пикселей
+# Масштаб 2 => HiDPI (@2x) — фактический тайл в 2 раза больше
 STATIC_SCALE = 2
 
 # Максимальный уровень приближения
@@ -65,8 +66,8 @@ GRID_FONT_PATH_BOLD = None
 # Включить наложение белой маски поверх карты
 ENABLE_WHITE_MASK = True
 
-WGS84_CODE = 4284
-SK42_CODE = 4326
+WGS84_CODE = 4326
+SK42_CODE = 4284
 
 CURRENT_PROFILE = 'default'
 

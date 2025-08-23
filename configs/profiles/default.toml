@@ -10,7 +10,22 @@ to_y_low = 49
 
 output_path = "../maps/map.png"
 zoom = 22
-grid_width_px = 20
+
+# Mapbox XYZ source configuration
+style_id = "mapbox/satellite-v9"
+# XYZ tile size: 256 or 512 (Mapbox default is 512)
+tile_size = 512
+# HiDPI: add "@2x" to tile URLs if true
+use_retina = true
+# Concurrency limit for tile downloads
+concurrency = 20
+
+# Legacy static image settings (unused with XYZ, kept for compatibility)
+static_tile_width_px = 1024
+static_tile_height_px = 1024
+image_format = "png"
+
+grid_width_px = 10
 grid_font_size = 86
 grid_text_outline_width = 2
 grid_text_margin = 43

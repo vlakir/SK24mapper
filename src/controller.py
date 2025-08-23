@@ -34,13 +34,14 @@ from image import (
 from profiles import load_profile
 from progress import ConsoleProgress, LiveSpinner
 from topography import (
-    async_fetch_static_map,
+    async_fetch_xyz_tile,
     build_transformers_sk42,
     choose_zoom_with_limit,
-    compute_grid,
+    compute_xyz_coverage,
     compute_rotation_deg_for_east_axis,
     crs_sk42_geog,
     estimate_crop_size_px,
+    effective_scale_for_xyz,
 )
 
 settings = load_profile(CURRENT_PROFILE)
@@ -58,6 +59,8 @@ async def download_satellite_rectangle(  # noqa: PLR0915, PLR0913
     static_size_px: int = STATIC_SIZE_PX,
 ) -> str:
     """Полный конвейер."""
+    # Переопределяем параметры из профиля
+    eff_scale = effective_scale_for_xyz(settings.tile_size, settings.use_retina)
     # Подготовка — конвертация из Гаусса-Крюгера в географические координаты СК-42
     sp = LiveSpinner('Подготовка: определение зоны')
     sp.start()
@@ -100,7 +103,7 @@ async def download_satellite_rectangle(  # noqa: PLR0915, PLR0913
         width_m=width_m,
         height_m=height_m,
         desired_zoom=max_zoom,
-        scale=scale,
+        scale=eff_scale,
         max_pixels=MAX_OUTPUT_PIXELS,
     )
     sp.stop('Подготовка: zoom выбран')
@@ -115,55 +118,52 @@ async def download_satellite_rectangle(  # noqa: PLR0915, PLR0913
         width_m,
         height_m,
         zoom,
-        scale,
+        eff_scale,
     )
     sp.stop('Подготовка: размер оценён')
 
-    sp = LiveSpinner('Подготовка: расчёт сетки')
+    sp = LiveSpinner('Подготовка: расчёт покрытия XYZ')
     sp.start()
     base_pad = round(min(target_w_px, target_h_px) * ROTATION_PAD_RATIO)
     pad_px = max(base_pad, ROTATION_PAD_MIN_PX)
-    centers, (tiles_x, tiles_y), (_gw, _gh), crop_rect, map_params = compute_grid(
+    tiles, (tiles_x, tiles_y), crop_rect, map_params = compute_xyz_coverage(
         center_lat=center_lat_wgs,
         center_lng=center_lng_wgs,
         width_m=width_m,
         height_m=height_m,
         zoom=zoom,
-        scale=scale,
-        tile_size_px=static_size_px,
+        eff_scale=eff_scale,
         pad_px=pad_px,
     )
-    sp.stop('Подготовка: сетка рассчитана')
+    sp.stop('Подготовка: покрытие рассчитано')
 
-    tile_progress = ConsoleProgress(total=len(centers), label='Загрузка тайлов')
-    semaphore = asyncio.Semaphore(ASYNC_MAX_CONCURRENCY)
+    tile_progress = ConsoleProgress(total=len(tiles), label='Загрузка XYZ-тайлов')
+    semaphore = asyncio.Semaphore(settings.concurrency or ASYNC_MAX_CONCURRENCY)
     async with httpx.AsyncClient(http2=True) as client:
 
-        async def bound_fetch(
-            idx_lat_lng: tuple[int, tuple[float, float]],
-        ) -> tuple[int, Image.Image]:
-            idx, (lt, ln) = idx_lat_lng
+        async def bound_fetch(idx_xy: tuple[int, tuple[int, int]]) -> tuple[int, Image.Image]:
+            idx, (tx, ty) = idx_xy
             async with semaphore:
-                img = await async_fetch_static_map(
+                img = await async_fetch_xyz_tile(
                     client=client,
-                    lat=lt,
-                    lng=ln,
-                    zoom=zoom,
                     api_key=api_key,
-                    size_px=static_size_px,
-                    scale=scale,
-                    maptype='satellite',
+                    style_id=settings.style_id,
+                    tile_size=settings.tile_size,
+                    z=zoom,
+                    x=tx,
+                    y=ty,
+                    use_retina=settings.use_retina,
                 )
                 await tile_progress.step(1)
                 return idx, img
 
-        tasks = [bound_fetch(pair) for pair in enumerate(centers)]
+        tasks = [bound_fetch(pair) for pair in enumerate(tiles)]
         results = await asyncio.gather(*tasks)
         tile_progress.close()
         results.sort(key=lambda t: t[0])
         images: list[Image.Image] = [img for _, img in results]
 
-    eff_tile_px = static_size_px * scale
+    eff_tile_px = settings.tile_size * (2 if settings.use_retina else 1)
     result = assemble_and_crop(
         images=images,
         tiles_x=tiles_x,
@@ -197,6 +197,7 @@ async def download_satellite_rectangle(  # noqa: PLR0915, PLR0913
         step_m=GRID_STEP_M,
         color=GRID_COLOR,
         width_px=settings.grid_width_px,
+        scale=eff_scale,
     )
 
     sp = LiveSpinner('Сохранение файла')

@@ -205,6 +205,7 @@ def draw_axis_aligned_km_grid(  # noqa: PLR0913
     step_m: int = GRID_STEP_M,
     color: tuple[int, int, int] = GRID_COLOR,
     width_px: int = settings.grid_width_px,
+    scale: int = STATIC_SCALE,
 ) -> None:
     """
     Рисует сетку 1 км (СК‑42/Гаусса–Крюгера) строго по осям экрана и подписывает.
@@ -216,7 +217,7 @@ def draw_axis_aligned_km_grid(  # noqa: PLR0913
     font = load_grid_font()
     w, h = img.size
 
-    mpp = meters_per_pixel(center_lat_wgs, zoom, scale=STATIC_SCALE)
+    mpp = meters_per_pixel(center_lat_wgs, zoom, scale=scale)
     ppm = 1.0 / mpp
 
     cx, cy = w / 2.0, h / 2.0
@@ -253,10 +254,12 @@ def draw_axis_aligned_km_grid(  # noqa: PLR0913
         draw.line([(x_px, 0), (x_px, h)], fill=color, width=width_px)
         grid_progress.step_sync(1)
 
-        x_digits = (round(x_m) // 1000) % 100
+        # Подписываем квадрат справа от вертикали: берём центр правого квадрата
+        x_label_m = x_m + step_m / 2.0
+        x_digits = math.floor(x_label_m / 1000) % 100
         x_label = f'{x_digits:02d}'
 
-        # Сдвиг подписей вправо на половину шага сетки (к середине стороны квадрата)
+        # Сдвиг подписей вправо на половину шага сетки (к центру квадрата справа)
         half_step_px = (step_m / 2) * ppm
 
         # Верх - сдвигаем вправо
@@ -293,16 +296,18 @@ def draw_axis_aligned_km_grid(  # noqa: PLR0913
         draw.line([(0, y_px), (w, y_px)], fill=color, width=width_px)
         grid_progress.step_sync(1)
 
-        y_digits = (round(y_m) // 1000) % 100
+        # Подписываем квадрат выше горизонтали: берём центр верхнего квадрата
+        y_label_m = y_m + step_m / 2.0
+        y_digits = math.floor(y_label_m / 1000) % 100
         y_label = f'{y_digits:02d}'
 
-        # Сдвиг подписей вверх на половину шага сетки (к середине стороны квадрата)
+        # Сдвиг подписей вверх на половину шага сетки (к центру квадрата выше)
         half_step_px = (step_m / 2) * ppm
 
         # Лево - сдвигаем вверх
         draw_label_with_bg(
             draw,
-            (settings.grid_text_margin, y_px + half_step_px),
+            (settings.grid_text_margin, y_px - half_step_px),
             y_label,
             font=font,
             anchor='lm',
@@ -314,7 +319,7 @@ def draw_axis_aligned_km_grid(  # noqa: PLR0913
         # Право - сдвигаем вверх
         draw_label_with_bg(
             draw,
-            (w - settings.grid_text_margin, y_px + half_step_px),
+            (w - settings.grid_text_margin, y_px - half_step_px),
             y_label,
             font=font,
             anchor='rm',

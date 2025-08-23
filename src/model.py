@@ -23,6 +23,25 @@ class MapSettings(BaseModel):
     output_path: str
     # Желательный зум (будет снижен автоматически при превышении лимитов)
     zoom: int = MAX_ZOOM
+
+    # Источник тайлов Mapbox (Styles/XYZ)
+    # Идентификатор стиля, например:
+    #   "mapbox/satellite-v9" или "mapbox/satellite-streets-v12"
+    style_id: str = 'mapbox/satellite-v9'
+    # Размер тайла стиля (256 или 512) — влияет на плотность пикселей
+    tile_size: int = 512
+    # HiDPI: если true — добавлять "@2x" к URL (в 2 раза больше физических пикселей)
+    use_retina: bool = True
+    # Параллелизм загрузки
+    concurrency: int = 20
+
+    # Параметры старого статического источника (сохраняем для обратной совместимости)
+    # Размер кадра (px) — ширина/высота (лимит 1280)
+    static_tile_width_px: int = 1024
+    static_tile_height_px: int = 1024
+    # Формат изображения: png или jpg
+    image_format: str = 'png'
+
     # Толщина линий сетки (px)
     grid_width_px: int
     # Размер шрифта подписей (px)
@@ -58,16 +77,20 @@ class MapSettings(BaseModel):
     # Вычисляемые свойства из исходных параметров + ADDITIVE_RATIO
     @property
     def bottom_left_x_sk42_gk(self) -> float:
-        return 1e3 * (self.from_x_low - ADDITIVE_RATIO) + 1e5 * self.from_x_high
-
-    @property
-    def bottom_left_y_sk42_gk(self) -> float:
+        # GK X (easting, горизонталь) собираем из "y" полей профиля
         return 1e3 * (self.from_y_low - ADDITIVE_RATIO) + 1e5 * self.from_y_high
 
     @property
+    def bottom_left_y_sk42_gk(self) -> float:
+        # GK Y (northing, вертикаль) собираем из "x" полей профиля
+        return 1e3 * (self.from_x_low - ADDITIVE_RATIO) + 1e5 * self.from_x_high
+
+    @property
     def top_right_x_sk42_gk(self) -> float:
-        return 1e3 * (self.to_x_low + ADDITIVE_RATIO) + 1e5 * self.to_x_high
+        # GK X из "y"
+        return 1e3 * (self.to_y_low + ADDITIVE_RATIO) + 1e5 * self.to_y_high
 
     @property
     def top_right_y_sk42_gk(self) -> float:
-        return 1e3 * (self.to_y_low + ADDITIVE_RATIO) + 1e5 * self.to_y_high
+        # GK Y из "x"
+        return 1e3 * (self.to_x_low + ADDITIVE_RATIO) + 1e5 * self.to_x_high

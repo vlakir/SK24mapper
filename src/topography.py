@@ -9,7 +9,7 @@ from pyproj import CRS, Transformer
 from constants import (
     CURRENT_PROFILE,
     EARTH_RADIUS_M,
-    GOOGLE_STATIC_MAPS_URL,
+    MAPBOX_STATIC_BASE,
     SK42_CODE,
     STATIC_SCALE,
     STATIC_SIZE_PX,
@@ -23,14 +23,14 @@ settings = load_profile(CURRENT_PROFILE)
 # ------------------------------
 # СК‑42 <-> WGS84 (pyproj)
 # ------------------------------
-crs_sk42_geog = CRS.from_epsg(WGS84_CODE)  # Географическая СК-42 (Pulkovo 1942)
-crs_wgs84 = CRS.from_epsg(SK42_CODE)  # Географическая WGS84
+crs_sk42_geog = CRS.from_epsg(SK42_CODE)  # Географическая СК-42 (Pulkovo 1942)
+crs_wgs84 = CRS.from_epsg(WGS84_CODE)  # Географическая WGS84
 
-# Для обратной совместимости - вычисляем центр и размеры из углов
-center_y_sk42_gk = (settings.bottom_left_y_sk42_gk + settings.top_right_y_sk42_gk) / 2
+# Центр и размеры области в системе GK: ширина по ΔX (горизонталь), высота по ΔY (вертикаль)
 center_x_sk42_gk = (settings.bottom_left_x_sk42_gk + settings.top_right_x_sk42_gk) / 2
-width_m = settings.top_right_y_sk42_gk - settings.bottom_left_y_sk42_gk
-height_m = settings.top_right_x_sk42_gk - settings.bottom_left_x_sk42_gk
+center_y_sk42_gk = (settings.bottom_left_y_sk42_gk + settings.top_right_y_sk42_gk) / 2
+width_m = settings.top_right_x_sk42_gk - settings.bottom_left_x_sk42_gk
+height_m = settings.top_right_y_sk42_gk - settings.bottom_left_y_sk42_gk
 
 
 def build_transformers_sk42(
@@ -228,47 +228,162 @@ def compute_grid(  # noqa: PLR0913
 
 
 # ------------------------------
-# Асинхронная загрузка тайла
+# XYZ покрытие и преобразования
 # ------------------------------
-async def async_fetch_static_map(  # noqa: PLR0913
-    client: httpx.AsyncClient,
-    lat: float,
-    lng: float,
+
+def effective_scale_for_xyz(tile_size: int, use_retina: bool) -> int:
+    """Эффективный масштаб (мозаичных пикселей на 256 мировой пиксель)."""
+    base = 512 if tile_size >= 512 else 256
+    return (base // 256) * (2 if use_retina else 1)
+
+
+def compute_xyz_coverage(  # noqa: PLR0913
+    center_lat: float,
+    center_lng: float,
+    width_m: float,
+    height_m: float,
     zoom: int,
+    eff_scale: int,
+    pad_px: int,
+) -> tuple[
+    list[tuple[int, int]],
+    tuple[int, int],
+    tuple[int, int, int, int],
+    tuple[float, float, float, int, int, int, int],
+]:
+    """
+    Вычисляет покрытие XYZ-тайлами для расширенной области и параметры сборки.
+
+    Возвращает:
+      - список тайлов (x, y) в порядке строк (y) и столбцов (x) с учётом wrap по x;
+      - (count_x, count_y);
+      - crop_rect = (crop_x, crop_y, crop_w, crop_h) в пикселях мозаики;
+      - map_params совместимый с latlng_to_final_pixel.
+    """
+    # Центр в мировых пикселях (256 * 2^z)
+    cx, cy = latlng_to_pixel_xy(center_lat, center_lng, zoom)
+
+    # Требуемые размеры в пикселях мозаики
+    mpp = meters_per_pixel(center_lat, zoom, scale=eff_scale)
+    req_w_px = width_m / mpp
+    req_h_px = height_m / mpp
+
+    # Перевод в мировые пиксели (без учёта масштаба)
+    req_w_world = req_w_px / eff_scale
+    req_h_world = req_h_px / eff_scale
+    pad_world = max(0, int(round(pad_px / eff_scale)))
+    padded_w_world = req_w_world + 2 * pad_world
+    padded_h_world = req_h_world + 2 * pad_world
+
+    x_min_world = cx - padded_w_world / 2.0
+    y_min_world = cy - padded_h_world / 2.0
+    x_max_world = cx + padded_w_world / 2.0
+    y_max_world = cy + padded_h_world / 2.0
+
+    # Диапазон тайлов XYZ (размер тайла = 256 мировых пикселей)
+    t = 2**zoom
+    x_min = int(math.floor(x_min_world / 256.0))
+    y_min = int(math.floor(y_min_world / 256.0))
+    x_max = int(math.floor((x_max_world - 1e-9) / 256.0))
+    y_max = int(math.floor((y_max_world - 1e-9) / 256.0))
+
+    # Кламп y, wrap x
+    y_min_clamped = max(0, min(t - 1, y_min))
+    y_max_clamped = max(0, min(t - 1, y_max))
+
+    # Количество тайлов по осям
+    count_x = (x_max - x_min + 1)
+    count_y = (y_max_clamped - y_min_clamped + 1)
+
+    # Нормализованный x для построения списка (wrap по модулю t)
+    tiles: list[tuple[int, int]] = []
+    for y in range(y_min_clamped, y_max_clamped + 1):
+        for i in range(count_x):
+            x = (x_min + i) % t
+            tiles.append((x, y))
+
+    # Эффективный размер тайла в пикселях мозаики
+    base_step_world = 256.0
+    eff_tile_px = int(base_step_world * eff_scale)
+
+    # Смещения кропа в пикселях мозаики от (0,0) верхнего-левого тайла
+    # Верхний-левый тайл в нашей сетке имеет индекс x_min (без мод), y_min_clamped
+    crop_x = int(round((x_min_world - x_min * base_step_world) * eff_scale))
+    crop_y = int(round((y_min_world - y_min_clamped * base_step_world) * eff_scale))
+    crop_w = int(round(padded_w_world * eff_scale))
+    crop_h = int(round(padded_h_world * eff_scale))
+
+    # Параметры для latlng_to_final_pixel
+    origin_x_world = x_min * base_step_world + base_step_world / 2.0
+    origin_y_world = y_min_clamped * base_step_world + base_step_world / 2.0
+    map_params = (
+        origin_x_world,
+        origin_y_world,
+        base_step_world,
+        eff_scale,
+        crop_x,
+        crop_y,
+        zoom,
+    )
+
+    return tiles, (count_x, count_y), (crop_x, crop_y, crop_w, crop_h), map_params
+
+
+# ------------------------------
+# Асинхронная загрузка XYZ тайла (Mapbox Styles)
+# ------------------------------
+async def async_fetch_xyz_tile(
+    client: httpx.AsyncClient,
     api_key: str,
-    size_px: int = STATIC_SIZE_PX,
-    scale: int = STATIC_SCALE,
-    maptype: str = 'satellite',
+    style_id: str,
+    tile_size: int,
+    z: int,
+    x: int,
+    y: int,
+    use_retina: bool,
     async_timeout: float = 20.0,
-    retries: int = 3,
-    backoff: float = 1.5,
+    retries: int = 4,
+    backoff: float = 1.6,
 ) -> Image.Image:
-    """Загружает один статик-тайл Google Static Maps и возвращает PIL.Image (RGB)."""
-    params = {
-        'center': f'{lat:.8f},{lng:.8f}',
-        'zoom': str(zoom),
-        'size': f'{size_px}x{size_px}',
-        'scale': str(scale),
-        'maptype': maptype,
-        'format': 'png',
-        'key': api_key,
-    }
+    """
+    Загружает один XYZ тайл стиля Mapbox и возвращает PIL.Image (RGB).
+
+    - URL: /styles/v1/{style_id}/tiles/{tileSize}/{z}/{x}/{y}{@2x}
+    - Не добавляем токен в лог/ошибки; логируем путь без токена.
+    - Обрабатываем 401/403/404 явно; 429/5xx с ретраями и экспоненциальной задержкой.
+    """
+    ts = 512 if tile_size >= 512 else 256
+    scale_suffix = '@2x' if use_retina else ''
+    path = f"{MAPBOX_STATIC_BASE}/{style_id}/tiles/{ts}/{z}/{x}/{y}{scale_suffix}"
+    url = f"{path}?access_token={api_key}"
     last_exc: Exception | None = None
     for attempt in range(retries):
         try:
-            resp = await client.get(
-                GOOGLE_STATIC_MAPS_URL,
-                params=params,
-                timeout=async_timeout,
-            )
-            if resp.status_code == httpx.codes.OK:
+            resp = await client.get(url, timeout=async_timeout)
+            sc = resp.status_code
+            if sc == httpx.codes.OK:
+                # Content may be png/jpg/webp — PIL opens all; convert to RGB
                 return Image.open(BytesIO(resp.content)).convert('RGB')
-            last_exc = RuntimeError(f'HTTP {resp.status_code}: {resp.text[:300]}...')
+            if sc in (httpx.codes.UNAUTHORIZED, httpx.codes.FORBIDDEN):
+                raise RuntimeError(
+                    f"Доступ запрещён (HTTP {sc}). Проверьте токен и права. z/x/y={z}/{x}/{y} path={path}"
+                )
+            if sc == httpx.codes.NOT_FOUND:
+                raise RuntimeError(
+                    f"Ресурс не найден (404) для тайла z/x/y={z}/{x}/{y} path={path}"
+                )
+            if (sc == httpx.codes.TOO_MANY_REQUESTS) or (500 <= sc < 600):
+                last_exc = RuntimeError(
+                    f"HTTP {sc} при загрузке тайла z/x/y={z}/{x}/{y} path={path}"
+                )
+            else:
+                last_exc = RuntimeError(
+                    f"Неожиданный ответ HTTP {sc} для z/x/y={z}/{x}/{y} path={path}"
+                )
         except Exception as e:
             last_exc = e
         await asyncio.sleep(backoff**attempt)
-    msg = f'Не удалось загрузить карту: {last_exc}'
-    raise RuntimeError(msg)
+    raise RuntimeError(f"Не удалось загрузить тайл z/x/y={z}/{x}/{y}: {last_exc}")
 
 
 # ------------------------------

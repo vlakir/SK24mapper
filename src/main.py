@@ -28,8 +28,8 @@ def main() -> None:
     # 3) Запуск конвейера
     asyncio.run(
         download_satellite_rectangle(
-            center_x_sk42_gk=center_y_sk42_gk,
-            center_y_sk42_gk=center_x_sk42_gk,
+            center_x_sk42_gk=center_x_sk42_gk,
+            center_y_sk42_gk=center_y_sk42_gk,
             width_m=width_m,
             height_m=height_m,
             api_key=api_key,
@@ -40,17 +40,18 @@ def main() -> None:
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Mil Mapper - создание топографических карт')
-    parser.add_argument(
-        '--mode', 
-        choices=['gui', 'console'], 
-        default='console',
-        help='Режим запуска приложения: gui или console (по умолчанию)'
+    parser = argparse.ArgumentParser(
+        description='Mil Mapper - создание топографических карт'
     )
-    
+    parser.add_argument(
+        '--mode',
+        choices=['gui', 'console'],
+        default='console',
+        help='Режим запуска приложения: gui или console (по умолчанию)',
+    )
+
     args = parser.parse_args()
 
-    
     if args.mode == 'gui':
         run_app(main)
     else:
