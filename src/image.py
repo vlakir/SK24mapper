@@ -194,7 +194,7 @@ def load_grid_font() -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     return ImageFont.load_default()
 
 
-def draw_axis_aligned_km_grid(  # noqa: PLR0913
+def draw_axis_aligned_km_grid(  # noqa: PLR0913, PLR0915
     img: Image.Image,
     center_lat_sk42: float,
     center_lng_sk42: float,

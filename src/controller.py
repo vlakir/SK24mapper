@@ -21,8 +21,6 @@ from constants import (
     PIL_DISABLE_LIMIT,
     ROTATION_PAD_MIN_PX,
     ROTATION_PAD_RATIO,
-    STATIC_SCALE,
-    STATIC_SIZE_PX,
 )
 from image import (
     apply_white_mask,
@@ -37,11 +35,11 @@ from topography import (
     async_fetch_xyz_tile,
     build_transformers_sk42,
     choose_zoom_with_limit,
-    compute_xyz_coverage,
     compute_rotation_deg_for_east_axis,
+    compute_xyz_coverage,
     crs_sk42_geog,
-    estimate_crop_size_px,
     effective_scale_for_xyz,
+    estimate_crop_size_px,
 )
 
 settings = load_profile(CURRENT_PROFILE)
@@ -55,12 +53,12 @@ async def download_satellite_rectangle(  # noqa: PLR0915, PLR0913
     api_key: str,
     output_path: str,
     max_zoom: int = MAX_ZOOM,
-    scale: int = STATIC_SCALE,
-    static_size_px: int = STATIC_SIZE_PX,
 ) -> str:
     """Полный конвейер."""
     # Переопределяем параметры из профиля
-    eff_scale = effective_scale_for_xyz(settings.tile_size, settings.use_retina)
+    eff_scale = effective_scale_for_xyz(
+        settings.tile_size, use_retina=settings.use_retina
+    )
     # Подготовка — конвертация из Гаусса-Крюгера в географические координаты СК-42
     sp = LiveSpinner('Подготовка: определение зоны')
     sp.start()
@@ -141,7 +139,9 @@ async def download_satellite_rectangle(  # noqa: PLR0915, PLR0913
     semaphore = asyncio.Semaphore(settings.concurrency or ASYNC_MAX_CONCURRENCY)
     async with httpx.AsyncClient(http2=True) as client:
 
-        async def bound_fetch(idx_xy: tuple[int, tuple[int, int]]) -> tuple[int, Image.Image]:
+        async def bound_fetch(
+            idx_xy: tuple[int, tuple[int, int]],
+        ) -> tuple[int, Image.Image]:
             idx, (tx, ty) = idx_xy
             async with semaphore:
                 img = await async_fetch_xyz_tile(

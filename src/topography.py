@@ -9,11 +9,15 @@ from pyproj import CRS, Transformer
 from constants import (
     CURRENT_PROFILE,
     EARTH_RADIUS_M,
+    HTTP_5XX_MAX,
+    HTTP_5XX_MIN,
     MAPBOX_STATIC_BASE,
+    RETINA_FACTOR,
     SK42_CODE,
     STATIC_SCALE,
     STATIC_SIZE_PX,
     TILE_SIZE,
+    TILE_SIZE_512,
     WGS84_CODE,
 )
 from profiles import load_profile
@@ -26,7 +30,8 @@ settings = load_profile(CURRENT_PROFILE)
 crs_sk42_geog = CRS.from_epsg(SK42_CODE)  # Географическая СК-42 (Pulkovo 1942)
 crs_wgs84 = CRS.from_epsg(WGS84_CODE)  # Географическая WGS84
 
-# Центр и размеры области в системе GK: ширина по ΔX (горизонталь), высота по ΔY (вертикаль)
+# Центр и размеры области в системе GK:
+# ширина по ΔX (горизонталь), высота по ΔY (вертикаль)
 center_x_sk42_gk = (settings.bottom_left_x_sk42_gk + settings.top_right_x_sk42_gk) / 2
 center_y_sk42_gk = (settings.bottom_left_y_sk42_gk + settings.top_right_y_sk42_gk) / 2
 width_m = settings.top_right_x_sk42_gk - settings.bottom_left_x_sk42_gk
@@ -231,10 +236,11 @@ def compute_grid(  # noqa: PLR0913
 # XYZ покрытие и преобразования
 # ------------------------------
 
-def effective_scale_for_xyz(tile_size: int, use_retina: bool) -> int:
+
+def effective_scale_for_xyz(tile_size: int, *, use_retina: bool) -> int:
     """Эффективный масштаб (мозаичных пикселей на 256 мировой пиксель)."""
-    base = 512 if tile_size >= 512 else 256
-    return (base // 256) * (2 if use_retina else 1)
+    base = TILE_SIZE_512 if tile_size >= TILE_SIZE_512 else TILE_SIZE
+    return (base // TILE_SIZE) * (RETINA_FACTOR if use_retina else 1)
 
 
 def compute_xyz_coverage(  # noqa: PLR0913
@@ -271,7 +277,7 @@ def compute_xyz_coverage(  # noqa: PLR0913
     # Перевод в мировые пиксели (без учёта масштаба)
     req_w_world = req_w_px / eff_scale
     req_h_world = req_h_px / eff_scale
-    pad_world = max(0, int(round(pad_px / eff_scale)))
+    pad_world = max(0, round(pad_px / eff_scale))
     padded_w_world = req_w_world + 2 * pad_world
     padded_h_world = req_h_world + 2 * pad_world
 
@@ -282,18 +288,18 @@ def compute_xyz_coverage(  # noqa: PLR0913
 
     # Диапазон тайлов XYZ (размер тайла = 256 мировых пикселей)
     t = 2**zoom
-    x_min = int(math.floor(x_min_world / 256.0))
-    y_min = int(math.floor(y_min_world / 256.0))
-    x_max = int(math.floor((x_max_world - 1e-9) / 256.0))
-    y_max = int(math.floor((y_max_world - 1e-9) / 256.0))
+    x_min = math.floor(x_min_world / 256.0)
+    y_min = math.floor(y_min_world / 256.0)
+    x_max = math.floor((x_max_world - 1e-9) / 256.0)
+    y_max = math.floor((y_max_world - 1e-9) / 256.0)
 
     # Кламп y, wrap x
     y_min_clamped = max(0, min(t - 1, y_min))
     y_max_clamped = max(0, min(t - 1, y_max))
 
     # Количество тайлов по осям
-    count_x = (x_max - x_min + 1)
-    count_y = (y_max_clamped - y_min_clamped + 1)
+    count_x = x_max - x_min + 1
+    count_y = y_max_clamped - y_min_clamped + 1
 
     # Нормализованный x для построения списка (wrap по модулю t)
     tiles: list[tuple[int, int]] = []
@@ -304,14 +310,14 @@ def compute_xyz_coverage(  # noqa: PLR0913
 
     # Эффективный размер тайла в пикселях мозаики
     base_step_world = 256.0
-    eff_tile_px = int(base_step_world * eff_scale)
+    int(base_step_world * eff_scale)
 
     # Смещения кропа в пикселях мозаики от (0,0) верхнего-левого тайла
     # Верхний-левый тайл в нашей сетке имеет индекс x_min (без мод), y_min_clamped
-    crop_x = int(round((x_min_world - x_min * base_step_world) * eff_scale))
-    crop_y = int(round((y_min_world - y_min_clamped * base_step_world) * eff_scale))
-    crop_w = int(round(padded_w_world * eff_scale))
-    crop_h = int(round(padded_h_world * eff_scale))
+    crop_x = round((x_min_world - x_min * base_step_world) * eff_scale)
+    crop_y = round((y_min_world - y_min_clamped * base_step_world) * eff_scale)
+    crop_w = round(padded_w_world * eff_scale)
+    crop_h = round(padded_h_world * eff_scale)
 
     # Параметры для latlng_to_final_pixel
     origin_x_world = x_min * base_step_world + base_step_world / 2.0
@@ -332,7 +338,7 @@ def compute_xyz_coverage(  # noqa: PLR0913
 # ------------------------------
 # Асинхронная загрузка XYZ тайла (Mapbox Styles)
 # ------------------------------
-async def async_fetch_xyz_tile(
+async def async_fetch_xyz_tile(  # noqa: PLR0913
     client: httpx.AsyncClient,
     api_key: str,
     style_id: str,
@@ -340,6 +346,7 @@ async def async_fetch_xyz_tile(
     z: int,
     x: int,
     y: int,
+    *,
     use_retina: bool,
     async_timeout: float = 20.0,
     retries: int = 4,
@@ -352,10 +359,14 @@ async def async_fetch_xyz_tile(
     - Не добавляем токен в лог/ошибки; логируем путь без токена.
     - Обрабатываем 401/403/404 явно; 429/5xx с ретраями и экспоненциальной задержкой.
     """
-    ts = 512 if tile_size >= 512 else 256
+    ts = TILE_SIZE_512 if tile_size >= TILE_SIZE_512 else TILE_SIZE
     scale_suffix = '@2x' if use_retina else ''
-    path = f"{MAPBOX_STATIC_BASE}/{style_id}/tiles/{ts}/{z}/{x}/{y}{scale_suffix}"
-    url = f"{path}?access_token={api_key}"
+    path = f'{MAPBOX_STATIC_BASE}/{style_id}/tiles/{ts}/{z}/{x}/{y}{scale_suffix}'
+    url = f'{path}?access_token={api_key}'
+
+    def _fail(msg: str) -> None:
+        raise RuntimeError(msg)
+
     last_exc: Exception | None = None
     for attempt in range(retries):
         try:
@@ -365,25 +376,29 @@ async def async_fetch_xyz_tile(
                 # Content may be png/jpg/webp — PIL opens all; convert to RGB
                 return Image.open(BytesIO(resp.content)).convert('RGB')
             if sc in (httpx.codes.UNAUTHORIZED, httpx.codes.FORBIDDEN):
-                raise RuntimeError(
-                    f"Доступ запрещён (HTTP {sc}). Проверьте токен и права. z/x/y={z}/{x}/{y} path={path}"
+                msg = (
+                    f'Доступ запрещён (HTTP {sc}). Проверьте токен и права. '
+                    f'z/x/y={z}/{x}/{y} path={path}'
                 )
+                _fail(msg)
             if sc == httpx.codes.NOT_FOUND:
-                raise RuntimeError(
-                    f"Ресурс не найден (404) для тайла z/x/y={z}/{x}/{y} path={path}"
-                )
-            if (sc == httpx.codes.TOO_MANY_REQUESTS) or (500 <= sc < 600):
+                msg = f'Ресурс не найден (404) для тайла z/x/y={z}/{x}/{y} path={path}'
+                _fail(msg)
+            if (sc == httpx.codes.TOO_MANY_REQUESTS) or (
+                HTTP_5XX_MIN <= sc < HTTP_5XX_MAX
+            ):
                 last_exc = RuntimeError(
-                    f"HTTP {sc} при загрузке тайла z/x/y={z}/{x}/{y} path={path}"
+                    f'HTTP {sc} при загрузке тайла z/x/y={z}/{x}/{y} path={path}'
                 )
             else:
                 last_exc = RuntimeError(
-                    f"Неожиданный ответ HTTP {sc} для z/x/y={z}/{x}/{y} path={path}"
+                    f'Неожиданный ответ HTTP {sc} для z/x/y={z}/{x}/{y} path={path}'
                 )
         except Exception as e:
             last_exc = e
         await asyncio.sleep(backoff**attempt)
-    raise RuntimeError(f"Не удалось загрузить тайл z/x/y={z}/{x}/{y}: {last_exc}")
+    msg = f'Не удалось загрузить тайл z/x/y={z}/{x}/{y}: {last_exc}'
+    raise RuntimeError(msg)
 
 
 # ------------------------------

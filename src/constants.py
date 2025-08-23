@@ -17,6 +17,11 @@ EARTH_RADIUS_M = 6378137.0
 
 # Базовый размер тайла Web Mercator (пикселей)
 TILE_SIZE = 256
+# Дополнительные размеры тайла
+TILE_SIZE_512 = 512
+
+# Множитель для HiDPI (ретина)
+RETINA_FACTOR = 2
 
 # Максимальная 6-градусная зона Гаусса-Крюгера
 MAX_GK_ZONE = 60
@@ -72,3 +77,7 @@ SK42_CODE = 4284
 CURRENT_PROFILE = 'default'
 
 PROFILES_DIR = '../configs/profiles'
+
+# HTTP диапазоны ошибок сервера
+HTTP_5XX_MIN = 500
+HTTP_5XX_MAX = 600
