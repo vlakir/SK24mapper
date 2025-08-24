@@ -25,9 +25,6 @@ from profiles import load_profile
 
 settings = load_profile(CURRENT_PROFILE)
 
-# ------------------------------
-# СК‑42 <-> WGS84 (pyproj)
-# ------------------------------
 crs_sk42_geog = CRS.from_epsg(SK42_CODE)  # Географическая СК-42 (Pulkovo 1942)
 crs_wgs84 = CRS.from_epsg(WGS84_CODE)  # Географическая WGS84
 
@@ -80,9 +77,6 @@ def build_transformers_sk42(
     return t_sk42_to_wgs, t_wgs_to_sk42, crs_sk42_gk
 
 
-# ------------------------------
-# Geo utils (Web Mercator на WGS84)
-# ------------------------------
 def meters_per_pixel(lat_deg: float, zoom: int, scale: int = STATIC_SCALE) -> float:
     """Возвращает метров на пиксель в проекции Mercator на заданной широте и зуме."""
     lat_rad = math.radians(lat_deg)
@@ -114,9 +108,6 @@ def pixel_xy_to_latlng(x: float, y: float, zoom: int) -> tuple[float, float]:
     return lat, lng
 
 
-# ------------------------------
-# Вспомогательные оценки размера
-# ------------------------------
 def estimate_crop_size_px(
     center_lat: float,
     width_m: float,
@@ -149,9 +140,6 @@ def choose_zoom_with_limit(  # noqa: PLR0913
     return 0
 
 
-# ------------------------------
-# Расчёт сетки тайлов (с припуском под поворот)
-# ------------------------------
 def compute_grid(  # noqa: PLR0913
     center_lat: float,
     center_lng: float,
@@ -231,11 +219,6 @@ def compute_grid(  # noqa: PLR0913
         (crop_x, crop_y, crop_w, crop_h),
         map_params,
     )
-
-
-# ------------------------------
-# XYZ покрытие и преобразования
-# ------------------------------
 
 
 def effective_scale_for_xyz(tile_size: int, *, use_retina: bool) -> int:
@@ -336,9 +319,6 @@ def compute_xyz_coverage(  # noqa: PLR0913
     return tiles, (count_x, count_y), (crop_x, crop_y, crop_w, crop_h), map_params
 
 
-# ------------------------------
-# Асинхронная загрузка XYZ тайла (Mapbox Styles)
-# ------------------------------
 async def async_fetch_xyz_tile(  # noqa: PLR0913
     client: aiohttp.ClientSession,
     api_key: str,
@@ -405,9 +385,6 @@ async def async_fetch_xyz_tile(  # noqa: PLR0913
     raise RuntimeError(msg)
 
 
-# ------------------------------
-# Преобразование lat/lng -> пиксели итогового кадра
-# ------------------------------
 def latlng_to_final_pixel(
     lat: float,
     lng: float,
@@ -425,9 +402,6 @@ def latlng_to_final_pixel(
     return final_x, final_y
 
 
-# ------------------------------
-# Угол поворота по «востоку» СК‑42/ГК
-# ------------------------------
 def compute_rotation_deg_for_east_axis(
     center_lat_sk42: float,
     center_lng_sk42: float,

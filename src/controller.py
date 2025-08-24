@@ -1,6 +1,3 @@
-# ------------------------------
-# Основной асинхронный процесс
-# ------------------------------
 import asyncio
 import contextlib
 import os
@@ -275,22 +272,23 @@ async def download_satellite_rectangle(  # noqa: PLR0915, PLR0913
     )
 
     # Показать предпросмотр до сохранения файла
+    did_publish = False
     with contextlib.suppress(Exception):
-        publish_preview_image(result)
+        did_publish = publish_preview_image(result)
 
-    sp = LiveSpinner('Сохранение файла')
-    sp.start()
+    # Если GUI подписан на предпросмотр (did_publish=True), не сохраняем автоматически.
+    if not did_publish:
+        sp = LiveSpinner('Сохранение файла')
+        sp.start()
 
-    out_path = Path(output_path)
-    out_path.resolve().parent.mkdir(parents=True, exist_ok=True)
-    result.save(out_path)
+        out_path = Path(output_path)
+        out_path.resolve().parent.mkdir(parents=True, exist_ok=True)
+        result.save(out_path)
 
-    fd = os.open(out_path, os.O_RDONLY)
+        fd = os.open(out_path, os.O_RDONLY)
+        os.fsync(fd)
+        os.close(fd)
 
-    os.fsync(fd)
-
-    os.close(fd)
-
-    sp.stop('Сохранение файла: готово')
+        sp.stop('Сохранение файла: готово')
 
     return output_path

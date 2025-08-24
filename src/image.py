@@ -1,6 +1,3 @@
-# ------------------------------
-# Склейка и обрезка (пошаговый прогресс)
-# ------------------------------
 import logging
 import math
 
@@ -59,9 +56,6 @@ def assemble_and_crop(
     return out
 
 
-# ------------------------------
-# Поворот (спиннер) и центр‑кроп (спиннер)
-# ------------------------------
 def rotate_keep_size(
     img: Image.Image,
     angle_deg: float,
@@ -334,9 +328,6 @@ def draw_axis_aligned_km_grid(  # noqa: PLR0913, PLR0915
     grid_progress.close()
 
 
-# ------------------------------
-# Маска (спиннер)
-# ------------------------------
 def apply_white_mask(img: Image.Image, opacity: float) -> Image.Image:
     """Накладывает поверх изображения белую полупрозрачную маску (только для карты)."""
     opacity = max(0.0, min(1.0, opacity))

@@ -4,11 +4,12 @@ import sys
 import threading
 import time
 import tkinter as tk
+import tkinter.font as tkfont
 import traceback
 from collections.abc import Callable
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
-from typing import Any, Protocol, cast
+from typing import Any, Literal, Protocol, cast
 
 from PIL import Image, ImageTk
 
@@ -82,28 +83,57 @@ class _UI:
         with contextlib.suppress(Exception):
             self.root.minsize(640, 480)
 
+        # Init UI and state
+        self._normalize_popup_fonts()
+        self._build_widgets()
+        self._init_state()
+        self._create_menu()
+
+        self.btn.config(command=self.handle_click)
+        self.save_btn.config(command=self._handle_save_click)
+
+    def _normalize_popup_fonts(self) -> None:
+        with contextlib.suppress(Exception):
+            for fname in (
+                'TkMessageFont',
+                'TkDefaultFont',
+                'TkHeadingFont',
+                'TkMenuFont',
+                'TkTextFont',
+                'TkCaptionFont',
+                'TkSmallCaptionFont',
+                'TkTooltipFont',
+                'TkIconFont',
+                'TkFixedFont',
+            ):
+                with contextlib.suppress(Exception):
+                    f = tkfont.nametofont(fname)
+                    f.configure(weight='normal')
+                    f.configure(slant='roman')
+
+    def _build_widgets(self) -> None:
+        # Флаг наличия несохранённых изменений (предпросмотра)
+        self._unsaved = False
         frame = tk.Frame(self.root, padx=12, pady=12)
         frame.pack(fill=tk.BOTH, expand=True)
-
-        self.btn = tk.Button(frame, text='Создать карту', width=24)
-        self.btn.pack(pady=(0, 8))
-
+        buttons_row = tk.Frame(frame)
+        buttons_row.pack(fill=tk.X, pady=(0, 8))
+        self.btn = tk.Button(buttons_row, text='Создать карту', width=24)
+        self.btn.pack(side=tk.LEFT)
+        self.save_btn = tk.Button(
+            buttons_row, text='Сохранить карту…', width=24, state=tk.DISABLED
+        )
+        self.save_btn.pack(side=tk.LEFT, padx=(8, 0))
         self.status_var = tk.StringVar(value='Готов к созданию карты')
         status_lbl = tk.Label(frame, textvariable=self.status_var, anchor='w')
         status_lbl.pack(fill=tk.X)
-
         self.progress = ttk.Progressbar(
             frame, orient='horizontal', mode='determinate', length=280
         )
         self.progress.pack(fill=tk.X, pady=(6, 0))
-
-        # Preview area (use container to avoid geometry feedback from image size)
-        # Give it an initial reasonable height so the placeholder text is visible
         self.preview_container = tk.Frame(frame, height=320)
         self.preview_container.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
-        # Prevent the container from resizing to fit its children (fixes jitter)
         self.preview_container.pack_propagate(flag=False)
-
         self.preview_label = tk.Label(
             self.preview_container,
             text='Предпросмотр появится после создания карты',
@@ -118,24 +148,20 @@ class _UI:
         self.preview_img: ImageTk.PhotoImage | None = None
         self.preview_src_img: Image.Image | None = None
         self._resize_job_id: str | None = None
-        # Масштабирование предпросмотра при изменении размеров — слушаем контейнер
         self.preview_container.bind('<Configure>', self._on_preview_resize)
-
-        # Флаг: предпросмотр уже показан из памяти
         self._preview_from_memory: bool = False
 
-        # State
+    def _init_state(self) -> None:
         self.finished: bool = False
         self.spinner_count: int = 0
         self.progress_running: bool = False
         self.last_spinner_stop_ts: float = 0.0
         self.spinner_cooldown_s: float = 0.2
         self.pending_progress: tuple[int, int, str] | None = None
-        self.spinner_mode: str | None = None  # 'pingpong' | 'marquee'
-
+        self.spinner_mode: Literal['pingpong', 'marquee'] | None = None
         self.animator = _Animator(self.root, self.progress)
 
-        # Menu: profile loading
+    def _create_menu(self) -> None:
         with contextlib.suppress(Exception):
             menubar = tk.Menu(self.root)
             profile_menu = tk.Menu(menubar, tearoff=0)
@@ -144,10 +170,9 @@ class _UI:
             )
             menubar.add_cascade(label='Профиль', menu=profile_menu)
             self.root.config(menu=menubar)
+            self.menubar = menubar
+            self.profile_menu = profile_menu
 
-        self.btn.config(command=self.handle_click)
-
-    # Thread target
     def _run_task(self) -> None:
         try:
             self.on_create_map()
@@ -161,7 +186,6 @@ class _UI:
             return
         self.root.after(0, lambda: self._on_done(ok=True, err_text=None))
 
-    # Main-thread: finalize
     def _on_done(self, *, ok: bool, err_text: str | None = None) -> None:
         self.finished = True
         with contextlib.suppress(Exception):
@@ -174,12 +198,24 @@ class _UI:
             set_progress_callback(None)
             set_spinner_callbacks(None, None)
             set_preview_image_callback(None)
+        # Вернём элементы управления (включая меню) в активное состояние
+        self._set_all_controls_enabled(enabled=True)
         self.btn.config(state=tk.NORMAL)
+        # Разрешим сохранение, если есть предпросмотр
+        self.save_btn.config(
+            state=(tk.NORMAL if self.preview_src_img is not None else tk.DISABLED)
+        )
         if ok:
             self.status_var.set('Готово')
             # Если предпросмотр уже был показан из памяти — не перезагружаем из файла
             if self.preview_src_img is None:
                 self._show_preview_if_available()
+                # После показа из файла также включим сохранение, если удалось
+                self.save_btn.config(
+                    state=(
+                        tk.NORMAL if self.preview_src_img is not None else tk.DISABLED
+                    )
+                )
         else:
             self.status_var.set('Ошибка при создании карты')
             messagebox.showerror('Ошибка', err_text or 'Неизвестная ошибка')
@@ -209,8 +245,20 @@ class _UI:
         with contextlib.suppress(Exception):
             self._apply_progress(done, total, label)
 
-    # Public button handler
     def handle_click(self) -> None:
+        # Предупреждение об несохранённой карте
+        if self.preview_src_img is not None and self._unsaved:
+            proceed = messagebox.askyesno(
+                'Несохранённая карта',
+                'У вас есть несохранённая карта. Продолжить без сохранения?',
+                parent=self.root,
+            )
+            if not proceed:
+                return
+
+        # На время загрузки и обработки карты делаем меню и элементы
+        # управления неактивными
+        self._set_all_controls_enabled(enabled=False)
         self.btn.config(state=tk.DISABLED)
         self.status_var.set('Создание карты… Подождите…')
         self.finished = False
@@ -218,6 +266,8 @@ class _UI:
         set_progress_callback(self.progress_cb)
         set_spinner_callbacks(self.spinner_start_cb, self.spinner_stop_cb)
         set_preview_image_callback(self.preview_image_cb)
+        # Пока идёт создание — блокируем сохранение
+        self.save_btn.config(state=tk.DISABLED)
 
         self.progress.config(mode='determinate', maximum=100)
         self.progress['value'] = 0
@@ -226,6 +276,9 @@ class _UI:
         self.preview_img = None
         self.preview_src_img = None
         self._preview_from_memory = False
+        # Сбросим флаг несохранённости только после подтверждения пользователем выше
+        self._unsaved = False
+        self.save_btn.config(state=tk.DISABLED)
         # Отменим отложенную подгонку, если она была
         if self._resize_job_id is not None:
             with contextlib.suppress(Exception):
@@ -244,7 +297,6 @@ class _UI:
             logger.debug('Failed to refresh modules with current profile: %s', e)
         threading.Thread(target=self._run_task, daemon=True).start()
 
-    # Callbacks passed to progress/spinner
     def progress_cb(self, done: int, total: int, label: str) -> None:
         def _apply() -> None:
             if self.finished:
@@ -310,6 +362,10 @@ class _UI:
             # Сохраняем источником предпросмотра и помечаем как показанный из памяти
             self.preview_src_img = img
             self._preview_from_memory = True
+            # Отметим, что есть несохранённые изменения
+            self._unsaved = True
+            # Разрешим сохранение
+            self.save_btn.config(state=tk.NORMAL)
             # Рассчитываем текущие доступные размеры и подгоняем
             self.root.update_idletasks()
             max_w = max(200, self.preview_container.winfo_width() or 0)
@@ -320,8 +376,116 @@ class _UI:
 
         self.root.after(0, _apply)
 
+    def _set_menu_enabled(self, menu: tk.Menu, *, enabled: bool) -> None:
+        state: Literal['normal', 'active', 'disabled'] = (
+            'normal' if enabled else 'disabled'
+        )
+        with contextlib.suppress(Exception):
+            end_index = menu.index('end')
+            if end_index is not None:
+                for i in range(end_index + 1):
+                    with contextlib.suppress(Exception):
+                        menu.entryconfig(i, state=state)
+
+    def _set_all_controls_enabled(self, *, enabled: bool) -> None:
+        state: Literal['normal', 'active', 'disabled'] = (
+            'normal' if enabled else 'disabled'
+        )
+        # Buttons
+        with contextlib.suppress(Exception):
+            self.btn.config(state=state)
+        with contextlib.suppress(Exception):
+            self.save_btn.config(state=state)
+        # Menubar cascades and submenu items
+        menubar = getattr(self, 'menubar', None)
+        if isinstance(menubar, tk.Menu):
+            with contextlib.suppress(Exception):
+                end_index = menubar.index('end')
+                if end_index is not None:
+                    for i in range(end_index + 1):
+                        with contextlib.suppress(Exception):
+                            menubar.entryconfig(i, state=state)
+        profile_menu = getattr(self, 'profile_menu', None)
+        if isinstance(profile_menu, tk.Menu):
+            self._set_menu_enabled(profile_menu, enabled=enabled)
+
     def mainloop(self) -> None:
         self.root.mainloop()
+
+    def _handle_save_click(self) -> None:
+        """Сохранить текущую карту по выбору пользователя (GUI)."""
+        if self.preview_src_img is None:
+            messagebox.showinfo('Сохранение карты', 'Нет изображения для сохранения.')
+            return
+        # Директория по умолчанию: maps/ относительно корня проекта (если есть),
+        # иначе — текущая
+        repo_root = Path(__file__).resolve().parent.parent  # src/gui/.. -> src
+        repo_root = repo_root.parent  # -> project root
+        default_dir = repo_root / 'maps'
+        initialdir = str(default_dir if default_dir.exists() else repo_root)
+        file_path = filedialog.asksaveasfilename(
+            parent=self.root,
+            title='Сохранить карту',
+            initialdir=initialdir,
+            initialfile='',
+            defaultextension='.png',
+            filetypes=[('PNG изображение', '*.png'), ('Все файлы', '*.*')],
+        )
+        if not file_path:
+            return
+
+        # На время сохранения делаем все элементы управления неактивными
+        self._set_all_controls_enabled(enabled=False)
+
+        # Запускаем анимацию до начала сохранения
+        with contextlib.suppress(Exception):
+            if str(self.progress['mode']) != 'indeterminate':
+                self.progress.config(mode='indeterminate')
+            self.status_var.set('Сохранение файла…')
+            self.progress.start(50)
+
+        # Захватываем ссылку на изображение, чтобы типизатор знал, что оно не None
+        img = self.preview_src_img
+        if img is None:
+            # На всякий случай, хотя выше уже проверяли
+            return
+
+        def _save_worker(fp: str, _img: Image.Image) -> None:
+            err: Exception | None = None
+            try:
+                # Сохранение файла в фоне, без обращений к Tkinter из этого потока
+                _img.save(fp)
+            except Exception as e:
+                err = e
+
+            def _on_done() -> None:
+                # Останавливаем анимацию и восстанавливаем прогрессбар
+                with contextlib.suppress(Exception):
+                    self.progress.stop()
+                    self.progress.config(mode='determinate', maximum=100)
+                    self.progress['value'] = 0
+                # Вернём элементы управления в активное состояние
+                self._set_all_controls_enabled(enabled=True)
+                if err is None:
+                    # Помечаем как сохранённое и отключаем кнопку сохранения
+                    self._unsaved = False
+                    self.status_var.set(f'Карта сохранена: {Path(fp).name}')
+                    with contextlib.suppress(Exception):
+                        self.save_btn.config(state=tk.DISABLED)
+                else:
+                    # В случае ошибки разрешим повторную попытку сохранения
+                    self.status_var.set('Ошибка сохранения')
+                    messagebox.showerror(
+                        'Ошибка сохранения', f'Не удалось сохранить файл:\n{err}'
+                    )
+                    with contextlib.suppress(Exception):
+                        self.save_btn.config(state=tk.NORMAL)
+
+            self.root.after(0, _on_done)
+
+        threading.Thread(
+            target=_save_worker, args=(file_path, img), daemon=True
+        ).start()
 
     def _choose_profile_file(self) -> None:
         """Открыть диалог выбора TOML и применить профиль."""
@@ -367,6 +531,8 @@ class _UI:
             self.preview_img = None
             self.preview_src_img = None
             self._preview_from_memory = False
+            self._unsaved = False
+            self.save_btn.config(state=tk.DISABLED)
             self.preview_label.config(
                 image='',
                 text='Профиль загружен. Предпросмотр появится после создания карты',
@@ -412,7 +578,6 @@ class _UI:
                 mod_topography.width_m = width_m
                 mod_topography.height_m = height_m
 
-    # Helpers
     def _on_preview_resize(self, event: tk.Event) -> None:
         """
         Изменение размеров области предпросмотра.
@@ -494,7 +659,7 @@ class _UI:
             max_h = min(max_h, 800)
 
             img = Image.open(path)
-            self.preview_src_img = img
+            self.preview_src_img = cast('Image.Image', img)
             # Немедленно подгоним под текущие размеры
             self._resize_preview_to(max_w, max_h)
         except Exception as e:  # Поймаем и покажем как текст

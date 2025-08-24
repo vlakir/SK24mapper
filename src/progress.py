@@ -66,16 +66,22 @@ def set_preview_image_callback(cb: Callable[[object], None] | None) -> None:
     _CbStore.preview_image = cb
 
 
-def publish_preview_image(img: object) -> None:
+def publish_preview_image(img: object) -> bool:
     """
     Публикует изображение предпросмотра в GUI, если колбэк установлен.
 
+    Возвращает True, если колбэк был установлен и вызван без исключений.
     Тип img — PIL.Image.Image (используем object во избежание жёсткой зависимости).
     """
     cb = _CbStore.preview_image
     if cb is not None:
-        with contextlib.suppress(Exception):
+        try:
             cb(img)
+        except Exception:
+            return False
+        else:
+            return True
+    return False
 
 
 class LiveSpinner:

@@ -44,7 +44,6 @@ def main() -> None:
         )
         raise SystemExit(msg)
 
-    # 3) Запуск конвейера
     settings = load_profile(CURRENT_PROFILE)
     asyncio.run(
         download_satellite_rectangle(
