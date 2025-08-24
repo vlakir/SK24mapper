@@ -1,18 +1,19 @@
 import contextlib
 import logging
+import sys
 import threading
 import time
 import tkinter as tk
 import traceback
 from collections.abc import Callable
 from pathlib import Path
-from tkinter import messagebox, ttk
-from typing import Protocol, cast
+from tkinter import filedialog, messagebox, ttk
+from typing import Any, Protocol, cast
 
 from PIL import Image, ImageTk
 
 import constants
-from profiles import load_profile
+from profiles import load_profile, profile_path
 from progress import (
     set_preview_image_callback,
     set_progress_callback,
@@ -324,12 +325,6 @@ class _UI:
 
     def _choose_profile_file(self) -> None:
         """Открыть диалог выбора TOML и применить профиль."""
-        from tkinter import filedialog  # noqa: PLC0415
-
-        from profiles import (  # noqa: PLC0415
-            profile_path,  # локальный импорт, чтобы избежать циклов
-        )
-
         # Определяем директорию по умолчанию:
         # 1) Если текущий профиль — путь к файлу и он существует, используем его папку.
         # 2) Иначе — папку, где лежит default.toml.
@@ -391,35 +386,31 @@ class _UI:
         Это позволяет использовать новый профиль без перезапуска.
         Обновляются значения в модулях: main, controller, image, topography.
         """
-        with contextlib.suppress(ImportError):
-            import main as _main  # noqa: PLC0415
-
-            _main.settings = settings
-        with contextlib.suppress(ImportError):
-            import controller as _controller  # noqa: PLC0415
-
-            _controller.settings = settings
-        with contextlib.suppress(ImportError):
-            import image as _image  # noqa: PLC0415
-
-            _image.settings = settings
-        with contextlib.suppress(ImportError):
-            import topography as _topo  # noqa: PLC0415
-
-            _topo.settings = settings
-            # Пересчёт производных значений
-            _topo.center_x_sk42_gk = (
-                settings.bottom_left_x_sk42_gk + settings.top_right_x_sk42_gk
-            ) / 2
-            _topo.center_y_sk42_gk = (
-                settings.bottom_left_y_sk42_gk + settings.top_right_y_sk42_gk
-            ) / 2
-            _topo.width_m = (
-                settings.top_right_x_sk42_gk - settings.bottom_left_x_sk42_gk
-            )
-            _topo.height_m = (
-                settings.top_right_y_sk42_gk - settings.bottom_left_y_sk42_gk
-            )
+        with contextlib.suppress(Exception):
+            mod_controller: Any = sys.modules.get('controller')
+            if mod_controller is not None:
+                mod_controller.settings = settings
+        with contextlib.suppress(Exception):
+            mod_image: Any = sys.modules.get('image')
+            if mod_image is not None:
+                mod_image.settings = settings
+        with contextlib.suppress(Exception):
+            mod_topography: Any = sys.modules.get('topography')
+            if mod_topography is not None:
+                mod_topography.settings = settings
+                # Пересчёт производных значений
+                center_x = (
+                    settings.bottom_left_x_sk42_gk + settings.top_right_x_sk42_gk
+                ) / 2
+                center_y = (
+                    settings.bottom_left_y_sk42_gk + settings.top_right_y_sk42_gk
+                ) / 2
+                width_m = settings.top_right_x_sk42_gk - settings.bottom_left_x_sk42_gk
+                height_m = settings.top_right_y_sk42_gk - settings.bottom_left_y_sk42_gk
+                mod_topography.center_x_sk42_gk = center_x
+                mod_topography.center_y_sk42_gk = center_y
+                mod_topography.width_m = width_m
+                mod_topography.height_m = height_m
 
     # Helpers
     def _on_preview_resize(self, event: tk.Event) -> None:
