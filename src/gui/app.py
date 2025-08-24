@@ -131,6 +131,139 @@ class _UI:
             frame, orient='horizontal', mode='determinate', length=280
         )
         self.progress.pack(fill=tk.X, pady=(6, 0))
+
+        # ----- Панель отображения настроек профиля -----
+        info_panel = tk.Frame(frame)
+        info_panel.pack(fill=tk.X, pady=(8, 0))
+
+        # Левый столбец: координаты углов
+        corners_col = tk.Frame(info_panel)
+        corners_col.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        bl_group = ttk.LabelFrame(corners_col, text='Левый нижний угол карты')
+        bl_group.pack(fill=tk.X, padx=(0, 8))
+        # Переменные для координат — строковые (две цифры 00..99)
+        self._from_x_high_var = tk.StringVar()
+        self._from_x_low_var = tk.StringVar()
+        self._from_y_high_var = tk.StringVar()
+        self._from_y_low_var = tk.StringVar()
+
+        self._edit_controls: list[tk.Widget] = []
+
+        def _make_coord_row(parent: tk.Misc, title: str, high_var: tk.StringVar, low_var: tk.StringVar) -> None:
+            row = tk.Frame(parent)
+            row.pack(fill=tk.X, pady=2)
+            tk.Label(row, text=title, width=2, anchor='w').pack(side=tk.LEFT)
+            vcmd = (self.root.register(self._validate_coord_input), '%P')
+            e1 = ttk.Spinbox(
+                row,
+                from_=0,
+                to=99,
+                increment=1,
+                textvariable=high_var,
+                width=3,
+                justify='right',
+                wrap=False,
+                state='normal',
+                validate='key',
+                validatecommand=vcmd,
+                command=lambda v=high_var: self._normalize_coord_var(v),
+            )
+            e1.pack(side=tk.LEFT)
+            try:
+                e1.bind('<FocusOut>', lambda _e, v=high_var: self._normalize_coord_var(v))
+                e1.bind('<Return>', lambda _e, v=high_var: self._normalize_coord_var(v))
+            except Exception:
+                pass
+            self._edit_controls.append(e1)
+            tk.Label(row, text='.').pack(side=tk.LEFT)
+            e2 = ttk.Spinbox(
+                row,
+                from_=0,
+                to=99,
+                increment=1,
+                textvariable=low_var,
+                width=3,
+                justify='right',
+                wrap=False,
+                state='normal',
+                validate='key',
+                validatecommand=vcmd,
+                command=lambda v=low_var: self._normalize_coord_var(v),
+            )
+            e2.pack(side=tk.LEFT)
+            try:
+                e2.bind('<FocusOut>', lambda _e, v=low_var: self._normalize_coord_var(v))
+                e2.bind('<Return>', lambda _e, v=low_var: self._normalize_coord_var(v))
+            except Exception:
+                pass
+            self._edit_controls.append(e2)
+
+        _make_coord_row(bl_group, 'X', self._from_x_high_var, self._from_x_low_var)
+        _make_coord_row(bl_group, 'Y', self._from_y_high_var, self._from_y_low_var)
+
+        tr_group = ttk.LabelFrame(corners_col, text='Правый верхний угол карты')
+        tr_group.pack(fill=tk.X, padx=(0, 8), pady=(6, 0))
+        self._to_x_high_var = tk.StringVar()
+        self._to_x_low_var = tk.StringVar()
+        self._to_y_high_var = tk.StringVar()
+        self._to_y_low_var = tk.StringVar()
+        _make_coord_row(tr_group, 'X', self._to_x_high_var, self._to_x_low_var)
+        _make_coord_row(tr_group, 'Y', self._to_y_high_var, self._to_y_low_var)
+
+        # Правый столбец: Сетка
+        grid_col = tk.Frame(info_panel)
+        grid_col.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        grid_group = ttk.LabelFrame(grid_col, text='Настройки координатной сетки')
+        grid_group.pack(fill=tk.X)
+
+        self._grid_width_var = tk.IntVar()
+        self._grid_font_size_var = tk.IntVar()
+        self._grid_text_margin_var = tk.IntVar()
+        self._grid_label_bg_padding_var = tk.IntVar()
+        self._mask_opacity_var = tk.DoubleVar()
+        self._mask_opacity_text = tk.StringVar(value='0.00')
+
+        def _make_labeled_spin(parent: tk.Misc, label: str, var: tk.IntVar, from_: int = 0, to: int = 10000, inc: int = 1) -> None:
+            row = tk.Frame(parent)
+            row.pack(fill=tk.X, pady=2)
+            tk.Label(row, text=label, anchor='w').pack(side=tk.LEFT)
+            sp = tk.Spinbox(row, from_=from_, to=to, increment=inc, textvariable=var, width=8, justify='right')
+            sp.pack(side=tk.RIGHT)
+            self._edit_controls.append(sp)
+
+        _make_labeled_spin(grid_group, 'Толщина линии, px:', self._grid_width_var, 0, 1000, 1)
+        _make_labeled_spin(grid_group, 'Размер шрифта, px:', self._grid_font_size_var, 1, 2000, 1)
+        _make_labeled_spin(grid_group, 'Отступ надписей от края карты, px:', self._grid_text_margin_var, 0, 2000, 1)
+        _make_labeled_spin(grid_group, 'Поля маски надписи, px:', self._grid_label_bg_padding_var, 0, 500, 1)
+
+        # Слайдер прозрачности маски
+        opacity_row = tk.Frame(grid_group)
+        opacity_row.pack(fill=tk.X, pady=2)
+        tk.Label(opacity_row, text='Прозрачность маски:').pack(side=tk.LEFT)
+        self._opacity_scale = ttk.Scale(
+            opacity_row,
+            from_=0.0,
+            to=1.0,
+            orient='horizontal',
+            variable=self._mask_opacity_var,
+            command=lambda _v: self._on_opacity_change(),
+        )
+        # Слайдер занимает всё доступное пространство между надписью и значением
+        self._opacity_scale.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self._edit_controls.append(self._opacity_scale)
+        # Значение прозрачности справа от слайдера, в одном ряду
+        opacity_val_lbl = tk.Label(
+            opacity_row,
+            textvariable=self._mask_opacity_text,
+            width=8,
+            anchor='e',
+            justify='right',
+        )
+        opacity_val_lbl.pack(side=tk.RIGHT, padx=(10, 0))
+
+        # Контейнер предпросмотра
         self.preview_container = tk.Frame(frame, height=320)
         self.preview_container.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
         self.preview_container.pack_propagate(flag=False)
@@ -151,6 +284,29 @@ class _UI:
         self.preview_container.bind('<Configure>', self._on_preview_resize)
         self._preview_from_memory: bool = False
 
+        # Заполним панель начальными значениями текущего профиля
+        with contextlib.suppress(Exception):
+            self._populate_profile_fields()
+        # Установим обработчики изменений, чтобы обновлять отображение и внутреннее состояние
+        try:
+            for var in (
+                self._from_x_high_var,
+                self._from_x_low_var,
+                self._from_y_high_var,
+                self._from_y_low_var,
+                self._to_x_high_var,
+                self._to_x_low_var,
+                self._to_y_high_var,
+                self._to_y_low_var,
+                self._grid_width_var,
+                self._grid_font_size_var,
+                self._grid_text_margin_var,
+                self._grid_label_bg_padding_var,
+            ):
+                var.trace_add('write', lambda *_args: self._on_field_change())
+        except Exception:
+            pass
+
     def _init_state(self) -> None:
         self.finished: bool = False
         self.spinner_count: int = 0
@@ -160,6 +316,12 @@ class _UI:
         self.pending_progress: tuple[int, int, str] | None = None
         self.spinner_mode: Literal['pingpong', 'marquee'] | None = None
         self.animator = _Animator(self.root, self.progress)
+        # Текущие настройки (обновляются из профиля и из полей ввода)
+        self._current_settings: Any | None = None
+        # Флаг временного подавления обработчиков изменений полей
+        self._suspend_traces: int = 0
+        # Отложенная задача для debounce обновления настроек из полей
+        self._field_change_job_id: str | None = None
 
     def _create_menu(self) -> None:
         with contextlib.suppress(Exception):
@@ -172,6 +334,216 @@ class _UI:
             self.root.config(menu=menubar)
             self.menubar = menubar
             self.profile_menu = profile_menu
+
+    def _populate_profile_fields(self, settings: _SettingsProto | Any | None = None) -> None:
+        """Заполнить поля панели актуальными значениями профиля."""
+        try:
+            if settings is None:
+                settings = load_profile(constants.CURRENT_PROFILE)
+        except Exception:
+            return
+        try:
+            # На время программного обновления значений подавляем обработчики изменений
+            prev_suspend = getattr(self, '_suspend_traces', 0)
+            setattr(self, '_suspend_traces', prev_suspend + 1)
+            # Координаты (старшие, младшие) — в диапазоне 0..99, без ведущих нулей
+            def _clamp_0_99(v: int | None) -> int:
+                try:
+                    v_int = 0 if v is None else int(v)
+                except Exception:
+                    v_int = 0
+                if v_int < 0:
+                    v_int = 0
+                if v_int > 99:
+                    v_int = 99
+                return v_int
+
+            def _set_strvar(var: tk.StringVar, val: int) -> None:
+                s = str(val)
+                if var.get() != s:
+                    var.set(s)
+
+            _set_strvar(self._from_x_high_var, _clamp_0_99(getattr(settings, 'from_x_high', 0)))
+            _set_strvar(self._from_x_low_var, _clamp_0_99(getattr(settings, 'from_x_low', 0)))
+            _set_strvar(self._from_y_high_var, _clamp_0_99(getattr(settings, 'from_y_high', 0)))
+            _set_strvar(self._from_y_low_var, _clamp_0_99(getattr(settings, 'from_y_low', 0)))
+
+            _set_strvar(self._to_x_high_var, _clamp_0_99(getattr(settings, 'to_x_high', 0)))
+            _set_strvar(self._to_x_low_var, _clamp_0_99(getattr(settings, 'to_x_low', 0)))
+            _set_strvar(self._to_y_high_var, _clamp_0_99(getattr(settings, 'to_y_high', 0)))
+            _set_strvar(self._to_y_low_var, _clamp_0_99(getattr(settings, 'to_y_low', 0)))
+
+            # Параметры сетки
+            def _set_intvar(var: tk.IntVar, val: int) -> None:
+                try:
+                    if int(var.get()) != int(val):
+                        var.set(int(val))
+                except Exception:
+                    var.set(int(val))
+
+            _set_intvar(self._grid_width_var, int(getattr(settings, 'grid_width_px', 0)))
+            _set_intvar(self._grid_font_size_var, int(getattr(settings, 'grid_font_size', 0)))
+            _set_intvar(self._grid_text_margin_var, int(getattr(settings, 'grid_text_margin', 0)))
+            _set_intvar(self._grid_label_bg_padding_var, int(getattr(settings, 'grid_label_bg_padding', 0)))
+            try:
+                opacity = float(getattr(settings, 'mask_opacity', 0.0))
+            except Exception:
+                opacity = 0.0
+            self._mask_opacity_var.set(opacity)
+            with contextlib.suppress(Exception):
+                self._opacity_scale.set(opacity)
+            # Текстовое отображение
+            self._mask_opacity_text.set(f"{opacity:.2f}")
+            # Сохраним текущие настройки
+            self._current_settings = settings  # type: ignore[assignment]
+        except Exception:
+            # Если что-то пойдёт не так — не падаем UI
+            pass
+        finally:
+            try:
+                cur_suspend = getattr(self, '_suspend_traces', 1)
+                setattr(self, '_suspend_traces', max(0, cur_suspend - 1))
+            except Exception:
+                pass
+
+    def _on_opacity_change(self) -> None:
+        try:
+            v = float(self._mask_opacity_var.get())
+        except Exception:
+            v = 0.0
+        v = max(0.0, min(1.0, v))
+        self._mask_opacity_var.set(v)
+        self._mask_opacity_text.set(f"{v:.2f}")
+        # Не навязываем немедленное обновление модулей; сбор будет при запуске
+
+    def _validate_coord_input(self, new_val: str) -> bool:
+        """Валидация ввода координаты по ключевым нажатиям: допускаем '' или до 2 цифр."""
+        try:
+            if new_val == "":
+                return True
+            if len(new_val) > 2:
+                return False
+            if not new_val.isdigit():
+                return False
+            # Промежуточные значения вроде '0' или '9' допустимы
+            return True
+        except Exception:
+            return False
+
+    def _normalize_coord_var(self, var: tk.StringVar) -> None:
+        """Нормализует значение var в диапазон 0..99 (без ведущих нулей) с минимальными перезаписями."""
+        try:
+            s = var.get()
+            if s is None:
+                s = ""
+            s = str(s).strip()
+            if s == "":
+                v = 0
+            else:
+                try:
+                    v = int(s)
+                except Exception:
+                    v = 0
+            if v < 0:
+                v = 0
+            if v > 99:
+                v = 99
+            new_s = str(v)
+            if s != new_s:
+                var.set(new_s)
+        except Exception:
+            with contextlib.suppress(Exception):
+                var.set("0")
+
+
+    def _on_field_change(self) -> None:
+        # Подавление реакций во время программных обновлений
+        if getattr(self, '_suspend_traces', 0) > 0:
+            return
+        # Debounce: откладываем перерасчёт настроек, отменяя предыдущий
+        if getattr(self, '_field_change_job_id', None) is not None:
+            with contextlib.suppress(Exception):
+                self.root.after_cancel(self._field_change_job_id)
+            self._field_change_job_id = None
+
+        def _apply_changes() -> None:
+            # Не нормализуем координаты во время набора, когда поле временно пусто,
+            # чтобы не сбрасывать его в "0".
+            try:
+                coord_vars: tuple[tk.StringVar, ...] = (
+                    self._from_x_high_var,
+                    self._from_x_low_var,
+                    self._from_y_high_var,
+                    self._from_y_low_var,
+                    self._to_x_high_var,
+                    self._to_x_low_var,
+                    self._to_y_high_var,
+                    self._to_y_low_var,
+                )
+                for v in coord_vars:
+                    s = v.get()
+                    if s is None or s == "":
+                        return  # пользователь ещё вводит значение — не пересобирать настройки
+            except Exception:
+                pass
+            with contextlib.suppress(Exception):
+                settings = self._build_settings_from_fields()
+                if settings is not None:
+                    self._current_settings = settings
+
+        # Небольшая задержка для сглаживания серий нажатий клавиш
+        self._field_change_job_id = self.root.after(120, _apply_changes)
+
+    def _build_settings_from_fields(self) -> Any | None:
+        """Собирает объект настроек из текущих значений полей. Возвращает None при ошибке.
+        Не изменяет значения полей (без var.set), чтобы избежать каскадных trace-обработчиков.
+        """
+        try:
+            from model import MapSettings  # локальный импорт, чтобы избежать циклов
+            # Базовые значения, которые не редактируются в этой панели
+            output_path = getattr(self._current_settings, 'output_path', None)
+            if output_path is None:
+                # Попробуем получить из загруженного профиля
+                with contextlib.suppress(Exception):
+                    output_path = load_profile(constants.CURRENT_PROFILE).output_path
+            if output_path is None:
+                output_path = '../maps/map.png'
+
+            # Локальные парсеры без модификации виджетов
+            def _parse_0_99(var: tk.StringVar) -> int:
+                try:
+                    s = str(var.get() or '').strip()
+                    if s == '':
+                        return 0
+                    v = int(s)
+                except Exception:
+                    v = 0
+                if v < 0:
+                    v = 0
+                if v > 99:
+                    v = 99
+                return v
+
+            settings = MapSettings(
+                from_x_high=_parse_0_99(self._from_x_high_var),
+                from_y_high=_parse_0_99(self._from_y_high_var),
+                to_x_high=_parse_0_99(self._to_x_high_var),
+                to_y_high=_parse_0_99(self._to_y_high_var),
+                from_x_low=_parse_0_99(self._from_x_low_var),
+                from_y_low=_parse_0_99(self._from_y_low_var),
+                to_x_low=_parse_0_99(self._to_x_low_var),
+                to_y_low=_parse_0_99(self._to_y_low_var),
+                output_path=str(output_path),
+                grid_width_px=int(self._grid_width_var.get()),
+                grid_font_size=int(self._grid_font_size_var.get()),
+                grid_text_margin=int(self._grid_text_margin_var.get()),
+                grid_label_bg_padding=int(self._grid_label_bg_padding_var.get()),
+                mask_opacity=float(self._mask_opacity_var.get()),
+            )
+            return settings
+        except Exception as e:
+            logger.debug('Failed to build settings from fields: %s', e)
+            return None
 
     def _run_task(self) -> None:
         try:
@@ -289,12 +661,13 @@ class _UI:
             text='Создание… Предпросмотр появится после завершения',
         )
 
-        # Обновим настройки модулей на случай, если профиль меняли
+        # Соберём настройки из полей и применим их к модулям
         try:
-            cur_settings = load_profile(constants.CURRENT_PROFILE)
-            self._refresh_modules_with_settings(cur_settings)
+            cur_settings = self._build_settings_from_fields()
+            if cur_settings is not None:
+                self._refresh_modules_with_settings(cur_settings)
         except Exception as e:
-            logger.debug('Failed to refresh modules with current profile: %s', e)
+            logger.debug('Failed to build/apply settings from fields: %s', e)
         threading.Thread(target=self._run_task, daemon=True).start()
 
     def progress_cb(self, done: int, total: int, label: str) -> None:
@@ -396,6 +769,22 @@ class _UI:
             self.btn.config(state=state)
         with contextlib.suppress(Exception):
             self.save_btn.config(state=state)
+        # Editable widgets (spinboxes, scale)
+        for w in getattr(self, '_edit_controls', []):
+            with contextlib.suppress(Exception):
+                if isinstance(w, ttk.Scale):
+                    if enabled:
+                        w.state(['!disabled'])
+                    else:
+                        w.state(['disabled'])
+                elif isinstance(w, ttk.Spinbox):
+                    if enabled:
+                        # Спинбоксы координат делаем редактируемыми вручную
+                        w.state(['!disabled'])
+                    else:
+                        w.state(['disabled'])
+                else:
+                    w.configure(state=('normal' if enabled else 'disabled'))
         # Menubar cascades and submenu items
         menubar = getattr(self, 'menubar', None)
         if isinstance(menubar, tk.Menu):
@@ -577,6 +966,9 @@ class _UI:
                 mod_topography.center_y_sk42_gk = center_y
                 mod_topography.width_m = width_m
                 mod_topography.height_m = height_m
+        # Обновим панель значений профиля
+        with contextlib.suppress(Exception):
+            self._populate_profile_fields(settings)
 
     def _on_preview_resize(self, event: tk.Event) -> None:
         """

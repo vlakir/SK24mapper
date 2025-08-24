@@ -16,4 +16,4 @@ grid_width_px = 40
 grid_font_size = 86
 grid_text_margin = 43
 grid_label_bg_padding = 6
-mask_opacity = 0.35
+mask_opacity = 0.67
