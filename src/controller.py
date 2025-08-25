@@ -60,7 +60,7 @@ from image import (
     draw_axis_aligned_km_grid,
     rotate_keep_size,
 )
-from profiles import load_profile
+from model import MapSettings
 from progress import ConsoleProgress, LiveSpinner, publish_preview_image
 from topography import (
     async_fetch_xyz_tile,
@@ -72,8 +72,6 @@ from topography import (
     effective_scale_for_xyz,
     estimate_crop_size_px,
 )
-
-settings = load_profile(CURRENT_PROFILE)
 
 
 def _determine_zone(center_x_sk42_gk: float) -> int:
@@ -184,8 +182,19 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0915
     api_key: str,
     output_path: str,
     max_zoom: int = MAX_ZOOM,
+    settings: MapSettings | None = None,
 ) -> str:
     """Полный конвейер."""
+    # Handle default settings if not provided
+    if settings is None:
+        settings = MapSettings(
+            from_x_high=54, from_y_high=74, to_x_high=54, to_y_high=74,
+            from_x_low=14, from_y_low=43, to_x_low=23, to_y_low=49,
+            output_path=output_path,
+            grid_width_px=4, grid_font_size=86, grid_text_margin=43,
+            grid_label_bg_padding=6, mask_opacity=0.35
+        )
+    
     # Переопределяем параметры из профиля
     eff_scale = effective_scale_for_xyz(XYZ_TILE_SIZE, use_retina=XYZ_USE_RETINA)
     # Подготовка — конвертация из Гаусса-Крюгера в географические координаты СК-42
@@ -332,6 +341,9 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0915
         color=GRID_COLOR,
         width_px=settings.grid_width_px,
         scale=eff_scale,
+        grid_font_size=settings.grid_font_size,
+        grid_text_margin=settings.grid_text_margin,
+        grid_label_bg_padding=settings.grid_label_bg_padding,
     )
 
     # Показать предпросмотр до сохранения файла

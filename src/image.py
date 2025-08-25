@@ -19,11 +19,8 @@ from constants import (
     GRID_TEXT_OUTLINE_WIDTH,
     STATIC_SCALE,
 )
-from profiles import load_profile
 from progress import ConsoleProgress, LiveSpinner
 from topography import crs_sk42_geog, meters_per_pixel
-
-settings = load_profile(CURRENT_PROFILE)
 
 
 def assemble_and_crop(
@@ -135,7 +132,7 @@ def draw_label_with_bg(  # noqa: PLR0913
     anchor: str,
     img_size: tuple[int, int],
     bg_color: tuple[int, int, int] = GRID_LABEL_BG_COLOR,
-    padding: int = settings.grid_label_bg_padding,
+    padding: int = 6,
 ) -> None:
     """
     Рисует жёлтую подложку под подписью, затем сам текст (с обводкой).
@@ -155,7 +152,7 @@ def draw_label_with_bg(  # noqa: PLR0913
     draw_text_with_outline(draw, xy, text, font=font, anchor=anchor)
 
 
-def load_grid_font() -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+def load_grid_font(font_size: int = 86) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     """
     Подгружает масштабируемый шрифт для подписей (предпочтительно — жирный).
 
@@ -167,24 +164,24 @@ def load_grid_font() -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     """
     if GRID_FONT_PATH_BOLD:
         try:
-            return ImageFont.truetype(GRID_FONT_PATH_BOLD, settings.grid_font_size)
+            return ImageFont.truetype(GRID_FONT_PATH_BOLD, font_size)
         except Exception:
             logger = logging.getLogger(__name__)
             logger.debug('Failed to load bold grid font from %s', GRID_FONT_PATH_BOLD)
     if GRID_FONT_PATH:
         try:
-            return ImageFont.truetype(GRID_FONT_PATH, settings.grid_font_size)
+            return ImageFont.truetype(GRID_FONT_PATH, font_size)
         except Exception:
             logger = logging.getLogger(__name__)
             logger.debug('Failed to load grid font from %s', GRID_FONT_PATH)
     if GRID_FONT_BOLD:
         try:
-            return ImageFont.truetype('DejaVuSans-Bold.ttf', settings.grid_font_size)
+            return ImageFont.truetype('DejaVuSans-Bold.ttf', font_size)
         except Exception:
             logger = logging.getLogger(__name__)
             logger.debug('Failed to load DejaVuSans-Bold.ttf, will try regular')
     try:
-        return ImageFont.truetype('DejaVuSans.ttf', settings.grid_font_size)
+        return ImageFont.truetype('DejaVuSans.ttf', font_size)
     except Exception:
         logger = logging.getLogger(__name__)
         logger.debug('Failed to load DejaVuSans.ttf, using default font')
@@ -201,8 +198,11 @@ def draw_axis_aligned_km_grid(  # noqa: PLR0913, PLR0915
     t_sk42_to_wgs: Transformer,
     step_m: int = GRID_STEP_M,
     color: tuple[int, int, int] = GRID_COLOR,
-    width_px: int = settings.grid_width_px,
+    width_px: int = 4,
     scale: int = STATIC_SCALE,
+    grid_font_size: int = 86,
+    grid_text_margin: int = 43,
+    grid_label_bg_padding: int = 6,
 ) -> None:
     """
     Рисует сетку 1 км (СК‑42/Гаусса–Крюгера) строго по осям экрана и подписывает.
@@ -212,7 +212,7 @@ def draw_axis_aligned_km_grid(  # noqa: PLR0913, PLR0915
     # Аргумент предусмотрен для возможных будущих преобразований
     _ = t_sk42_to_wgs
     draw = ImageDraw.Draw(img)
-    font = load_grid_font()
+    font = load_grid_font(grid_font_size)
     w, h = img.size
 
     mpp = meters_per_pixel(center_lat_wgs, zoom, scale=scale)
@@ -263,25 +263,25 @@ def draw_axis_aligned_km_grid(  # noqa: PLR0913, PLR0915
         # Верх - сдвигаем вправо
         draw_label_with_bg(
             draw,
-            (x_px + half_step_px, settings.grid_text_margin),
+            (x_px + half_step_px, grid_text_margin),
             x_label,
             font=font,
             anchor='ma',
             img_size=(w, h),
             bg_color=GRID_LABEL_BG_COLOR,
-            padding=settings.grid_label_bg_padding,
+            padding=grid_label_bg_padding,
         )
         grid_progress.step_sync(1)
         # Низ - сдвигаем вправо
         draw_label_with_bg(
             draw,
-            (x_px + half_step_px, h - settings.grid_text_margin),
+            (x_px + half_step_px, h - grid_text_margin),
             x_label,
             font=font,
             anchor='ms',
             img_size=(w, h),
             bg_color=GRID_LABEL_BG_COLOR,
-            padding=settings.grid_label_bg_padding,
+            padding=grid_label_bg_padding,
         )
         grid_progress.step_sync(1)
         x_m += step_m
@@ -305,25 +305,25 @@ def draw_axis_aligned_km_grid(  # noqa: PLR0913, PLR0915
         # Лево - сдвигаем вверх
         draw_label_with_bg(
             draw,
-            (settings.grid_text_margin, y_px - half_step_px),
+            (grid_text_margin, y_px - half_step_px),
             y_label,
             font=font,
             anchor='lm',
             img_size=(w, h),
             bg_color=GRID_LABEL_BG_COLOR,
-            padding=settings.grid_label_bg_padding,
+            padding=grid_label_bg_padding,
         )
         grid_progress.step_sync(1)
         # Право - сдвигаем вверх
         draw_label_with_bg(
             draw,
-            (w - settings.grid_text_margin, y_px - half_step_px),
+            (w - grid_text_margin, y_px - half_step_px),
             y_label,
             font=font,
             anchor='rm',
             img_size=(w, h),
             bg_color=GRID_LABEL_BG_COLOR,
-            padding=settings.grid_label_bg_padding,
+            padding=grid_label_bg_padding,
         )
         grid_progress.step_sync(1)
         y_m += step_m

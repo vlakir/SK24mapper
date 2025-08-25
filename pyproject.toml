@@ -6,7 +6,7 @@ authors = ["vlakir <vladimir@kirievskiy.ru>"]
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = "^3.13"
+python = ">=3.13,<3.14"
 pillow = "^11.3.0"
 pyproj = "^3.7.2"
 pydantic = "^2.9.0"
@@ -17,6 +17,7 @@ tomlkit = "^0.13.3"
 aiohttp = "^3.12.15"
 aiohttp-client-cache = "^0.11.1"
 aiosqlite = "^0.21.0"
+pyside6 = "^6.9.1"
 
 
 [build-system]
