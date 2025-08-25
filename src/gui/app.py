@@ -313,6 +313,9 @@ class _UI:
         self._grid_label_bg_padding_var = tk.IntVar()
         self._mask_opacity_var = tk.DoubleVar()
         self._mask_opacity_text = tk.StringVar(value='0.00')
+        # PNG compression UI state
+        self._png_compress_var = tk.IntVar()
+        self._png_compress_text = tk.StringVar(value='6')
 
         self._make_labeled_spin(
             grid_group, 'Толщина линии, px:', self._grid_width_var, (0, 1000)
@@ -357,6 +360,29 @@ class _UI:
             justify='right',
         )
         opacity_val_lbl.pack(side=tk.RIGHT, padx=(10, 0))
+
+        # Слайдер степени сжатия PNG
+        compr_row = tk.Frame(grid_group)
+        compr_row.pack(fill=tk.X, pady=2)
+        tk.Label(compr_row, text='Степень сжатия:').pack(side=tk.LEFT)
+        self._png_compress_scale = ttk.Scale(
+            compr_row,
+            from_=0,
+            to=9,
+            orient='horizontal',
+            variable=self._png_compress_var,
+            command=lambda _v: self._on_png_compress_change(),
+        )
+        self._png_compress_scale.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self._edit_controls.append(self._png_compress_scale)
+        compr_val_lbl = tk.Label(
+            compr_row,
+            textvariable=self._png_compress_text,
+            width=8,
+            anchor='e',
+            justify='right',
+        )
+        compr_val_lbl.pack(side=tk.RIGHT, padx=(10, 0))
 
     def _build_preview(self, frame: tk.Misc) -> None:
         self.preview_container = tk.Frame(frame, height=320)
@@ -636,6 +662,16 @@ class _UI:
             with contextlib.suppress(Exception):
                 self._opacity_scale.set(opacity)
             self._mask_opacity_text.set(f'{opacity:.2f}')
+            # PNG compress level
+            try:
+                compr = int(getattr(settings, 'png_compress_level', 6))
+            except Exception:
+                compr = 6
+            compr = max(0, min(9, compr))
+            self._png_compress_var.set(compr)
+            with contextlib.suppress(Exception):
+                self._png_compress_scale.set(compr)
+            self._png_compress_text.set(str(compr))
             # Сохраним текущие настройки
             self._current_settings = settings  # type: ignore[assignment]
         except Exception as e:
@@ -654,6 +690,16 @@ class _UI:
         v = max(0.0, min(1.0, v))
         self._mask_opacity_var.set(v)
         self._mask_opacity_text.set(f'{v:.2f}')
+        # Не навязываем немедленное обновление модулей; сбор будет при запуске
+
+    def _on_png_compress_change(self) -> None:
+        try:
+            v = int(self._png_compress_var.get())
+        except Exception:
+            v = 6
+        v = max(0, min(9, v))
+        self._png_compress_var.set(v)
+        self._png_compress_text.set(str(v))
         # Не навязываем немедленное обновление модулей; сбор будет при запуске
 
     def _clamp_0_99(self, v: int | None) -> int:
@@ -845,6 +891,7 @@ class _UI:
                 grid_text_margin=int(self._grid_text_margin_var.get()),
                 grid_label_bg_padding=int(self._grid_label_bg_padding_var.get()),
                 mask_opacity=float(self._mask_opacity_var.get()),
+                png_compress_level=int(self._png_compress_var.get()),
             )
         except Exception as e:
             logger.debug('Failed to build settings from fields: %s', e)
@@ -1345,8 +1392,8 @@ class _UI:
             title='Сохранить карту',
             initialdir=initialdir,
             initialfile='',
-            defaultextension='.png',
-            filetypes=[('PNG изображение', '*.png'), ('Все файлы', '*.*')],
+            defaultextension='.jpg',
+            filetypes=[('JPEG изображение', '*.jpg *.jpeg *.JPG *.JPEG'), ('Все файлы', '*.*')],
         )
         if not file_path:
             return
@@ -1371,7 +1418,26 @@ class _UI:
             err: Exception | None = None
             try:
                 # Сохранение файла в фоне, без обращений к Tkinter из этого потока
-                _img.save(fp)
+                save_kwargs: dict[str, object] = {}
+                try:
+                    suffix = Path(fp).suffix.lower()
+                    lvl = int(self._png_compress_var.get())
+                    lvl = max(0, min(9, lvl))
+                    if suffix == '.png':
+                        save_kwargs = {'compress_level': lvl}
+                    elif suffix in ('.jpg', '.jpeg'):
+                        quality = max(10, min(95, 95 - lvl * 7))
+                        save_kwargs = {
+                            'format': 'JPEG',
+                            'quality': quality,
+                            'subsampling': 0,
+                            'optimize': True,
+                            'progressive': True,
+                            'exif': b'',
+                        }
+                except Exception:
+                    save_kwargs = {}
+                _img.save(fp, **save_kwargs)
             except Exception as e:
                 err = e
 

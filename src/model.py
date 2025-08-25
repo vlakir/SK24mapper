@@ -32,6 +32,8 @@ class MapSettings(BaseModel):
     grid_label_bg_padding: int
     # Прозрачность белой маски (0.0 — прозрачная, 1.0 — непрозрачная)
     mask_opacity: float
+    # Уровень сжатия PNG (0 — без сжатия, 9 — максимум). По умолчанию — 6.
+    png_compress_level: int = 6
 
     # Валидации через Pydantic validators
     @field_validator('mask_opacity')
@@ -42,6 +44,14 @@ class MapSettings(BaseModel):
             msg = 'mask_opacity должен быть в диапазоне [0.0, 1.0]'
             raise ValueError(msg)
         return v
+
+    @field_validator('png_compress_level')
+    @classmethod
+    def validate_png_compress_level(cls, v: int | str) -> int:
+        iv = int(v)
+        if not (0 <= iv <= 9):
+            raise ValueError('png_compress_level должен быть в диапазоне [0, 9]')
+        return iv
 
     # Вычисляемые свойства из исходных параметров + ADDITIVE_RATIO
     @property

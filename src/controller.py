@@ -308,7 +308,29 @@ async def download_satellite_rectangle(  # noqa: PLR0915, PLR0913
 
         out_path = Path(output_path)
         out_path.resolve().parent.mkdir(parents=True, exist_ok=True)
-        result.save(out_path)
+        save_kwargs: dict[str, object] = {}
+        try:
+            suffix = out_path.suffix.lower()
+            lvl = int(getattr(settings, 'png_compress_level', 6))
+            lvl = max(0, min(9, lvl))
+            if suffix == '.png':
+                # PNG: keep existing compress_level behavior
+                save_kwargs = {'compress_level': lvl}
+            elif suffix in ('.jpg', '.jpeg'):
+                # JPEG: map 0..9 slider to quality (higher slider => stronger compression => lower quality)
+                # quality range roughly 35..95
+                quality = max(10, min(95, 95 - lvl * 7))
+                save_kwargs = {
+                    'format': 'JPEG',
+                    'quality': quality,
+                    'subsampling': 0,  # keep chroma detail (4:4:4)
+                    'optimize': True,  # Huffman optimization (lossless)
+                    'progressive': True,  # progressive JPEG (lossless to pixels)
+                    'exif': b'',  # strip EXIF metadata to reduce size
+                }
+        except Exception:
+            save_kwargs = {}
+        result.save(out_path, **save_kwargs)
 
         fd = os.open(out_path, os.O_RDONLY)
         os.fsync(fd)
