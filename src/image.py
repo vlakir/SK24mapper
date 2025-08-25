@@ -11,6 +11,8 @@ from constants import (
     GRID_FONT_PATH,
     GRID_FONT_PATH_BOLD,
     GRID_LABEL_BG_COLOR,
+    GRID_LABEL_MOD,
+    GRID_LABEL_THOUSAND_DIV,
     GRID_STEP_M,
     GRID_TEXT_COLOR,
     GRID_TEXT_OUTLINE_COLOR,
@@ -207,7 +209,8 @@ def draw_axis_aligned_km_grid(  # noqa: PLR0913, PLR0915
 
     только 4-й и 5-й младшие знаки (две последние цифры тысяч метров).
     """
-    _ = t_sk42_to_wgs  # аргумент предусмотрен для возможных будущих преобразований
+    # Аргумент предусмотрен для возможных будущих преобразований
+    _ = t_sk42_to_wgs
     draw = ImageDraw.Draw(img)
     font = load_grid_font()
     w, h = img.size
@@ -251,7 +254,7 @@ def draw_axis_aligned_km_grid(  # noqa: PLR0913, PLR0915
 
         # Подписываем квадрат справа от вертикали: берём центр правого квадрата
         x_label_m = x_m + step_m / 2.0
-        x_digits = math.floor(x_label_m / 1000) % 100
+        x_digits = math.floor(x_label_m / GRID_LABEL_THOUSAND_DIV) % GRID_LABEL_MOD
         x_label = f'{x_digits:02d}'
 
         # Сдвиг подписей вправо на половину шага сетки (к центру квадрата справа)
@@ -293,7 +296,7 @@ def draw_axis_aligned_km_grid(  # noqa: PLR0913, PLR0915
 
         # Подписываем квадрат выше горизонтали: берём центр верхнего квадрата
         y_label_m = y_m + step_m / 2.0
-        y_digits = math.floor(y_label_m / 1000) % 100
+        y_digits = math.floor(y_label_m / GRID_LABEL_THOUSAND_DIV) % GRID_LABEL_MOD
         y_label = f'{y_digits:02d}'
 
         # Сдвиг подписей вверх на половину шага сетки (к центру квадрата выше)

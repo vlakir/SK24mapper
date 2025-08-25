@@ -1,6 +1,6 @@
 from pydantic import BaseModel, field_validator
 
-from constants import ADDITIVE_RATIO
+from constants import ADDITIVE_RATIO, PNG_COMPRESS_MAX, PNG_COMPRESS_MIN
 
 
 class MapSettings(BaseModel):
@@ -49,8 +49,12 @@ class MapSettings(BaseModel):
     @classmethod
     def validate_png_compress_level(cls, v: int | str) -> int:
         iv = int(v)
-        if not (0 <= iv <= 9):
-            raise ValueError('png_compress_level должен быть в диапазоне [0, 9]')
+        if not (PNG_COMPRESS_MIN <= iv <= PNG_COMPRESS_MAX):
+            msg = (
+                f'png_compress_level должен быть в диапазоне '
+                f'[{PNG_COMPRESS_MIN}, {PNG_COMPRESS_MAX}]'
+            )
+            raise ValueError(msg)
         return iv
 
     # Вычисляемые свойства из исходных параметров + ADDITIVE_RATIO

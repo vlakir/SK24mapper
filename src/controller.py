@@ -27,6 +27,11 @@ from constants import (
     CURRENT_PROFILE,
     DOWNLOAD_CONCURRENCY,
     ENABLE_WHITE_MASK,
+    EPSG_SK42_GK_BASE,
+    GK_FALSE_EASTING,
+    GK_ZONE_CM_OFFSET_DEG,
+    GK_ZONE_WIDTH_DEG,
+    GK_ZONE_X_PREFIX_DIV,
     GRID_COLOR,
     GRID_STEP_M,
     HTTP_CACHE_DIR,
@@ -41,6 +46,10 @@ from constants import (
     PIL_DISABLE_LIMIT,
     ROTATION_PAD_MIN_PX,
     ROTATION_PAD_RATIO,
+    SK42_VALID_LAT_MAX,
+    SK42_VALID_LAT_MIN,
+    SK42_VALID_LON_MAX,
+    SK42_VALID_LON_MIN,
     XYZ_TILE_SIZE,
     XYZ_USE_RETINA,
 )
@@ -67,7 +76,107 @@ from topography import (
 settings = load_profile(CURRENT_PROFILE)
 
 
-async def download_satellite_rectangle(  # noqa: PLR0915, PLR0913
+def _determine_zone(center_x_sk42_gk: float) -> int:
+    zone = int(center_x_sk42_gk // GK_ZONE_X_PREFIX_DIV)
+    if zone < 1 or zone > MAX_GK_ZONE:
+        zone = max(
+            1,
+            min(
+                MAX_GK_ZONE,
+                int((center_x_sk42_gk - GK_FALSE_EASTING) // GK_ZONE_X_PREFIX_DIV) + 1,
+            ),
+        )
+    return zone
+
+
+def _build_sk42_gk_crs(zone: int) -> CRS:
+    try:
+        return CRS.from_epsg(EPSG_SK42_GK_BASE + zone)
+    except Exception:
+        lon0 = zone * GK_ZONE_WIDTH_DEG - GK_ZONE_CM_OFFSET_DEG
+        proj4 = (
+            f'+proj=tmerc +lat_0=0 +lon_0={lon0} +k=1 '
+            f'+x_0={GK_FALSE_EASTING} +y_0=0 +ellps=krass +units=m +no_defs +type=crs'
+        )
+        return CRS.from_proj4(proj4)
+
+
+def _validate_sk42_bounds(lng: float, lat: float) -> None:
+    if not (
+        SK42_VALID_LON_MIN <= lng <= SK42_VALID_LON_MAX
+        and SK42_VALID_LAT_MIN <= lat <= SK42_VALID_LAT_MAX
+    ):
+        msg = (
+            'Выбранная область вне зоны применимости СК-42. '
+            'Карта не будет сформирована.'
+        )
+        raise SystemExit(msg)
+
+
+def _resolve_cache_dir() -> Path | None:
+    raw_dir = Path(HTTP_CACHE_DIR)
+    if raw_dir.is_absolute():
+        return raw_dir
+    repo_root = Path(__file__).resolve().parent.parent
+    return (repo_root / raw_dir).resolve()
+
+
+def _make_http_session(cache_dir: Path | None) -> aiohttp.ClientSession:
+    use_cache = HTTP_CACHE_ENABLED
+    if use_cache and cache_dir is not None:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+    if (
+        use_cache
+        and CachedSession is not None
+        and SQLiteBackend is not None
+        and cache_dir is not None
+    ):
+        cache_path = cache_dir / 'http_cache.sqlite'
+        with contextlib.suppress(Exception):
+            if not cache_path.exists():
+                cache_path.parent.mkdir(parents=True, exist_ok=True)
+                with sqlite3.connect(cache_path) as _conn:
+                    _conn.execute('PRAGMA journal_mode=WAL;')
+        expire_td = timedelta(hours=max(0, int(HTTP_CACHE_EXPIRE_HOURS)))
+        stale_hours = int(HTTP_CACHE_STALE_IF_ERROR_HOURS)
+        stale_param: bool | timedelta
+        stale_param = timedelta(hours=stale_hours) if stale_hours > 0 else False
+        backend = cast('Any', SQLiteBackend)(
+            str(cache_path),
+            expire_after=expire_td,
+        )
+        return cast('Any', CachedSession)(
+            cache=backend,
+            expire_after=expire_td,
+            cache_control=bool(HTTP_CACHE_RESPECT_HEADERS),
+            stale_if_error=stale_param,
+        )
+    return aiohttp.ClientSession()
+
+
+def _build_save_kwargs(out_path: Path, settings_obj: object) -> dict[str, object]:
+    try:
+        suffix = out_path.suffix.lower()
+        lvl = int(getattr(settings_obj, 'png_compress_level', 6))
+        lvl = max(0, min(9, lvl))
+        if suffix == '.png':
+            return {'compress_level': lvl}
+        if suffix in ('.jpg', '.jpeg'):
+            quality = max(10, min(95, 95 - lvl * 7))
+            return {
+                'format': 'JPEG',
+                'quality': quality,
+                'subsampling': 0,
+                'optimize': True,
+                'progressive': True,
+                'exif': b'',
+            }
+    except Exception:
+        return {}
+    return {}
+
+
+async def download_satellite_rectangle(  # noqa: PLR0913, PLR0915
     center_x_sk42_gk: float,
     center_y_sk42_gk: float,
     width_m: float,
@@ -83,20 +192,9 @@ async def download_satellite_rectangle(  # noqa: PLR0915, PLR0913
     sp = LiveSpinner('Подготовка: определение зоны')
     sp.start()
 
-    zone = int(center_x_sk42_gk // 1000000)  # Зона из первых цифр X координаты
-    if zone < 1 or zone > MAX_GK_ZONE:
-        # Fallback: пытаемся определить зону из координаты
-        zone = max(1, min(MAX_GK_ZONE, int((center_x_sk42_gk - 500000) // 1000000) + 1))
-    try:
-        crs_sk42_gk = CRS.from_epsg(28400 + zone)
-    except Exception:
-        # Fallback: construct SK-42 / Gauss–Krüger (6°) CRS manually when EPSG code is unavailable
-        lon0 = zone * 6 - 3  # central meridian of the 6-degree zone
-        proj4 = (
-            f"+proj=tmerc +lat_0=0 +lon_0={lon0} +k=1 "
-            f"+x_0=500000 +y_0=0 +ellps=krass +units=m +no_defs +type=crs"
-        )
-        crs_sk42_gk = CRS.from_proj4(proj4)
+    # Зона и система координат
+    zone = _determine_zone(center_x_sk42_gk)
+    crs_sk42_gk = _build_sk42_gk_crs(zone)
     sp.stop('Подготовка: зона определена')
 
     sp = LiveSpinner('Подготовка: конвертация из ГК в СК-42')
@@ -110,20 +208,7 @@ async def download_satellite_rectangle(  # noqa: PLR0915, PLR0913
     sp.stop('Подготовка: координаты СК-42 готовы')
 
     # Проверка зоны применимости СК-42 (без формирования карты вне зоны)
-    from constants import (
-        SK42_VALID_LAT_MIN,
-        SK42_VALID_LAT_MAX,
-        SK42_VALID_LON_MIN,
-        SK42_VALID_LON_MAX,
-    )
-    if not (
-        SK42_VALID_LON_MIN <= center_lng_sk42 <= SK42_VALID_LON_MAX
-        and SK42_VALID_LAT_MIN <= center_lat_sk42 <= SK42_VALID_LAT_MAX
-    ):
-        # Завершаем задачу с понятным предупреждением для пользователя
-        raise SystemExit(
-            'Выбранная область вне зоны применимости СК-42. Карта не будет сформирована.'
-        )
+    _validate_sk42_bounds(center_lng_sk42, center_lat_sk42)
 
     sp = LiveSpinner('Подготовка: создание трансформеров')
     sp.start()
@@ -183,55 +268,8 @@ async def download_satellite_rectangle(  # noqa: PLR0915, PLR0913
     tile_progress = ConsoleProgress(total=len(tiles), label='Загрузка XYZ-тайлов')
     semaphore = asyncio.Semaphore(DOWNLOAD_CONCURRENCY or ASYNC_MAX_CONCURRENCY)
 
-    # HTTP session with optional persistent cache
-    use_cache = HTTP_CACHE_ENABLED
-
-    # Resolve cache directory to an absolute path anchored at project root if relative
-    cache_dir_resolved: Path | None = None
-    raw_dir = Path(HTTP_CACHE_DIR)
-    if raw_dir.is_absolute():
-        cache_dir_resolved = raw_dir
-    else:
-        # Project root is one level above src/
-        repo_root = Path(__file__).resolve().parent.parent
-        cache_dir_resolved = (repo_root / raw_dir).resolve()
-    # If caching is enabled, ensure the dir exists
-    # regardless of backend availability
-    if use_cache and cache_dir_resolved is not None:
-        cache_dir_resolved.mkdir(parents=True, exist_ok=True)
-
-    if (
-        use_cache
-        and CachedSession is not None
-        and SQLiteBackend is not None
-        and cache_dir_resolved is not None
-    ):
-        cache_path = cache_dir_resolved / 'http_cache.sqlite'
-        # Ensure SQLite DB file exists even before first cached response
-        with contextlib.suppress(Exception):
-            if not cache_path.exists():
-                cache_path.parent.mkdir(parents=True, exist_ok=True)
-                with sqlite3.connect(cache_path) as _conn:
-                    _conn.execute('PRAGMA journal_mode=WAL;')
-
-        expire_td = timedelta(hours=max(0, int(HTTP_CACHE_EXPIRE_HOURS)))
-        stale_hours = int(HTTP_CACHE_STALE_IF_ERROR_HOURS)
-        stale_param: bool | timedelta
-        stale_param = timedelta(hours=stale_hours) if stale_hours > 0 else False
-
-        backend = cast('Any', SQLiteBackend)(
-            str(cache_path),
-            expire_after=expire_td,
-        )
-        session_ctx = cast('Any', CachedSession)(
-            cache=backend,
-            expire_after=expire_td,
-            cache_control=bool(HTTP_CACHE_RESPECT_HEADERS),
-            stale_if_error=stale_param,
-        )
-    else:
-        # Fallback to regular session if cache backend isn't available or disabled
-        session_ctx = aiohttp.ClientSession()
+    cache_dir_resolved = _resolve_cache_dir()
+    session_ctx = _make_http_session(cache_dir_resolved)
 
     async with session_ctx as client:
 
@@ -308,28 +346,7 @@ async def download_satellite_rectangle(  # noqa: PLR0915, PLR0913
 
         out_path = Path(output_path)
         out_path.resolve().parent.mkdir(parents=True, exist_ok=True)
-        save_kwargs: dict[str, object] = {}
-        try:
-            suffix = out_path.suffix.lower()
-            lvl = int(getattr(settings, 'png_compress_level', 6))
-            lvl = max(0, min(9, lvl))
-            if suffix == '.png':
-                # PNG: keep existing compress_level behavior
-                save_kwargs = {'compress_level': lvl}
-            elif suffix in ('.jpg', '.jpeg'):
-                # JPEG: map 0..9 slider to quality (higher slider => stronger compression => lower quality)
-                # quality range roughly 35..95
-                quality = max(10, min(95, 95 - lvl * 7))
-                save_kwargs = {
-                    'format': 'JPEG',
-                    'quality': quality,
-                    'subsampling': 0,  # keep chroma detail (4:4:4)
-                    'optimize': True,  # Huffman optimization (lossless)
-                    'progressive': True,  # progressive JPEG (lossless to pixels)
-                    'exif': b'',  # strip EXIF metadata to reduce size
-                }
-        except Exception:
-            save_kwargs = {}
+        save_kwargs = _build_save_kwargs(out_path, settings)
         result.save(out_path, **save_kwargs)
 
         fd = os.open(out_path, os.O_RDONLY)

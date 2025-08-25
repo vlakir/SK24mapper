@@ -10,9 +10,18 @@ from pyproj import CRS, Transformer
 from constants import (
     CURRENT_PROFILE,
     EARTH_RADIUS_M,
+    EAST_VECTOR_SAMPLE_M,
+    EPSG_SK42_GK_BASE,
+    GK_FALSE_EASTING,
+    GK_ZONE_CM_OFFSET_DEG,
+    GK_ZONE_WIDTH_DEG,
     HTTP_5XX_MAX,
     HTTP_5XX_MIN,
+    HTTP_BACKOFF_FACTOR,
+    HTTP_RETRIES_DEFAULT,
+    HTTP_TIMEOUT_DEFAULT,
     MAPBOX_STATIC_BASE,
+    MERCATOR_MAX_SIN,
     RETINA_FACTOR,
     SK42_CODE,
     STATIC_SCALE,
@@ -20,13 +29,19 @@ from constants import (
     TILE_SIZE,
     TILE_SIZE_512,
     WGS84_CODE,
+    WORLD_LAT_MAX_DEG,
+    WORLD_LNG_HALF_SPAN_DEG,
+    WORLD_LNG_SPAN_DEG,
+    XY_EPSILON,
 )
 from profiles import load_profile
 
 settings = load_profile(CURRENT_PROFILE)
 
-crs_sk42_geog = CRS.from_epsg(SK42_CODE)  # Географическая СК-42 (Pulkovo 1942)
-crs_wgs84 = CRS.from_epsg(WGS84_CODE)  # Географическая WGS84
+# Географическая СК-42 (Pulkovo 1942)
+crs_sk42_geog = CRS.from_epsg(SK42_CODE)
+# Географическая WGS84
+crs_wgs84 = CRS.from_epsg(WGS84_CODE)
 
 # Центр и размеры области в системе GK:
 # ширина по ΔX (горизонталь), высота по ΔY (вертикаль)
@@ -47,16 +62,22 @@ def build_transformers_sk42(
     - СК‑42 географические <-> WGS84 (с учётом доступных параметров);
     - СК‑42 / Гаусса–Крюгера (EPSG:284xx) для выбранной 6-градусной зоны.
     """
-    zone = int(math.floor((zone_from_lon + 3) / 6.0) + 1)
+    zone = int(
+        math.floor((zone_from_lon + GK_ZONE_CM_OFFSET_DEG) / float(GK_ZONE_WIDTH_DEG))
+        + 1
+    )
     zone = max(1, min(60, zone))
     try:
-        crs_sk42_gk = CRS.from_epsg(28400 + zone)  # EPSG:284xx
+        # EPSG:284xx
+        crs_sk42_gk = CRS.from_epsg(EPSG_SK42_GK_BASE + zone)
     except Exception:
-        # Fallback: construct SK-42 / Gauss–Krüger (6°) CRS manually when EPSG code is unavailable
-        lon0 = zone * 6 - 3  # central meridian of the 6-degree zone
+        # Резервный вариант: построить СК‑42 / Гаусса–Крюгера (6°)
+        # вручную, если EPSG недоступен
+        # Центральный меридиан 6-градусной зоны
+        lon0 = zone * GK_ZONE_WIDTH_DEG - GK_ZONE_CM_OFFSET_DEG
         proj4 = (
-            f"+proj=tmerc +lat_0=0 +lon_0={lon0} +k=1 "
-            f"+x_0=500000 +y_0=0 +ellps=krass +units=m +no_defs +type=crs"
+            f'+proj=tmerc +lat_0=0 +lon_0={lon0} +k=1 '
+            f'+x_0={GK_FALSE_EASTING} +y_0=0 +ellps=krass +units=m +no_defs +type=crs'
         )
         crs_sk42_gk = CRS.from_proj4(proj4)
 
@@ -101,9 +122,9 @@ def latlng_to_pixel_xy(
 ) -> tuple[float, float]:
     """Преобразует WGS84 (lat, lng) в координаты «мира» (пиксели) Web Mercator."""
     siny = math.sin(math.radians(lat_deg))
-    siny = min(max(siny, -0.9999), 0.9999)
+    siny = min(max(siny, -MERCATOR_MAX_SIN), MERCATOR_MAX_SIN)
     world_size = TILE_SIZE * (2**zoom)
-    x = (lng_deg + 180.0) / 360.0 * world_size
+    x = (lng_deg + WORLD_LNG_HALF_SPAN_DEG) / WORLD_LNG_SPAN_DEG * world_size
     y = (0.5 - math.log((1 + siny) / (1 - siny)) / (4 * math.pi)) * world_size
     return x, y
 
@@ -111,9 +132,12 @@ def latlng_to_pixel_xy(
 def pixel_xy_to_latlng(x: float, y: float, zoom: int) -> tuple[float, float]:
     """Обратное преобразование: «мировые» пиксели -> WGS84 (lat, lng)."""
     world_size = TILE_SIZE * (2**zoom)
-    lng = (x / world_size) * 360.0 - 180.0
+    lng = (x / world_size) * WORLD_LNG_SPAN_DEG - WORLD_LNG_HALF_SPAN_DEG
     merc_y = 0.5 - (y / world_size)
-    lat = 90.0 - 360.0 * math.atan(math.exp(-merc_y * 2 * math.pi)) / math.pi
+    lat = (
+        WORLD_LAT_MAX_DEG
+        - WORLD_LNG_SPAN_DEG * math.atan(math.exp(-merc_y * 2 * math.pi)) / math.pi
+    )
     return lat, lng
 
 
@@ -281,12 +305,12 @@ def compute_xyz_coverage(  # noqa: PLR0913
 
     # Диапазон тайлов XYZ (размер тайла = 256 мировых пикселей)
     t = 2**zoom
-    x_min = math.floor(x_min_world / 256.0)
-    y_min = math.floor(y_min_world / 256.0)
-    x_max = math.floor((x_max_world - 1e-9) / 256.0)
-    y_max = math.floor((y_max_world - 1e-9) / 256.0)
+    x_min = math.floor(x_min_world / float(TILE_SIZE))
+    y_min = math.floor(y_min_world / float(TILE_SIZE))
+    x_max = math.floor((x_max_world - XY_EPSILON) / float(TILE_SIZE))
+    y_max = math.floor((y_max_world - XY_EPSILON) / float(TILE_SIZE))
 
-    # Кламп y, wrap x
+    # Ограничиваем y (clamp) и замыкаем x по модулю (wrap)
     y_min_clamped = max(0, min(t - 1, y_min))
     y_max_clamped = max(0, min(t - 1, y_max))
 
@@ -302,7 +326,7 @@ def compute_xyz_coverage(  # noqa: PLR0913
             tiles.append((x, y))
 
     # Эффективный размер тайла в пикселях мозаики
-    base_step_world = 256.0
+    base_step_world = float(TILE_SIZE)
     int(base_step_world * eff_scale)
 
     # Смещения кропа в пикселях мозаики от (0,0) верхнего-левого тайла
@@ -338,9 +362,9 @@ async def async_fetch_xyz_tile(  # noqa: PLR0913
     y: int,
     *,
     use_retina: bool,
-    async_timeout: float = 20.0,
-    retries: int = 4,
-    backoff: float = 1.6,
+    async_timeout: float = HTTP_TIMEOUT_DEFAULT,
+    retries: int = HTTP_RETRIES_DEFAULT,
+    backoff: float = HTTP_BACKOFF_FACTOR,
 ) -> Image.Image:
     """
     Загружает один XYZ тайл стиля Mapbox и возвращает PIL.Image (RGB).
@@ -365,7 +389,7 @@ async def async_fetch_xyz_tile(  # noqa: PLR0913
             sc = resp.status
             if sc == HTTPStatus.OK:
                 data = await resp.read()
-                # Content may be png/jpg/webp — PIL opens all; convert to RGB
+                # Контент может быть png/jpg/webp — PIL откроет всё; конвертируем в RGB
                 return Image.open(BytesIO(data)).convert('RGB')
             if sc in (HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN):
                 msg = (
@@ -436,7 +460,8 @@ def compute_rotation_deg_for_east_axis(
     )
 
     x0_gk, y0_gk = t_sk42gk_from_sk42.transform(center_lng_sk42, center_lat_sk42)
-    x1_gk, y1_gk = x0_gk + 200.0, y0_gk  # точка на 200 м восточнее
+    # Точка на EAST_VECTOR_SAMPLE_M метров восточнее
+    x1_gk, y1_gk = x0_gk + EAST_VECTOR_SAMPLE_M, y0_gk
 
     lon_s0, lat_s0 = t_sk42_from_sk42gk.transform(x0_gk, y0_gk)
     lon_w0, lat_w0 = t_sk42_to_wgs.transform(lon_s0, lat_s0)

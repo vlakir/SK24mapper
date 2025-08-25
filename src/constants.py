@@ -82,45 +82,99 @@ PROFILES_DIR = '../configs/profiles'
 HTTP_5XX_MIN = 500
 HTTP_5XX_MAX = 600
 
-# --- Options previously in profile (moved to constants)
-# Marked with '# -' in default.toml
-# Desired zoom level (will be reduced automatically if limits are exceeded)
+# --- Опции ранее находились в профиле (перенесены в constants)
+# В default.toml были помечены как '# -'
+# Желаемый уровень масштаба (при превышении лимитов будет уменьшен автоматически)
 DESIRED_ZOOM = 22
-# Mapbox style identifier
+# Идентификатор стиля Mapbox
 MAPBOX_STYLE_ID = 'mapbox/satellite-v9'
-# XYZ tile size preference (256 or 512)
+# Предпочтительный размер тайла XYZ (256 или 512)
 XYZ_TILE_SIZE = 512
-# Use @2x retina tiles
+# Использовать ретина-тайлы @2x
 XYZ_USE_RETINA = True
-# Parallel HTTP concurrency
+# Параллелизм загрузки HTTP
 DOWNLOAD_CONCURRENCY = 20
-# Static source compatibility values
+# Значения совместимости для «статичного» источника
 STATIC_TILE_WIDTH_PX_PROFILE = 1024
 STATIC_TILE_HEIGHT_PX_PROFILE = 1024
 IMAGE_FORMAT_PROFILE = 'png'
 
-# --- Cache options (moved from profile [cache] section into constants)
+# --- Опции кэша (были в секции профиля [cache], перенесены в constants)
 HTTP_CACHE_ENABLED = True
-# Cache directory (relative paths are resolved from project root)
+# Каталог кэша (относительные пути считаются от корня проекта)
 HTTP_CACHE_DIR = '.cache/tiles'
-# TTL in hours
+# Время жизни (TTL) в часах
 HTTP_CACHE_EXPIRE_HOURS = 168
-# Respect HTTP Cache-Control/ETag/Last-Modified headers
+# Учитывать заголовки Cache-Control/ETag/Last-Modified
 HTTP_CACHE_RESPECT_HEADERS = True
-# Allow using stale cache when network errors occur (hours); 0 to disable
+# Разрешить использовать устаревший кэш при сетевых ошибках (часы); 0 — запретить
 HTTP_CACHE_STALE_IF_ERROR_HOURS = 72
 
-# --- Grid text outline width (moved from profile to constants)
+# --- Толщина обводки текста сетки (перенесено из профиля в constants)
 GRID_TEXT_OUTLINE_WIDTH = 2
 
 # --- GUI limits
 # Максимальный размер стороны участка (км)
 MAX_SIDE_SIZE = 60
 
-# --- SK-42 applicability (approximate area of use)
-# Longitudes (degrees East) roughly covering the former USSR area
+# --- Применимость СК-42 (примерные границы области применения)
+# Долготы (в градусах восточной долготы), примерно охватывающие территорию бывшего СССР
 SK42_VALID_LON_MIN = 19.0
 SK42_VALID_LON_MAX = 190.0
-# Latitudes (degrees North) where SK-42 is typically applicable
+# Широты (в градусах северной широты), где обычно применима СК-42
 SK42_VALID_LAT_MIN = 35.0
 SK42_VALID_LAT_MAX = 85.0
+
+# --- Временные и размерные константы GUI
+# Ширина предпросмотра по умолчанию (px), когда измерить ширину невозможно
+PREVIEW_FALLBACK_WIDTH = 600
+# Задержка восстановления режима расширения после первичной оценки размеров (мс)
+PREVIEW_RESTORE_EXPAND_DELAY_MS = 200
+# Нормализованная величина шага колеса мыши
+MOUSEWHEEL_DELTA = 120
+RENDER_DEBOUNCE_MS = 12
+HQ_RENDER_DELAY_MS = 160
+RESIZE_DEBOUNCE_MS = 60
+MIN_FIT_SCALE = 0.01
+
+# --- Зона Гаусса–Крюгера и константы EPSG
+# Делитель для извлечения номера зоны из координаты X (метры)
+GK_ZONE_X_PREFIX_DIV = 1_000_000
+# Ложное восточное смещение (метры)
+GK_FALSE_EASTING = 500_000
+# Ширина зоны (градусы)
+GK_ZONE_WIDTH_DEG = 6
+# Смещение до центрального меридиана зоны (градусы)
+GK_ZONE_CM_OFFSET_DEG = 3
+# База EPSG для СК‑42 / зоны Гаусса–Крюгера (к базе добавляется номер зоны)
+EPSG_SK42_GK_BASE = 28400
+
+# --- Константы Web Mercator и XYZ
+# Ограничение синуса для избежания бесконечностей у полюсов
+MERCATOR_MAX_SIN = 0.9999
+WORLD_LNG_SPAN_DEG = 360.0
+WORLD_LNG_HALF_SPAN_DEG = 180.0
+WORLD_LAT_MAX_DEG = 90.0
+# Небольшой эпсилон для расчётов на границах тайлов
+XY_EPSILON = 1e-9
+
+# --- Параметры сетевых запросов по умолчанию
+# Таймаут (секунды)
+HTTP_TIMEOUT_DEFAULT = 20.0
+HTTP_RETRIES_DEFAULT = 4
+HTTP_BACKOFF_FACTOR = 1.6
+
+# --- Оценка поворота
+# Отсчёт вдоль восточной оси для оценки угла (метры)
+EAST_VECTOR_SAMPLE_M = 200.0
+
+# --- Вспомогательные константы для подписей сетки
+GRID_LABEL_THOUSAND_DIV = 1000
+GRID_LABEL_MOD = 100
+
+# --- Общие константы для валидаторов/обработчиков GUI
+# Минимальное число аргументов команды скролла (tk Scrollbar callback)
+SCROLL_CMD_MIN_ARGS = 3
+# Границы уровня сжатия PNG
+PNG_COMPRESS_MIN = 0
+PNG_COMPRESS_MAX = 9
