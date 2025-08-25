@@ -91,6 +91,12 @@ class _UI:
         # Ensure the window is not too small so the preview placeholder is visible
         with contextlib.suppress(Exception):
             self.root.minsize(640, 480)
+        # Remember default window minsize to restore later when showing preview
+        self._default_min_w = 640
+        self._default_min_h = 480
+        # Hide window during build to avoid initial oversized height on first show
+        with contextlib.suppress(Exception):
+            self.root.withdraw()
 
         # Init UI and state
         self._normalize_popup_fonts()
@@ -129,12 +135,32 @@ class _UI:
         self._unsaved = False
         frame = tk.Frame(self.root, padx=12, pady=12)
         frame.pack(fill=tk.BOTH, expand=True)
+        # Keep a reference to the main content frame for sizing calculations
+        self._main_frame = frame
         # Заголовок/кнопки/статус/прогресс
         self._build_header(frame)
         # Панель настроек профиля (координаты и сетка)
         self._build_info_panel(frame)
         # Контейнер предпросмотра
         self._build_preview(frame)
+        # Ensure preview is hidden initially and shrink window to content
+        with contextlib.suppress(Exception):
+            self._set_preview_visible(False)
+        # After building widgets and hiding preview, shrink window to content and show it
+        try:
+            self.root.update_idletasks()
+        except Exception:
+            pass
+        with contextlib.suppress(Exception):
+            minw = int(getattr(self, '_default_min_w', 640))
+            # Allow minimal height to be fully determined by content
+            self.root.minsize(minw, 1)
+        with contextlib.suppress(Exception):
+            # Ask Tk to fit window to requested sizes
+            self.root.geometry('')
+        with contextlib.suppress(Exception):
+            # Show the window already shrunk to content height
+            self.root.deiconify()
         # Начальная подстановка значений и подписка на изменения
         self._post_build_setup()
 
@@ -334,11 +360,22 @@ class _UI:
 
     def _build_preview(self, frame: tk.Misc) -> None:
         self.preview_container = tk.Frame(frame, height=320)
-        self.preview_container.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
+        # Start hidden: keep pack options for later, but do not pack yet
+        self._preview_pack_opts = dict(fill=tk.BOTH, expand=True, pady=(8, 0))
         self.preview_container.pack_propagate(flag=False)
+        # Switch to grid layout inside preview_container to properly dock scrollbars
+        with contextlib.suppress(Exception):
+            self.preview_container.grid_rowconfigure(0, weight=1)
+            self.preview_container.grid_columnconfigure(0, weight=1)
+        # Scrollbars (hidden by default)
+        self.v_scroll = ttk.Scrollbar(self.preview_container, orient='vertical', command=self._on_vscroll)
+        self.h_scroll = ttk.Scrollbar(self.preview_container, orient='horizontal', command=self._on_hscroll)
+        # Corner spacer (used when both scrollbars visible)
+        self._corner_spacer = tk.Frame(self.preview_container, width=1, height=1)
+        # Label for rendering preview
         self.preview_label = tk.Label(
             self.preview_container,
-            text='Предпросмотр появится после создания карты',
+            text='',  # No placeholder text; the entire area is hidden when no image
             anchor='center',
             justify='center',
             relief='sunken',
@@ -346,12 +383,68 @@ class _UI:
             padx=6,
             pady=6,
         )
-        self.preview_label.pack(fill=tk.BOTH, expand=True)
+        # Make label focusable so MouseWheel can be delivered reliably on Windows
+        with contextlib.suppress(Exception):
+            self.preview_label.configure(takefocus=1)
+        # Place widgets in grid; initially keep scrollbars and corner hidden
+        with contextlib.suppress(Exception):
+            self.preview_label.grid(row=0, column=0, sticky='nsew')
+            # Do not grid scrollbars yet; they will be shown via _update_scrollbars
+            # Ensure they are removed if gridded previously
+            try:
+                self.v_scroll.grid_remove()
+                self.h_scroll.grid_remove()
+                self._corner_spacer.grid_remove()
+            except Exception:
+                pass
+        # Track visibility state
+        self._h_scroll_visible = False
+        self._v_scroll_visible = False
+        self._preview_container_visible = False
         self.preview_img: ImageTk.PhotoImage | None = None
         self.preview_src_img: Image.Image | None = None
         self._resize_job_id: str | None = None
         self.preview_container.bind('<Configure>', self._on_preview_resize)
         self._preview_from_memory: bool = False
+        # Whether we've adjusted the preview container to match image aspect on first show
+        self._preview_aspect_applied: bool = False
+        # Preview interactive state
+        self._preview_zoom_factor: float = 1.0  # relative to fit scale
+        self._preview_center_x: float | None = None  # in source image coords
+        self._preview_center_y: float | None = None
+        self._preview_fit_scale: float = 1.0  # computed based on available area
+        self._preview_avail_w: int = 1
+        self._preview_avail_h: int = 1
+        self._preview_is_panning: bool = False
+        self._preview_last_mouse_x: int = 0
+        self._preview_last_mouse_y: int = 0
+        # Render scheduling and quality
+        self._render_job_id: str | None = None
+        # Wheel handling state (to avoid duplicate events)
+        self._wheel_global_active: bool = False
+        self._wheel_label_bound: bool = True
+        self._hq_job_id: str | None = None
+        self._is_interacting: bool = False
+        try:
+            self._resample_quality = Image.Resampling.LANCZOS
+        except Exception:
+            self._resample_quality = Image.BILINEAR
+        # Mouse bindings for zoom and pan
+        try:
+            # Wheel zoom (Windows/Mac)
+            self.preview_label.bind('<MouseWheel>', self._on_preview_wheel)
+            # On Windows/Tk, wheel events often require focus; also hook global wheel while hovering
+            self.preview_label.bind('<Enter>', self._on_preview_enter)
+            self.preview_label.bind('<Leave>', self._on_preview_leave)
+            # Wheel zoom (Linux)
+            self.preview_label.bind('<Button-4>', lambda e: self._on_preview_wheel(self._make_wheel_event(e, delta=120)))
+            self.preview_label.bind('<Button-5>', lambda e: self._on_preview_wheel(self._make_wheel_event(e, delta=-120)))
+            # Pan with left mouse button
+            self.preview_label.bind('<ButtonPress-1>', self._on_preview_button_press)
+            self.preview_label.bind('<B1-Motion>', self._on_preview_mouse_move)
+            self.preview_label.bind('<ButtonRelease-1>', self._on_preview_button_release)
+        except Exception:
+            pass
 
     def _post_build_setup(self) -> None:
         # Заполним панель начальными значениями текущего профиля
@@ -971,10 +1064,8 @@ class _UI:
             with contextlib.suppress(Exception):
                 self.root.after_cancel(self._resize_job_id)
         self._resize_job_id = None
-        self.preview_label.config(
-            image='',
-            text='Создание… Предпросмотр появится после завершения',
-        )
+        # Hide preview while processing; no image yet
+        self._set_preview_visible(False)
 
         # Соберём настройки из полей и применим их к модулям
         try:
@@ -1049,6 +1140,12 @@ class _UI:
             # Сохраняем источником предпросмотра и помечаем как показанный из памяти
             self.preview_src_img = img
             self._preview_from_memory = True
+            # Reset interactive preview state for new image
+            self._preview_center_x = None
+            self._preview_center_y = None
+            self._preview_zoom_factor = 1.0
+            # Reset first-aspect flag so we can adjust container once for this image
+            self._preview_aspect_applied = False
             # Отметим, что есть несохранённые изменения
             self._unsaved = True
             # Разрешим сохранение
@@ -1058,13 +1155,21 @@ class _UI:
                 idx = getattr(self, 'file_menu_save_index', 0)
                 if isinstance(fm, tk.Menu):
                     fm.entryconfig(idx, state=tk.NORMAL)
+            # Ensure the preview container is visible for rendering
+            self._set_preview_visible(True)
             # Рассчитываем текущие доступные размеры и подгоняем
             self.root.update_idletasks()
+            # Первичная подгонка: сделать окно предпросмотра с той же пропорцией, что и карта
+            self._adjust_preview_container_to_image_aspect()
             max_w = max(200, self.preview_container.winfo_width() or 0)
             max_h = max(200, self.preview_container.winfo_height() or 0)
             max_w = min(max_w, 1000)
-            max_h = min(max_h, 800)
-            self._resize_preview_to(max_w, max_h)
+            max_h = min(max_h, 900)
+            # Выполним подгонку на следующем цикле событий, чтобы не блокировать UI
+            try:
+                self.root.after(0, lambda: self._resize_preview_to(max_w, max_h))
+            except Exception:
+                self._resize_preview_to(max_w, max_h)
 
         self.root.after(0, _apply)
 
@@ -1123,6 +1228,103 @@ class _UI:
         file_menu = getattr(self, 'file_menu', None)
         if isinstance(file_menu, tk.Menu):
             self._set_menu_enabled(file_menu, enabled=enabled)
+
+    # ===== Preview visibility helpers =====
+    def _set_preview_visible(self, visible: bool) -> None:
+        """Show or hide the preview container as a whole.
+        When hidden, also shrink the main window vertically to fit the remaining
+        content so there is no empty space. When shown, restore default minsize.
+        Idempotent.
+        """
+        cur = bool(getattr(self, '_preview_container_visible', False))
+        if visible and not cur:
+            with contextlib.suppress(Exception):
+                self.preview_container.pack(**getattr(self, '_preview_pack_opts', {}))
+            self._preview_container_visible = True
+            # Restore default minimum window height (for preview usage)
+            with contextlib.suppress(Exception):
+                minw = int(getattr(self, '_default_min_w', 640))
+                minh = int(getattr(self, '_default_min_h', 480))
+                self.root.minsize(minw, minh)
+        elif not visible and cur:
+            # Hide the preview container
+            with contextlib.suppress(Exception):
+                self.preview_container.pack_forget()
+            self._preview_container_visible = False
+            # Allow shrinking below the default min-height
+            with contextlib.suppress(Exception):
+                minw = int(getattr(self, '_default_min_w', 640))
+                # Reduce the minimal height so the window can shrink to content
+                self.root.minsize(minw, 1)
+            # Let Tk recompute requested sizes and then fit window to content
+            def _shrink() -> None:
+                with contextlib.suppress(Exception):
+                    self.root.update_idletasks()
+                    # Clearing geometry string asks Tk to fit to requested size
+                    # of contained widgets (no extra empty space).
+                    self.root.geometry('')
+            # If window not mapped yet, shrink immediately; else schedule
+            try:
+                if not self.root.winfo_ismapped():
+                    _shrink()
+                else:
+                    self.root.after(0, _shrink)
+            except Exception:
+                _shrink()
+
+    def _set_initial_preview_square(self) -> None:
+        """Ensure the preview area is square on first app launch.
+        Sets container height equal to its current width and enlarges the main
+        window vertically if needed so the square actually fits. Safe to call
+        if already visible.
+        """
+        try:
+            self.root.update_idletasks()
+        except Exception:
+            pass
+        try:
+            cw = int(self.preview_container.winfo_width() or 0)
+        except Exception:
+            cw = 0
+        if cw <= 0:
+            cw = 600
+        target_h = max(1, cw)
+        # Capture current sizes to compute delta for the main window height
+        try:
+            cur_cont_h = int(self.preview_container.winfo_height() or 0)
+        except Exception:
+            cur_cont_h = 0
+        try:
+            cur_root_w = int(self.root.winfo_width() or 0)
+            cur_root_h = int(self.root.winfo_height() or 0)
+            root_x = int(self.root.winfo_x() or 0)
+            root_y = int(self.root.winfo_y() or 0)
+        except Exception:
+            cur_root_w = 0
+            cur_root_h = 0
+            root_x = 0
+            root_y = 0
+        with contextlib.suppress(Exception):
+            # Lock expansion briefly to enforce height
+            self.preview_container.pack_configure(expand=False)
+            self.preview_container.config(height=target_h)
+        # Grow the main window height if necessary so the square fits
+        try:
+            if cur_cont_h > 0 and cur_root_h > 0:
+                delta = max(0, target_h - cur_cont_h)
+                if delta > 0:
+                    new_h = cur_root_h + delta
+                    self.root.geometry(f"{max(1, cur_root_w)}x{max(1, new_h)}+{root_x}+{root_y}")
+        except Exception:
+            pass
+        def _restore_expand() -> None:
+            with contextlib.suppress(Exception):
+                self.preview_container.pack_configure(expand=True)
+        with contextlib.suppress(Exception):
+            try:
+                self.root.after(200, _restore_expand)
+            except Exception:
+                _restore_expand()
 
     def mainloop(self) -> None:
         self.root.mainloop()
@@ -1261,10 +1463,8 @@ class _UI:
                 idx = getattr(self, 'file_menu_save_index', 0)
                 if isinstance(fm, tk.Menu):
                     fm.entryconfig(idx, state=tk.DISABLED)
-            self.preview_label.config(
-                image='',
-                text='Профиль загружен. Предпросмотр появится после создания карты',
-            )
+            # Hide preview area entirely until a new map is created
+            self._set_preview_visible(False)
             # Не показываем картинку из старого output_path
             # чтобы избежать «застывшей» картинки
         except Exception as e:
@@ -1371,6 +1571,188 @@ class _UI:
         with contextlib.suppress(Exception):
             self._populate_profile_fields(settings)
 
+    def _make_wheel_event(self, e: tk.Event, *, delta: int) -> tk.Event:
+        # Helper to normalize Linux button-4/5 to MouseWheel-like event
+        try:
+            e.delta = delta  # type: ignore[attr-defined]
+        except Exception:
+            pass
+        return e
+
+    def _adjust_preview_container_to_image_aspect(self) -> None:
+        """On first image show, make the preview container square: height equals width.
+        Also enlarge the main window vertically if needed so the square area fits.
+        """
+        if self._preview_aspect_applied:
+            return
+        # If container is hidden, pack it temporarily to measure width
+        if not getattr(self, '_preview_container_visible', False):
+            with contextlib.suppress(Exception):
+                self.preview_container.pack(**getattr(self, '_preview_pack_opts', {}))
+            self._preview_container_visible = True
+        # Measure current container width
+        try:
+            self.root.update_idletasks()
+        except Exception:
+            pass
+        try:
+            cw = int(self.preview_container.winfo_width() or 0)
+        except Exception:
+            cw = 0
+        if cw <= 0:
+            cw = 600  # fallback width
+        target_h = max(1, cw)
+        # Capture current sizes to compute delta for the main window height
+        try:
+            cur_cont_h = int(self.preview_container.winfo_height() or 0)
+        except Exception:
+            cur_cont_h = 0
+        try:
+            cur_root_w = int(self.root.winfo_width() or 0)
+            cur_root_h = int(self.root.winfo_height() or 0)
+            root_x = int(self.root.winfo_x() or 0)
+            root_y = int(self.root.winfo_y() or 0)
+        except Exception:
+            cur_root_w = 0
+            cur_root_h = 0
+            root_x = 0
+            root_y = 0
+        # Apply square height to container first
+        with contextlib.suppress(Exception):
+            self.preview_container.pack_configure(expand=False)
+            self.preview_container.config(height=target_h)
+        # If the window is too short to accommodate the new container height,
+        # increase the window height by the required delta to ensure a square area.
+        try:
+            if cur_cont_h > 0 and cur_root_h > 0:
+                delta = max(0, target_h - cur_cont_h)
+                if delta > 0:
+                    new_h = cur_root_h + delta
+                    self.root.geometry(f"{max(1, cur_root_w)}x{max(1, new_h)}+{root_x}+{root_y}")
+        except Exception:
+            pass
+        # Restore expansion shortly after first rendering is scheduled
+        def _restore_expand() -> None:
+            with contextlib.suppress(Exception):
+                self.preview_container.pack_configure(expand=True)
+        with contextlib.suppress(Exception):
+            try:
+                self.root.after(200, _restore_expand)
+            except Exception:
+                _restore_expand()
+        self._preview_aspect_applied = True
+
+    # ===== Preview interaction helpers =====
+    def _cursor_pos_in_preview(self) -> tuple[int, int]:
+        """Get mouse position relative to preview image area (label inner rect).
+        Accounts for borderwidth, highlightthickness, and padding.
+        Works reliably even for bind_all handlers on Windows.
+        """
+        try:
+            x_root, y_root = self.root.winfo_pointerxy()
+            # Widget outer origin in root coords
+            wx = self.preview_label.winfo_rootx()
+            wy = self.preview_label.winfo_rooty()
+            # Inner offsets (left/top) inside label
+            try:
+                padx = int(self.preview_label.cget('padx'))
+                pady = int(self.preview_label.cget('pady'))
+            except Exception:
+                padx = 0
+                pady = 0
+            try:
+                bd = int(self.preview_label.cget('bd'))
+            except Exception:
+                bd = 0
+            try:
+                ht = int(self.preview_label.cget('highlightthickness'))
+            except Exception:
+                ht = 0
+            inner_left = wx + bd + ht + padx
+            inner_top = wy + bd + ht + pady
+            lx = x_root - inner_left
+            ly = y_root - inner_top
+        except Exception:
+            lx = self._preview_avail_w // 2
+            ly = self._preview_avail_h // 2
+        # clamp to available area
+        aw = max(0, int(self._preview_avail_w))
+        ah = max(0, int(self._preview_avail_h))
+        lx = max(0, min(int(lx), max(0, aw - 1)))
+        ly = max(0, min(int(ly), max(0, ah - 1)))
+        return lx, ly
+
+    def _enter_interactive_mode(self) -> None:
+        self._is_interacting = True
+        try:
+            self._resample_quality = Image.Resampling.BILINEAR
+        except Exception:
+            self._resample_quality = Image.BILINEAR
+        # cancel pending HQ finalize if any
+        if self._hq_job_id is not None:
+            with contextlib.suppress(Exception):
+                self.root.after_cancel(self._hq_job_id)
+            self._hq_job_id = None
+
+    def _schedule_render(self, delay_ms: int = 12) -> None:
+        if self._render_job_id is not None:
+            with contextlib.suppress(Exception):
+                self.root.after_cancel(self._render_job_id)
+        try:
+            self._render_job_id = self.root.after(delay_ms, self._render_preview_current)
+        except Exception:
+            self._render_job_id = None
+            self._render_preview_current()
+
+    def _schedule_hq_render(self, delay_ms: int = 160) -> None:
+        def _apply() -> None:
+            self._is_interacting = False
+            try:
+                self._resample_quality = Image.Resampling.LANCZOS
+            except Exception:
+                self._resample_quality = Image.BILINEAR
+            self._render_preview_current()
+            self._hq_job_id = None
+        if self._hq_job_id is not None:
+            with contextlib.suppress(Exception):
+                self.root.after_cancel(self._hq_job_id)
+        try:
+            self._hq_job_id = self.root.after(delay_ms, _apply)
+        except Exception:
+            self._hq_job_id = None
+            _apply()
+
+    def _on_preview_enter(self, _e: tk.Event) -> None:
+        # Ensure focus and capture wheel globally while hovering over preview
+        with contextlib.suppress(Exception):
+            self.preview_label.focus_set()
+        # Avoid duplicate handlers: disable label-level wheel binding while global is active
+        with contextlib.suppress(Exception):
+            self.preview_label.unbind('<MouseWheel>')
+            self.preview_label.unbind('<Button-4>')
+            self.preview_label.unbind('<Button-5>')
+            self._wheel_label_bound = False
+        with contextlib.suppress(Exception):
+            # Capture wheel globally (Windows/macOS) and Linux Button-4/5 while hovering
+            self.root.bind_all('<MouseWheel>', self._on_preview_wheel)
+            self.root.bind_all('<Button-4>', lambda e: self._on_preview_wheel(self._make_wheel_event(e, delta=120)))
+            self.root.bind_all('<Button-5>', lambda e: self._on_preview_wheel(self._make_wheel_event(e, delta=-120)))
+            self._wheel_global_active = True
+
+    def _on_preview_leave(self, _e: tk.Event) -> None:
+        # Release global wheel capture when cursor leaves preview
+        with contextlib.suppress(Exception):
+            self.root.unbind_all('<MouseWheel>')
+            self.root.unbind_all('<Button-4>')
+            self.root.unbind_all('<Button-5>')
+            self._wheel_global_active = False
+        # Restore label-level wheel binding for fallback (for all platforms)
+        with contextlib.suppress(Exception):
+            self.preview_label.bind('<MouseWheel>', self._on_preview_wheel)
+            self.preview_label.bind('<Button-4>', lambda e: self._on_preview_wheel(self._make_wheel_event(e, delta=120)))
+            self.preview_label.bind('<Button-5>', lambda e: self._on_preview_wheel(self._make_wheel_event(e, delta=-120)))
+            self._wheel_label_bound = True
+
     def _on_preview_resize(self, event: tk.Event) -> None:
         """
         Изменение размеров области предпросмотра.
@@ -1399,29 +1781,340 @@ class _UI:
     def _resize_preview_to(self, max_w: int, max_h: int) -> None:
         if self.preview_src_img is None:
             return
-        # Учитываем внутренние отступы Label (padx/pady) — попытаемся вычесть по 2*6
+        # Measure label's inner (content) size precisely: subtract border, highlight and padding
+        # Prefer actual label size; fall back to provided container size
+        lw = int(self.preview_label.winfo_width() or 0)
+        lh = int(self.preview_label.winfo_height() or 0)
+        if lw <= 1 or lh <= 1:
+            lw, lh = int(max_w), int(max_h)
         try:
             padx = int(self.preview_label.cget('padx'))
             pady = int(self.preview_label.cget('pady'))
         except Exception:
             padx = 0
             pady = 0
-        avail_w = max(1, max_w - 2 * padx)
-        avail_h = max(1, max_h - 2 * pady)
+        try:
+            bd = int(self.preview_label.cget('bd'))
+        except Exception:
+            bd = 0
+        try:
+            ht = int(self.preview_label.cget('highlightthickness'))
+        except Exception:
+            ht = 0
+        inner_w = max(1, lw - 2 * (bd + ht) - 2 * padx)
+        inner_h = max(1, lh - 2 * (bd + ht) - 2 * pady)
+        self._preview_avail_w = inner_w
+        self._preview_avail_h = inner_h
         src_w, src_h = self.preview_src_img.size
         if src_w <= 0 or src_h <= 0:
             return
-        scale = min(avail_w / src_w, avail_h / src_h)
-        scale = max(scale, 0.01)
-        dst_w = max(1, int(src_w * scale))
-        dst_h = max(1, int(src_h * scale))
-        with contextlib.suppress(Exception):
-            resized = self.preview_src_img.resize(
-                (dst_w, dst_h), Image.Resampling.LANCZOS
-            )
-            self.preview_img = ImageTk.PhotoImage(resized)
-            self.preview_label.config(image=self.preview_img, text='')
+        # Fit scale must be defined by width only (height can grow up to screen bounds)
+        fit_scale = max(0.01, inner_w / src_w)
+        self._preview_fit_scale = fit_scale
+        # Initialize center if needed
+        if self._preview_center_x is None or self._preview_center_y is None:
+            self._preview_center_x = src_w / 2
+            self._preview_center_y = src_h / 2
+            self._preview_zoom_factor = 1.0
+        self._render_preview_current()
         self._resize_job_id = None
+
+    def _render_preview_current(self) -> None:
+        if self.preview_src_img is None:
+            return
+        avail_w = max(1, int(self._preview_avail_w))
+        avail_h = max(1, int(self._preview_avail_h))
+        src_w, src_h = self.preview_src_img.size
+        if src_w <= 0 or src_h <= 0:
+            return
+        # final scale in screen px per source px
+        final_scale = max(0.01, self._preview_fit_scale * max(0.05, min(self._preview_zoom_factor, 100.0)))
+        # desired viewport size in source coords (float)
+        crop_w_f = max(1.0, float(avail_w) / float(final_scale))
+        crop_h_f = max(1.0, float(avail_h) / float(final_scale))
+        # center in source coords (do NOT clamp to preserve anchor behavior near edges)
+        cx = float(self._preview_center_x or (src_w / 2))
+        cy = float(self._preview_center_y or (src_h / 2))
+        # desired viewport (may go outside the source bounds)
+        left_f = cx - crop_w_f / 2.0
+        top_f = cy - crop_h_f / 2.0
+        right_f = left_f + crop_w_f
+        bottom_f = top_f + crop_h_f
+        # intersection with source image
+        inter_left_f = max(0.0, left_f)
+        inter_top_f = max(0.0, top_f)
+        inter_right_f = min(float(src_w), right_f)
+        inter_bottom_f = min(float(src_h), bottom_f)
+        # If intersection is empty, show blank canvas
+        if inter_right_f <= inter_left_f or inter_bottom_f <= inter_top_f:
+            with contextlib.suppress(Exception):
+                canvas = Image.new('RGB', (avail_w, avail_h), (240, 240, 240))
+                self.preview_img = ImageTk.PhotoImage(canvas)
+                self.preview_label.config(image=self.preview_img, text='')
+            return
+        # Convert intersection to integer box for cropping
+        left = int(round(inter_left_f))
+        top = int(round(inter_top_f))
+        right = int(round(inter_right_f))
+        bottom = int(round(inter_bottom_f))
+        # Compute destination placement within the viewport
+        dx = int(round((inter_left_f - left_f) * final_scale))
+        dy = int(round((inter_top_f - top_f) * final_scale))
+        dest_w = max(1, int(round((right - left) * final_scale)))
+        dest_h = max(1, int(round((bottom - top) * final_scale)))
+        with contextlib.suppress(Exception):
+            cropped = self.preview_src_img.crop((left, top, right, bottom))
+            resized = cropped.resize((dest_w, dest_h), self._resample_quality)
+            # Create canvas and paste the resized patch at offset; out-of-bounds area remains blank
+            canvas = Image.new('RGB', (avail_w, avail_h), (240, 240, 240))
+            # PIL allows negative offsets; it will clip automatically
+            canvas.paste(resized, (dx, dy))
+            self.preview_img = ImageTk.PhotoImage(canvas)
+            self.preview_label.config(image=self.preview_img, text='')
+        # Update scrollbars based on new geometry
+        with contextlib.suppress(Exception):
+            self._update_scrollbars()
+
+    def _on_preview_wheel(self, event: tk.Event) -> None:
+        if self.preview_src_img is None:
+            return
+        # Normalize delta by sign only (works for wheels and touchpads on Windows)
+        raw = 0
+        try:
+            raw = int(getattr(event, 'delta', 0))
+        except Exception:
+            raw = 0
+        if raw == 0:
+            return
+        sign = 1 if raw > 0 else -1
+        # If trying to zoom out below fit, ignore to avoid jumpy center due to crop capping
+        if sign < 0 and self._preview_zoom_factor <= 1.0 + 1e-6:
+            return
+        # Cursor position relative to label, robust under bind_all
+        x, y = self._cursor_pos_in_preview()
+        # Compute current final scale and the source point under cursor
+        avail_w = self._preview_avail_w
+        avail_h = self._preview_avail_h
+        src_w, src_h = self.preview_src_img.size
+        final_scale_before = max(0.01, self._preview_fit_scale * max(0.05, min(self._preview_zoom_factor, 100.0)))
+        cx = float(self._preview_center_x or (src_w / 2))
+        cy = float(self._preview_center_y or (src_h / 2))
+        src_px = cx + (x - avail_w / 2) / final_scale_before
+        src_py = cy + (y - avail_h / 2) / final_scale_before
+        # Adjust zoom factor
+        zoom_step = 1.12 if sign > 0 else (1.0 / 1.12)
+        new_zoom = self._preview_zoom_factor * zoom_step
+        # Clamp zoom factor to [1.0 .. 20.0] relative to fit
+        new_zoom = max(1.0, min(new_zoom, 20.0))
+        self._preview_zoom_factor = new_zoom
+        # Compute new center to keep anchor under cursor stable
+        final_scale_after = max(0.01, self._preview_fit_scale * self._preview_zoom_factor)
+        new_cx = src_px - (x - avail_w / 2) / final_scale_after
+        new_cy = src_py - (y - avail_h / 2) / final_scale_after
+        self._preview_center_x = new_cx
+        self._preview_center_y = new_cy
+        # Schedule coalesced renders with fast filter during interaction
+        self._enter_interactive_mode()
+        self._schedule_render()
+        self._schedule_hq_render()
+
+    def _on_preview_button_press(self, event: tk.Event) -> None:
+        self._preview_is_panning = True
+        try:
+            self._preview_last_mouse_x = int(event.x)  # type: ignore[attr-defined]
+            self._preview_last_mouse_y = int(event.y)  # type: ignore[attr-defined]
+        except Exception:
+            self._preview_last_mouse_x = 0
+            self._preview_last_mouse_y = 0
+
+    def _on_preview_mouse_move(self, event: tk.Event) -> None:
+        if not self._preview_is_panning or self.preview_src_img is None:
+            return
+        try:
+            x = int(event.x)  # type: ignore[attr-defined]
+            y = int(event.y)  # type: ignore[attr-defined]
+        except Exception:
+            return
+        dx = x - self._preview_last_mouse_x
+        dy = y - self._preview_last_mouse_y
+        self._preview_last_mouse_x = x
+        self._preview_last_mouse_y = y
+        # Translate drag in screen pixels to source coords delta
+        final_scale = max(0.01, self._preview_fit_scale * self._preview_zoom_factor)
+        if final_scale <= 0:
+            return
+        # Move content with mouse: dragging right moves image right -> center shifts negatively
+        self._preview_center_x = (self._preview_center_x or 0.0) - dx / final_scale
+        self._preview_center_y = (self._preview_center_y or 0.0) - dy / final_scale
+        # Schedule coalesced renders
+        self._enter_interactive_mode()
+        self._schedule_render()
+        self._schedule_hq_render()
+
+    def _on_preview_button_release(self, _event: tk.Event) -> None:
+        self._preview_is_panning = False
+        # finalize with HQ render shortly after release
+        self._schedule_hq_render(140)
+        # update scrollbars position one more time
+        with contextlib.suppress(Exception):
+            self._update_scrollbars()
+
+    # ===== Scrollbar integration =====
+    def _update_scrollbars(self) -> None:
+        if self.preview_src_img is None:
+            # hide both
+            if self._h_scroll_visible:
+                with contextlib.suppress(Exception):
+                    self.h_scroll.pack_forget()
+                self._h_scroll_visible = False
+            if self._v_scroll_visible:
+                with contextlib.suppress(Exception):
+                    self.v_scroll.pack_forget()
+                self._v_scroll_visible = False
+            return
+        # Geometry
+        avail_w = max(1, int(self._preview_avail_w))
+        avail_h = max(1, int(self._preview_avail_h))
+        src_w, src_h = self.preview_src_img.size
+        s = max(0.01, self._preview_fit_scale * max(0.05, min(self._preview_zoom_factor, 100.0)))
+        content_w = float(src_w) * s
+        content_h = float(src_h) * s
+        need_h = content_w > (avail_w + 1)
+        need_v = content_h > (avail_h + 1)
+        # Show/hide scrollbars as needed
+        if need_v and not self._v_scroll_visible:
+            with contextlib.suppress(Exception):
+                self.v_scroll.grid(row=0, column=1, sticky='ns')
+            self._v_scroll_visible = True
+        if not need_v and self._v_scroll_visible:
+            with contextlib.suppress(Exception):
+                self.v_scroll.grid_remove()
+            self._v_scroll_visible = False
+        if need_h and not self._h_scroll_visible:
+            with contextlib.suppress(Exception):
+                self.h_scroll.grid(row=1, column=0, sticky='ew')
+            self._h_scroll_visible = True
+        if not need_h and self._h_scroll_visible:
+            with contextlib.suppress(Exception):
+                self.h_scroll.grid_remove()
+            self._h_scroll_visible = False
+        # Corner spacer when both scrollbars visible
+        if self._h_scroll_visible and self._v_scroll_visible:
+            with contextlib.suppress(Exception):
+                self._corner_spacer.grid(row=1, column=1, sticky='nsew')
+        else:
+            with contextlib.suppress(Exception):
+                self._corner_spacer.grid_remove()
+        # Re-measure label inner area might have changed due to (un)packing scrollbars
+        try:
+            prev_aw = int(self._preview_avail_w)
+            prev_ah = int(self._preview_avail_h)
+            lw = int(self.preview_label.winfo_width() or 0)
+            lh = int(self.preview_label.winfo_height() or 0)
+            padx = int(self.preview_label.cget('padx'))
+            pady = int(self.preview_label.cget('pady'))
+            bd = int(self.preview_label.cget('bd'))
+            ht = int(self.preview_label.cget('highlightthickness'))
+            inner_w = max(1, lw - 2 * (bd + ht) - 2 * padx)
+            inner_h = max(1, lh - 2 * (bd + ht) - 2 * pady)
+            avail_w = inner_w
+            avail_h = inner_h
+            self._preview_avail_w = avail_w
+            self._preview_avail_h = avail_h
+            if avail_w != prev_aw or avail_h != prev_ah:
+                # schedule re-render with new viewport size
+                self._enter_interactive_mode()
+                self._schedule_render()
+        except Exception:
+            pass
+        # Compute current viewport left/top in screen px relative to content
+        crop_w_f = float(avail_w) / s
+        crop_h_f = float(avail_h) / s
+        cx = float(self._preview_center_x or (src_w / 2))
+        cy = float(self._preview_center_y or (src_h / 2))
+        left_raw_px = (cx - crop_w_f / 2.0) * s
+        top_raw_px = (cy - crop_h_f / 2.0) * s
+        max_left_px = max(0.0, content_w - avail_w)
+        max_top_px = max(0.0, content_h - avail_h)
+        left_px = min(max(0.0, left_raw_px), max_left_px)
+        top_px = min(max(0.0, top_raw_px), max_top_px)
+        # Configure scrollbar thumbs [lo, hi]
+        if self._h_scroll_visible:
+            total_w = max(1.0, content_w)
+            lo = 0.0 if total_w <= 0 else left_px / total_w
+            hi = (left_px + avail_w) / total_w
+            hi = max(lo, min(1.0, hi))
+            with contextlib.suppress(Exception):
+                self.h_scroll.set(lo, hi)
+        if self._v_scroll_visible:
+            total_h = max(1.0, content_h)
+            lo = 0.0 if total_h <= 0 else top_px / total_h
+            hi = (top_px + avail_h) / total_h
+            hi = max(lo, min(1.0, hi))
+            with contextlib.suppress(Exception):
+                self.v_scroll.set(lo, hi)
+
+    def _on_hscroll(self, *args: object) -> None:
+        if self.preview_src_img is None:
+            return
+        # Compute geometry and scale
+        avail_w = max(1, int(self._preview_avail_w))
+        src_w = self.preview_src_img.size[0]
+        s = max(0.01, self._preview_fit_scale * max(0.05, min(self._preview_zoom_factor, 100.0)))
+        content_w = float(src_w) * s
+        crop_w_f = float(avail_w) / s
+        # Current left in screen px
+        cx = float(self._preview_center_x or (src_w / 2))
+        left_px = (cx - crop_w_f / 2.0) * s
+        max_left_px = max(0.0, content_w - avail_w)
+        try:
+            if len(args) >= 1 and args[0] == 'moveto':
+                f = float(args[1]) if len(args) > 1 else 0.0
+                left_px = max(0.0, min(max_left_px, f * max_left_px))
+            elif len(args) >= 3 and args[0] == 'scroll':
+                n = int(args[1])
+                what = str(args[2])
+                step = 40.0 if what == 'units' else float(avail_w) * 0.9
+                left_px = max(0.0, min(max_left_px, left_px + n * step))
+        except Exception:
+            return
+        # Update center from left_px
+        left_src = left_px / s
+        new_cx = left_src + crop_w_f / 2.0
+        self._preview_center_x = new_cx
+        # Schedule re-render
+        self._enter_interactive_mode()
+        self._schedule_render()
+        self._schedule_hq_render()
+
+    def _on_vscroll(self, *args: object) -> None:
+        if self.preview_src_img is None:
+            return
+        avail_h = max(1, int(self._preview_avail_h))
+        src_h = self.preview_src_img.size[1]
+        s = max(0.01, self._preview_fit_scale * max(0.05, min(self._preview_zoom_factor, 100.0)))
+        content_h = float(src_h) * s
+        crop_h_f = float(avail_h) / s
+        cy = float(self._preview_center_y or (src_h / 2))
+        top_px = (cy - crop_h_f / 2.0) * s
+        max_top_px = max(0.0, content_h - avail_h)
+        try:
+            if len(args) >= 1 and args[0] == 'moveto':
+                f = float(args[1]) if len(args) > 1 else 0.0
+                top_px = max(0.0, min(max_top_px, f * max_top_px))
+            elif len(args) >= 3 and args[0] == 'scroll':
+                n = int(args[1])
+                what = str(args[2])
+                step = 40.0 if what == 'units' else float(avail_h) * 0.9
+                top_px = max(0.0, min(max_top_px, top_px + n * step))
+        except Exception:
+            return
+        top_src = top_px / s
+        new_cy = top_src + crop_h_f / 2.0
+        self._preview_center_y = new_cy
+        self._enter_interactive_mode()
+        self._schedule_render()
+        self._schedule_hq_render()
 
     def _show_preview_if_available(self) -> None:
         """Показывает предпросмотр карты из пути профиля, если файл существует."""
@@ -1434,15 +2127,14 @@ class _UI:
             # При необходимости создать абсолютный путь
             path = path if path.is_absolute() else Path.cwd() / path
             if not path.exists():
-                # Файл не найден — покажем текст
+                # Файл не найден — скрываем превью
                 self.preview_img = None
                 self.preview_src_img = None
-                self.preview_label.config(
-                    image='',
-                    text=f'Файл не найден:\n{path}',
-                )
+                self._set_preview_visible(False)
                 return
 
+            # Ensure container is visible before sizing
+            self._set_preview_visible(True)
             # Определим желаемый размер предпросмотра исходя из текущей ширины
             self.root.update_idletasks()
             max_w = max(200, self.preview_container.winfo_width() or 0)
@@ -1453,15 +2145,20 @@ class _UI:
 
             img = Image.open(path)
             self.preview_src_img = cast('Image.Image', img)
+            # Reset interactive preview state for new image/file
+            self._preview_center_x = None
+            self._preview_center_y = None
+            self._preview_zoom_factor = 1.0
+            # Reset first-aspect flag so new image can adjust container once
+            self._preview_aspect_applied = False
+            # Подгонка размеров контейнера под пропорции картинки при первом показе
+            self._adjust_preview_container_to_image_aspect()
             # Немедленно подгоним под текущие размеры
             self._resize_preview_to(max_w, max_h)
-        except Exception as e:  # Поймаем и покажем как текст
+        except Exception as e:  # Ошибка — скрыть превью
             self.preview_img = None
             self.preview_src_img = None
-            self.preview_label.config(
-                image='',
-                text=f'Не удалось показать предпросмотр:\n{e}',
-            )
+            self._set_preview_visible(False)
 
 
 def run_app(on_create_map: Callable[[], None]) -> None:
