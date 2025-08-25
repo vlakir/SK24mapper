@@ -112,3 +112,15 @@ HTTP_CACHE_STALE_IF_ERROR_HOURS = 72
 
 # --- Grid text outline width (moved from profile to constants)
 GRID_TEXT_OUTLINE_WIDTH = 2
+
+# --- GUI limits
+# Максимальный размер стороны участка (км)
+MAX_SIDE_SIZE = 60
+
+# --- SK-42 applicability (approximate area of use)
+# Longitudes (degrees East) roughly covering the former USSR area
+SK42_VALID_LON_MIN = 19.0
+SK42_VALID_LON_MAX = 190.0
+# Latitudes (degrees North) where SK-42 is typically applicable
+SK42_VALID_LAT_MIN = 35.0
+SK42_VALID_LAT_MAX = 85.0

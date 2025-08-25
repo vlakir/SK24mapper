@@ -1,0 +1,14 @@
+from_x_high = 55
+from_y_high = 63
+to_x_high = 56
+to_y_high = 63
+from_x_low = 80
+from_y_low = 10
+to_x_low = 4
+to_y_low = 28
+output_path = "../maps/kyiv.png"
+grid_width_px = 4
+grid_font_size = 86
+grid_text_margin = 43
+grid_label_bg_padding = 6
+mask_opacity = 0.35

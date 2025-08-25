@@ -6,20 +6,29 @@ import time
 import tkinter as tk
 import tkinter.font as tkfont
 import traceback
+import asyncio
+import socket
+import errno
 from collections.abc import Callable
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Any, Literal, Protocol, cast
 
+import aiohttp
+
 from PIL import Image, ImageTk
+import tomlkit
 
 import constants
+from model import MapSettings
 from profiles import load_profile, profile_path
 from progress import (
     set_preview_image_callback,
     set_progress_callback,
     set_spinner_callbacks,
 )
+
+MAX_COORD_DIGITS = 2
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +100,10 @@ class _UI:
 
         self.btn.config(command=self.handle_click)
         self.save_btn.config(command=self._handle_save_click)
+        with contextlib.suppress(Exception):
+            self.profile_load_btn.config(command=self._choose_profile_file)
+        with contextlib.suppress(Exception):
+            self.profile_save_btn.config(command=self._handle_save_profile_click)
 
     def _normalize_popup_fonts(self) -> None:
         with contextlib.suppress(Exception):
@@ -116,6 +129,16 @@ class _UI:
         self._unsaved = False
         frame = tk.Frame(self.root, padx=12, pady=12)
         frame.pack(fill=tk.BOTH, expand=True)
+        # Заголовок/кнопки/статус/прогресс
+        self._build_header(frame)
+        # Панель настроек профиля (координаты и сетка)
+        self._build_info_panel(frame)
+        # Контейнер предпросмотра
+        self._build_preview(frame)
+        # Начальная подстановка значений и подписка на изменения
+        self._post_build_setup()
+
+    def _build_header(self, frame: tk.Misc) -> None:
         buttons_row = tk.Frame(frame)
         buttons_row.pack(fill=tk.X, pady=(0, 8))
         self.btn = tk.Button(buttons_row, text='Создать карту', width=24)
@@ -124,6 +147,15 @@ class _UI:
             buttons_row, text='Сохранить карту…', width=24, state=tk.DISABLED
         )
         self.save_btn.pack(side=tk.LEFT, padx=(8, 0))
+        # Кнопки работы с профилем
+        self.profile_load_btn = tk.Button(
+            buttons_row, text='Загрузить профиль…', width=20
+        )
+        self.profile_load_btn.pack(side=tk.LEFT, padx=(16, 0))
+        self.profile_save_btn = tk.Button(
+            buttons_row, text='Сохранить профиль…', width=20
+        )
+        self.profile_save_btn.pack(side=tk.LEFT, padx=(8, 0))
         self.status_var = tk.StringVar(value='Готов к созданию карты')
         status_lbl = tk.Label(frame, textvariable=self.status_var, anchor='w')
         status_lbl.pack(fill=tk.X)
@@ -132,7 +164,88 @@ class _UI:
         )
         self.progress.pack(fill=tk.X, pady=(6, 0))
 
-        # ----- Панель отображения настроек профиля -----
+    def _make_normalize_cmd(self, var: tk.StringVar) -> Callable[[], None]:
+        def _cmd() -> None:
+            self._normalize_coord_var(var)
+
+        return _cmd
+
+    def _make_event_normalize(self, var: tk.StringVar) -> Callable[[tk.Event], None]:
+        def _handler(_e: tk.Event) -> None:
+            self._normalize_coord_var(var)
+
+        return _handler
+
+    def _make_coord_row(
+        self, parent: tk.Misc, title: str, high_var: tk.StringVar, low_var: tk.StringVar
+    ) -> None:
+        row = tk.Frame(parent)
+        row.pack(fill=tk.X, pady=2)
+        tk.Label(row, text=title, width=2, anchor='w').pack(side=tk.LEFT)
+        vcmd = (self.root.register(self._validate_coord_input), '%P')
+        e1 = ttk.Spinbox(
+            row,
+            from_=0,
+            to=99,
+            increment=1,
+            textvariable=high_var,
+            width=3,
+            justify='right',
+            wrap=False,
+            state='normal',
+            validate='key',
+            validatecommand=vcmd,
+            command=self._make_normalize_cmd(high_var),
+        )
+        e1.pack(side=tk.LEFT)
+        with contextlib.suppress(Exception):
+            e1.bind('<FocusOut>', self._make_event_normalize(high_var))
+            e1.bind('<Return>', self._make_event_normalize(high_var))
+        self._edit_controls.append(e1)
+        tk.Label(row, text='.').pack(side=tk.LEFT)
+        e2 = ttk.Spinbox(
+            row,
+            from_=0,
+            to=99,
+            increment=1,
+            textvariable=low_var,
+            width=3,
+            justify='right',
+            wrap=False,
+            state='normal',
+            validate='key',
+            validatecommand=vcmd,
+            command=self._make_normalize_cmd(low_var),
+        )
+        e2.pack(side=tk.LEFT)
+        with contextlib.suppress(Exception):
+            e2.bind('<FocusOut>', self._make_event_normalize(low_var))
+            e2.bind('<Return>', self._make_event_normalize(low_var))
+        self._edit_controls.append(e2)
+
+    def _make_labeled_spin(
+        self,
+        parent: tk.Misc,
+        label: str,
+        var: tk.IntVar,
+        limits: tuple[int, int] = (0, 10000),
+    ) -> None:
+        row = tk.Frame(parent)
+        row.pack(fill=tk.X, pady=2)
+        tk.Label(row, text=label, anchor='w').pack(side=tk.LEFT)
+        sp = tk.Spinbox(
+            row,
+            from_=limits[0],
+            to=limits[1],
+            increment=1,
+            textvariable=var,
+            width=8,
+            justify='right',
+        )
+        sp.pack(side=tk.RIGHT)
+        self._edit_controls.append(sp)
+
+    def _build_info_panel(self, frame: tk.Misc) -> None:
         info_panel = tk.Frame(frame)
         info_panel.pack(fill=tk.X, pady=(8, 0))
 
@@ -149,58 +262,8 @@ class _UI:
         self._from_y_low_var = tk.StringVar()
 
         self._edit_controls: list[tk.Widget] = []
-
-        def _make_coord_row(parent: tk.Misc, title: str, high_var: tk.StringVar, low_var: tk.StringVar) -> None:
-            row = tk.Frame(parent)
-            row.pack(fill=tk.X, pady=2)
-            tk.Label(row, text=title, width=2, anchor='w').pack(side=tk.LEFT)
-            vcmd = (self.root.register(self._validate_coord_input), '%P')
-            e1 = ttk.Spinbox(
-                row,
-                from_=0,
-                to=99,
-                increment=1,
-                textvariable=high_var,
-                width=3,
-                justify='right',
-                wrap=False,
-                state='normal',
-                validate='key',
-                validatecommand=vcmd,
-                command=lambda v=high_var: self._normalize_coord_var(v),
-            )
-            e1.pack(side=tk.LEFT)
-            try:
-                e1.bind('<FocusOut>', lambda _e, v=high_var: self._normalize_coord_var(v))
-                e1.bind('<Return>', lambda _e, v=high_var: self._normalize_coord_var(v))
-            except Exception:
-                pass
-            self._edit_controls.append(e1)
-            tk.Label(row, text='.').pack(side=tk.LEFT)
-            e2 = ttk.Spinbox(
-                row,
-                from_=0,
-                to=99,
-                increment=1,
-                textvariable=low_var,
-                width=3,
-                justify='right',
-                wrap=False,
-                state='normal',
-                validate='key',
-                validatecommand=vcmd,
-                command=lambda v=low_var: self._normalize_coord_var(v),
-            )
-            e2.pack(side=tk.LEFT)
-            try:
-                e2.bind('<FocusOut>', lambda _e, v=low_var: self._normalize_coord_var(v))
-                e2.bind('<Return>', lambda _e, v=low_var: self._normalize_coord_var(v))
-            except Exception:
-                pass
-            self._edit_controls.append(e2)
-
-        _make_coord_row(bl_group, 'X', self._from_x_high_var, self._from_x_low_var)
-        _make_coord_row(bl_group, 'Y', self._from_y_high_var, self._from_y_low_var)
+        self._make_coord_row(bl_group, 'X', self._from_x_high_var, self._from_x_low_var)
+        self._make_coord_row(bl_group, 'Y', self._from_y_high_var, self._from_y_low_var)
 
         tr_group = ttk.LabelFrame(corners_col, text='Правый верхний угол карты')
         tr_group.pack(fill=tk.X, padx=(0, 8), pady=(6, 0))
@@ -208,8 +271,8 @@ class _UI:
         self._to_x_low_var = tk.StringVar()
         self._to_y_high_var = tk.StringVar()
         self._to_y_low_var = tk.StringVar()
-        _make_coord_row(tr_group, 'X', self._to_x_high_var, self._to_x_low_var)
-        _make_coord_row(tr_group, 'Y', self._to_y_high_var, self._to_y_low_var)
+        self._make_coord_row(tr_group, 'X', self._to_x_high_var, self._to_x_low_var)
+        self._make_coord_row(tr_group, 'Y', self._to_y_high_var, self._to_y_low_var)
 
         # Правый столбец: Сетка
         grid_col = tk.Frame(info_panel)
@@ -225,23 +288,29 @@ class _UI:
         self._mask_opacity_var = tk.DoubleVar()
         self._mask_opacity_text = tk.StringVar(value='0.00')
 
-        def _make_labeled_spin(parent: tk.Misc, label: str, var: tk.IntVar, from_: int = 0, to: int = 10000, inc: int = 1) -> None:
-            row = tk.Frame(parent)
-            row.pack(fill=tk.X, pady=2)
-            tk.Label(row, text=label, anchor='w').pack(side=tk.LEFT)
-            sp = tk.Spinbox(row, from_=from_, to=to, increment=inc, textvariable=var, width=8, justify='right')
-            sp.pack(side=tk.RIGHT)
-            self._edit_controls.append(sp)
-
-        _make_labeled_spin(grid_group, 'Толщина линии, px:', self._grid_width_var, 0, 1000, 1)
-        _make_labeled_spin(grid_group, 'Размер шрифта, px:', self._grid_font_size_var, 1, 2000, 1)
-        _make_labeled_spin(grid_group, 'Отступ надписей от края карты, px:', self._grid_text_margin_var, 0, 2000, 1)
-        _make_labeled_spin(grid_group, 'Поля маски надписи, px:', self._grid_label_bg_padding_var, 0, 500, 1)
+        self._make_labeled_spin(
+            grid_group, 'Толщина линии, px:', self._grid_width_var, (0, 1000)
+        )
+        self._make_labeled_spin(
+            grid_group, 'Размер шрифта, px:', self._grid_font_size_var, (1, 2000)
+        )
+        self._make_labeled_spin(
+            grid_group,
+            'Отступ надписей от края карты, px:',
+            self._grid_text_margin_var,
+            (0, 2000),
+        )
+        self._make_labeled_spin(
+            grid_group,
+            'Поля маски надписи, px:',
+            self._grid_label_bg_padding_var,
+            (0, 500),
+        )
 
         # Слайдер прозрачности маски
         opacity_row = tk.Frame(grid_group)
         opacity_row.pack(fill=tk.X, pady=2)
-        tk.Label(opacity_row, text='Прозрачность маски:').pack(side=tk.LEFT)
+        tk.Label(opacity_row, text='Интенсивность засветки:').pack(side=tk.LEFT)
         self._opacity_scale = ttk.Scale(
             opacity_row,
             from_=0.0,
@@ -263,7 +332,7 @@ class _UI:
         )
         opacity_val_lbl.pack(side=tk.RIGHT, padx=(10, 0))
 
-        # Контейнер предпросмотра
+    def _build_preview(self, frame: tk.Misc) -> None:
         self.preview_container = tk.Frame(frame, height=320)
         self.preview_container.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
         self.preview_container.pack_propagate(flag=False)
@@ -284,10 +353,12 @@ class _UI:
         self.preview_container.bind('<Configure>', self._on_preview_resize)
         self._preview_from_memory: bool = False
 
+    def _post_build_setup(self) -> None:
         # Заполним панель начальными значениями текущего профиля
         with contextlib.suppress(Exception):
             self._populate_profile_fields()
-        # Установим обработчики изменений, чтобы обновлять отображение и внутреннее состояние
+        # Установим обработчики изменений,
+        # чтобы обновлять отображение и внутреннее состояние
         try:
             for var in (
                 self._from_x_high_var,
@@ -304,8 +375,8 @@ class _UI:
                 self._grid_label_bg_padding_var,
             ):
                 var.trace_add('write', lambda *_args: self._on_field_change())
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug('Trace add failed: %s', e)
 
     def _init_state(self) -> None:
         self.finished: bool = False
@@ -322,89 +393,165 @@ class _UI:
         self._suspend_traces: int = 0
         # Отложенная задача для debounce обновления настроек из полей
         self._field_change_job_id: str | None = None
+        # Автозакрытие меню: хранение job-id для мониторинга курсора по каждому меню
+        self._menu_autoclose_jobs: dict[int, str] = {}
+
+    def _enable_menu_autoclose(self, menu: tk.Menu) -> None:
+        """Enable robust auto-close when the mouse leaves the dropdown menu.
+
+        Implementation details:
+        - Start a small polling loop when the menu is mapped (shown) to check the pointer.
+        - If the pointer is outside this menu and its cascaded submenus, unpost it.
+        - Stop polling when the menu is unmapped (closed) to avoid leaks.
+        - Works for any tk.Menu; call this for every dropdown you add in future.
+        """
+        # Helper: collect this menu and all its cascaded submenus (recursively)
+        def _collect_related(m: tk.Menu, acc: set[int]) -> None:
+            mid = id(m)
+            if mid in acc:
+                return
+            acc.add(mid)
+            try:
+                end_index = m.index('end')
+            except Exception:
+                end_index = None
+            if end_index is None:
+                return
+            for i in range(end_index + 1):
+                with contextlib.suppress(Exception):
+                    if str(m.type(i)) == 'cascade':
+                        sub_name = m.entrycget(i, 'menu')
+                        if sub_name:
+                            with contextlib.suppress(Exception):
+                                sub = m.nametowidget(sub_name)
+                                if isinstance(sub, tk.Menu):
+                                    _collect_related(sub, acc)
+
+        def _is_pointer_inside_any_related() -> bool:
+            # Get current pointer coords and containing widget
+            try:
+                x, y = self.root.winfo_pointerxy()
+                w = self.root.winfo_containing(x, y)
+            except Exception:
+                return False
+            if not isinstance(w, tk.Misc):
+                return False
+            # We only keep open if pointer is inside this menu or its cascaded submenus
+            related: set[int] = set()
+            _collect_related(menu, related)
+            # If the widget under pointer is a Menu and belongs to related set — OK
+            if isinstance(w, tk.Menu) and id(w) in related:
+                return True
+            # Otherwise — outside
+            return False
+
+        # Start/stop monitor on Map/Unmap
+        def _start_monitor(_e: tk.Event | None = None) -> None:
+            # Avoid duplicate monitors per menu
+            key = id(menu)
+            if key in self._menu_autoclose_jobs:
+                return
+            def _tick() -> None:
+                key_inner = id(menu)
+                if not getattr(menu, 'winfo_ismapped', lambda: False)():
+                    # Menu already closed; stop.
+                    jid = self._menu_autoclose_jobs.pop(key_inner, None)
+                    return
+                if not _is_pointer_inside_any_related():
+                    with contextlib.suppress(Exception):
+                        menu.unpost()
+                    self._menu_autoclose_jobs.pop(key_inner, None)
+                    return
+                # schedule next tick
+                try:
+                    jid2 = self.root.after(80, _tick)
+                    self._menu_autoclose_jobs[key_inner] = jid2
+                except Exception:
+                    self._menu_autoclose_jobs.pop(key_inner, None)
+            # First schedule
+            try:
+                jid = self.root.after(120, _tick)
+                self._menu_autoclose_jobs[key] = jid
+            except Exception:
+                pass
+
+        def _stop_monitor(_e: tk.Event | None = None) -> None:
+            key = id(menu)
+            jid = self._menu_autoclose_jobs.pop(key, None)
+            if jid is not None:
+                with contextlib.suppress(Exception):
+                    self.root.after_cancel(jid)
+
+        with contextlib.suppress(Exception):
+            menu.bind('<Map>', _start_monitor, add='+')
+        with contextlib.suppress(Exception):
+            menu.bind('<Unmap>', _stop_monitor, add='+')
 
     def _create_menu(self) -> None:
         with contextlib.suppress(Exception):
             menubar = tk.Menu(self.root)
-            profile_menu = tk.Menu(menubar, tearoff=0)
-            profile_menu.add_command(
-                label='Загрузить профиль из файла…', command=self._choose_profile_file
+            # Файл
+            file_menu = tk.Menu(menubar, tearoff=0)
+            # Автозакрытие меню при уходе курсора
+            self._enable_menu_autoclose(file_menu)
+            # Пункт сохранения карты — аналог одноимённой кнопки
+            file_menu.add_command(
+                label='Сохранить карту…', command=self._handle_save_click, state=tk.DISABLED
             )
-            menubar.add_cascade(label='Профиль', menu=profile_menu)
+            # Индекс пункта сохранения (для дальнейшего управления состоянием)
+            try:
+                self.file_menu_save_index = file_menu.index('end')
+            except Exception:
+                self.file_menu_save_index = 0
+            # Пункт загрузки профиля
+            file_menu.add_separator()
+            file_menu.add_command(
+                label='Загрузить профиль…', command=self._choose_profile_file
+            )
+            # Пункт сохранения профиля
+            file_menu.add_command(
+                label='Сохранить профиль…', command=self._handle_save_profile_click
+            )
+            menubar.add_cascade(label='Файл', menu=file_menu)
+
+            # Настройка меню приложения
             self.root.config(menu=menubar)
             self.menubar = menubar
-            self.profile_menu = profile_menu
+            self.file_menu = file_menu
 
-    def _populate_profile_fields(self, settings: _SettingsProto | Any | None = None) -> None:
+    def _populate_profile_fields(
+        self, settings: _SettingsProto | object | None = None
+    ) -> None:
         """Заполнить поля панели актуальными значениями профиля."""
         try:
             if settings is None:
                 settings = load_profile(constants.CURRENT_PROFILE)
         except Exception:
             return
+        # На время программного обновления значений подавляем обработчики изменений
+        prev_suspend = getattr(self, '_suspend_traces', 0)
+        self._suspend_traces = prev_suspend + 1
         try:
-            # На время программного обновления значений подавляем обработчики изменений
-            prev_suspend = getattr(self, '_suspend_traces', 0)
-            setattr(self, '_suspend_traces', prev_suspend + 1)
-            # Координаты (старшие, младшие) — в диапазоне 0..99, без ведущих нулей
-            def _clamp_0_99(v: int | None) -> int:
-                try:
-                    v_int = 0 if v is None else int(v)
-                except Exception:
-                    v_int = 0
-                if v_int < 0:
-                    v_int = 0
-                if v_int > 99:
-                    v_int = 99
-                return v_int
-
-            def _set_strvar(var: tk.StringVar, val: int) -> None:
-                s = str(val)
-                if var.get() != s:
-                    var.set(s)
-
-            _set_strvar(self._from_x_high_var, _clamp_0_99(getattr(settings, 'from_x_high', 0)))
-            _set_strvar(self._from_x_low_var, _clamp_0_99(getattr(settings, 'from_x_low', 0)))
-            _set_strvar(self._from_y_high_var, _clamp_0_99(getattr(settings, 'from_y_high', 0)))
-            _set_strvar(self._from_y_low_var, _clamp_0_99(getattr(settings, 'from_y_low', 0)))
-
-            _set_strvar(self._to_x_high_var, _clamp_0_99(getattr(settings, 'to_x_high', 0)))
-            _set_strvar(self._to_x_low_var, _clamp_0_99(getattr(settings, 'to_x_low', 0)))
-            _set_strvar(self._to_y_high_var, _clamp_0_99(getattr(settings, 'to_y_high', 0)))
-            _set_strvar(self._to_y_low_var, _clamp_0_99(getattr(settings, 'to_y_low', 0)))
-
-            # Параметры сетки
-            def _set_intvar(var: tk.IntVar, val: int) -> None:
-                try:
-                    if int(var.get()) != int(val):
-                        var.set(int(val))
-                except Exception:
-                    var.set(int(val))
-
-            _set_intvar(self._grid_width_var, int(getattr(settings, 'grid_width_px', 0)))
-            _set_intvar(self._grid_font_size_var, int(getattr(settings, 'grid_font_size', 0)))
-            _set_intvar(self._grid_text_margin_var, int(getattr(settings, 'grid_text_margin', 0)))
-            _set_intvar(self._grid_label_bg_padding_var, int(getattr(settings, 'grid_label_bg_padding', 0)))
-            try:
+            self._apply_coords_from_settings(settings)
+            self._apply_grid_from_settings(settings)
+            # Прозрачность маски
+            with contextlib.suppress(Exception):
                 opacity = float(getattr(settings, 'mask_opacity', 0.0))
-            except Exception:
+            if not isinstance(opacity, float):
                 opacity = 0.0
             self._mask_opacity_var.set(opacity)
             with contextlib.suppress(Exception):
                 self._opacity_scale.set(opacity)
-            # Текстовое отображение
-            self._mask_opacity_text.set(f"{opacity:.2f}")
+            self._mask_opacity_text.set(f'{opacity:.2f}')
             # Сохраним текущие настройки
             self._current_settings = settings  # type: ignore[assignment]
-        except Exception:
+        except Exception as e:
             # Если что-то пойдёт не так — не падаем UI
-            pass
+            logger.debug('Failed to populate fields: %s', e)
         finally:
-            try:
+            with contextlib.suppress(Exception):
                 cur_suspend = getattr(self, '_suspend_traces', 1)
-                setattr(self, '_suspend_traces', max(0, cur_suspend - 1))
-            except Exception:
-                pass
+                self._suspend_traces = max(0, cur_suspend - 1)
 
     def _on_opacity_change(self) -> None:
         try:
@@ -413,48 +560,112 @@ class _UI:
             v = 0.0
         v = max(0.0, min(1.0, v))
         self._mask_opacity_var.set(v)
-        self._mask_opacity_text.set(f"{v:.2f}")
+        self._mask_opacity_text.set(f'{v:.2f}')
         # Не навязываем немедленное обновление модулей; сбор будет при запуске
 
-    def _validate_coord_input(self, new_val: str) -> bool:
-        """Валидация ввода координаты по ключевым нажатиям: допускаем '' или до 2 цифр."""
+    def _clamp_0_99(self, v: int | None) -> int:
         try:
-            if new_val == "":
+            v_int = 0 if v is None else int(v)
+        except Exception:
+            v_int = 0
+        v_int = max(v_int, 0)
+        return min(v_int, 99)
+
+    def _set_strvar(self, var: tk.StringVar, val: int) -> None:
+        s = str(val)
+        if var.get() != s:
+            var.set(s)
+
+    def _set_intvar(self, var: tk.IntVar, val: int) -> None:
+        try:
+            if int(var.get()) != int(val):
+                var.set(int(val))
+        except Exception:
+            var.set(int(val))
+
+    def _apply_coords_from_settings(self, settings: object) -> None:
+        self._set_strvar(
+            self._from_x_high_var, self._clamp_0_99(getattr(settings, 'from_x_high', 0))
+        )
+        self._set_strvar(
+            self._from_x_low_var, self._clamp_0_99(getattr(settings, 'from_x_low', 0))
+        )
+        self._set_strvar(
+            self._from_y_high_var, self._clamp_0_99(getattr(settings, 'from_y_high', 0))
+        )
+        self._set_strvar(
+            self._from_y_low_var, self._clamp_0_99(getattr(settings, 'from_y_low', 0))
+        )
+        self._set_strvar(
+            self._to_x_high_var, self._clamp_0_99(getattr(settings, 'to_x_high', 0))
+        )
+        self._set_strvar(
+            self._to_x_low_var, self._clamp_0_99(getattr(settings, 'to_x_low', 0))
+        )
+        self._set_strvar(
+            self._to_y_high_var, self._clamp_0_99(getattr(settings, 'to_y_high', 0))
+        )
+        self._set_strvar(
+            self._to_y_low_var, self._clamp_0_99(getattr(settings, 'to_y_low', 0))
+        )
+
+    def _apply_grid_from_settings(self, settings: object) -> None:
+        self._set_intvar(
+            self._grid_width_var, int(getattr(settings, 'grid_width_px', 0))
+        )
+        self._set_intvar(
+            self._grid_font_size_var, int(getattr(settings, 'grid_font_size', 0))
+        )
+        self._set_intvar(
+            self._grid_text_margin_var, int(getattr(settings, 'grid_text_margin', 0))
+        )
+        self._set_intvar(
+            self._grid_label_bg_padding_var,
+            int(getattr(settings, 'grid_label_bg_padding', 0)),
+        )
+
+    def _validate_coord_input(self, new_val: str) -> bool:
+        """
+        Валидация ввода координаты по ключевым нажатиям.
+
+        Допускаем пустую строку или до MAX_COORD_DIGITS цифр.
+        """
+        try:
+            if new_val == '':
                 return True
-            if len(new_val) > 2:
-                return False
-            if not new_val.isdigit():
+            if len(new_val) > MAX_COORD_DIGITS:
                 return False
             # Промежуточные значения вроде '0' или '9' допустимы
-            return True
+            return new_val.isdigit()
         except Exception:
             return False
 
     def _normalize_coord_var(self, var: tk.StringVar) -> None:
-        """Нормализует значение var в диапазон 0..99 (без ведущих нулей) с минимальными перезаписями."""
+        """
+        Нормализует значение var в диапазон 0..99 (без ведущих нулей).
+
+        Стремимся к минимальным перезаписям.
+        """
         try:
             s = var.get()
             if s is None:
-                s = ""
+                s = ''
             s = str(s).strip()
-            if s == "":
+            if s == '':
                 v = 0
             else:
                 try:
                     v = int(s)
                 except Exception:
                     v = 0
-            if v < 0:
-                v = 0
-            if v > 99:
-                v = 99
+            v = max(v, 0)
+            v = min(v, 99)
             new_s = str(v)
             if s != new_s:
                 var.set(new_s)
         except Exception:
             with contextlib.suppress(Exception):
-                var.set("0")
-
+                var.set('0')
 
     def _on_field_change(self) -> None:
         # Подавление реакций во время программных обновлений
@@ -462,8 +673,10 @@ class _UI:
             return
         # Debounce: откладываем перерасчёт настроек, отменяя предыдущий
         if getattr(self, '_field_change_job_id', None) is not None:
-            with contextlib.suppress(Exception):
-                self.root.after_cancel(self._field_change_job_id)
+            job_id = self._field_change_job_id
+            if job_id is not None:
+                with contextlib.suppress(Exception):
+                    self.root.after_cancel(job_id)
             self._field_change_job_id = None
 
         def _apply_changes() -> None:
@@ -482,10 +695,11 @@ class _UI:
                 )
                 for v in coord_vars:
                     s = v.get()
-                    if s is None or s == "":
-                        return  # пользователь ещё вводит значение — не пересобирать настройки
-            except Exception:
-                pass
+                    if s is None or s == '':
+                        # пользователь ещё вводит значение — не пересобирать настройки
+                        return
+            except Exception as e:
+                logger.debug('Field change pre-check failed: %s', e)
             with contextlib.suppress(Exception):
                 settings = self._build_settings_from_fields()
                 if settings is not None:
@@ -494,12 +708,14 @@ class _UI:
         # Небольшая задержка для сглаживания серий нажатий клавиш
         self._field_change_job_id = self.root.after(120, _apply_changes)
 
-    def _build_settings_from_fields(self) -> Any | None:
-        """Собирает объект настроек из текущих значений полей. Возвращает None при ошибке.
-        Не изменяет значения полей (без var.set), чтобы избежать каскадных trace-обработчиков.
+    def _build_settings_from_fields(self) -> MapSettings | None:
+        """
+        Собрать объект настроек из текущих значений полей.
+
+        Возвращает None при ошибке. Не изменяет значения полей (без var.set),
+        чтобы избежать каскадных trace-обработчиков.
         """
         try:
-            from model import MapSettings  # локальный импорт, чтобы избежать циклов
             # Базовые значения, которые не редактируются в этой панели
             output_path = getattr(self._current_settings, 'output_path', None)
             if output_path is None:
@@ -518,13 +734,10 @@ class _UI:
                     v = int(s)
                 except Exception:
                     v = 0
-                if v < 0:
-                    v = 0
-                if v > 99:
-                    v = 99
-                return v
+                v = max(v, 0)
+                return min(v, 99)
 
-            settings = MapSettings(
+            return MapSettings(
                 from_x_high=_parse_0_99(self._from_x_high_var),
                 from_y_high=_parse_0_99(self._from_y_high_var),
                 to_x_high=_parse_0_99(self._to_x_high_var),
@@ -540,21 +753,61 @@ class _UI:
                 grid_label_bg_padding=int(self._grid_label_bg_padding_var.get()),
                 mask_opacity=float(self._mask_opacity_var.get()),
             )
-            return settings
         except Exception as e:
             logger.debug('Failed to build settings from fields: %s', e)
             return None
 
     def _run_task(self) -> None:
+        def _classify_exception(exc: BaseException) -> str:
+            """Возвращает пользовательское сообщение по типу ошибки."""
+            # Собираем цепочку исключений для анализа
+            def _iter_chain(e: BaseException):
+                seen: set[int] = set()
+                cur: BaseException | None = e
+                while cur is not None and id(cur) not in seen:
+                    seen.add(id(cur))
+                    yield cur
+                    nxt = cur.__cause__ or cur.__context__
+                    cur = nxt if isinstance(nxt, BaseException) else None
+
+            # 1) Недействительный/заблокированный API ключ: 401/403
+            for ex in _iter_chain(exc):
+                if isinstance(ex, aiohttp.ClientResponseError):
+                    sc = getattr(ex, 'status', None)
+                    if sc in (401, 403):
+                        return 'Неверный или заблокированный ключ API.'
+                msg = str(ex).lower()
+                if 'доступ запрещ' in msg or 'http 401' in msg or 'http 403' in msg or 'unauthorized' in msg or 'forbidden' in msg:
+                    return 'Неверный или заблокированный ключ API.'
+
+            # 2) Проблемы соединения/таймаута/интернета
+            net_errnos = {errno.ECONNREFUSED, errno.ETIMEDOUT, errno.ENETUNREACH, errno.EHOSTUNREACH}
+            for ex in _iter_chain(exc):
+                if isinstance(ex, (asyncio.TimeoutError, aiohttp.ServerTimeoutError, aiohttp.ClientConnectionError, aiohttp.ClientConnectorError, aiohttp.ClientOSError)):
+                    return 'Невозможно соединиться с сервером. Проверьте интернет-соединение.'
+                if isinstance(ex, socket.gaierror):
+                    return 'Невозможно соединиться с сервером. Проверьте интернет-соединение.'
+                if isinstance(ex, OSError) and getattr(ex, 'errno', None) in net_errnos:
+                    return 'Невозможно соединиться с сервером. Проверьте интернет-соединение.'
+                # Строковые признаки
+                m = str(ex).lower()
+                if any(s in m for s in ['timed out', 'timeout', 'connection reset', 'temporary failure in name resolution', 'cannot connect', 'failed to establish a new connection']):
+                    return 'Невозможно соединиться с сервером. Проверьте интернет-соединение.'
+
+            # 3) Прочие ошибки
+            return 'Ошибка при обработке задачи. Обратитесь к разработчику.'
+
         try:
             self.on_create_map()
         except SystemExit as e:
             err_text = str(e) or 'Приложение завершилось'
             self.root.after(0, lambda: self._on_done(ok=False, err_text=err_text))
             return
-        except Exception:
-            err_text = traceback.format_exc()
-            self.root.after(0, lambda: self._on_done(ok=False, err_text=err_text))
+        except Exception as e:
+            # Выводим трейс в консоль/лог, но не показываем пользователю
+            logging.exception('Ошибка при создании карты')
+            user_msg = _classify_exception(e)
+            self.root.after(0, lambda: self._on_done(ok=False, err_text=user_msg))
             return
         self.root.after(0, lambda: self._on_done(ok=True, err_text=None))
 
@@ -577,6 +830,11 @@ class _UI:
         self.save_btn.config(
             state=(tk.NORMAL if self.preview_src_img is not None else tk.DISABLED)
         )
+        with contextlib.suppress(Exception):
+            fm = getattr(self, 'file_menu', None)
+            idx = getattr(self, 'file_menu_save_index', 0)
+            if isinstance(fm, tk.Menu):
+                fm.entryconfig(idx, state=(tk.NORMAL if self.preview_src_img is not None else tk.DISABLED))
         if ok:
             self.status_var.set('Готово')
             # Если предпросмотр уже был показан из памяти — не перезагружаем из файла
@@ -588,6 +846,11 @@ class _UI:
                         tk.NORMAL if self.preview_src_img is not None else tk.DISABLED
                     )
                 )
+                with contextlib.suppress(Exception):
+                    fm = getattr(self, 'file_menu', None)
+                    idx = getattr(self, 'file_menu_save_index', 0)
+                    if isinstance(fm, tk.Menu):
+                        fm.entryconfig(idx, state=(tk.NORMAL if self.preview_src_img is not None else tk.DISABLED))
         else:
             self.status_var.set('Ошибка при создании карты')
             messagebox.showerror('Ошибка', err_text or 'Неизвестная ошибка')
@@ -628,6 +891,48 @@ class _UI:
             if not proceed:
                 return
 
+        # Сначала валидируем введённые координаты и размеры участка
+        try:
+            cur_settings = self._build_settings_from_fields()
+        except Exception as e:
+            messagebox.showerror('Ошибка', f'Не удалось прочитать параметры: {e}')
+            return
+        if cur_settings is None:
+            messagebox.showerror('Ошибка', 'Не удалось прочитать параметры')
+            return
+        try:
+            # Проверка относительного положения углов (строго левее и ниже)
+            bl_x = cur_settings.bottom_left_x_sk42_gk
+            bl_y = cur_settings.bottom_left_y_sk42_gk
+            tr_x = cur_settings.top_right_x_sk42_gk
+            tr_y = cur_settings.top_right_y_sk42_gk
+            if not (bl_x < tr_x and bl_y < tr_y):
+                messagebox.showwarning(
+                    'Неверные координаты',
+                    'Левый нижний угол карты должен быть всегда ниже и левее правого верхнего.',
+                )
+                return
+            # Проверка предельного размера стороны участка
+            width_m = tr_x - bl_x
+            height_m = tr_y - bl_y
+            max_side_m = float(getattr(constants, 'MAX_SIDE_SIZE', 20)) * 1000.0
+            if width_m > max_side_m or height_m > max_side_m:
+                # Сформируем текст с указанием превышения
+                width_km = width_m / 1000.0
+                height_km = height_m / 1000.0
+                messagebox.showwarning(
+                    'Слишком большой участок',
+                    (
+                        'Общая площадь участка не должна превышать '
+                        f'{int(getattr(constants, "MAX_SIDE_SIZE", 20))} км по любой стороне.\n'
+                        f'Текущие размеры: ширина ≈ {width_km:.2f} км, высота ≈ {height_km:.2f} км.'
+                    ),
+                )
+                return
+        except Exception as e:
+            messagebox.showerror('Ошибка', f'Ошибка при проверке параметров: {e}')
+            return
+
         # На время загрузки и обработки карты делаем меню и элементы
         # управления неактивными
         self._set_all_controls_enabled(enabled=False)
@@ -640,6 +945,11 @@ class _UI:
         set_preview_image_callback(self.preview_image_cb)
         # Пока идёт создание — блокируем сохранение
         self.save_btn.config(state=tk.DISABLED)
+        with contextlib.suppress(Exception):
+            fm = getattr(self, 'file_menu', None)
+            idx = getattr(self, 'file_menu_save_index', 0)
+            if isinstance(fm, tk.Menu):
+                fm.entryconfig(idx, state=tk.DISABLED)
 
         self.progress.config(mode='determinate', maximum=100)
         self.progress['value'] = 0
@@ -651,6 +961,11 @@ class _UI:
         # Сбросим флаг несохранённости только после подтверждения пользователем выше
         self._unsaved = False
         self.save_btn.config(state=tk.DISABLED)
+        with contextlib.suppress(Exception):
+            fm = getattr(self, 'file_menu', None)
+            idx = getattr(self, 'file_menu_save_index', 0)
+            if isinstance(fm, tk.Menu):
+                fm.entryconfig(idx, state=tk.DISABLED)
         # Отменим отложенную подгонку, если она была
         if self._resize_job_id is not None:
             with contextlib.suppress(Exception):
@@ -663,9 +978,8 @@ class _UI:
 
         # Соберём настройки из полей и применим их к модулям
         try:
-            cur_settings = self._build_settings_from_fields()
-            if cur_settings is not None:
-                self._refresh_modules_with_settings(cur_settings)
+            # cur_settings уже собран и проверен выше
+            self._refresh_modules_with_settings(cur_settings)
         except Exception as e:
             logger.debug('Failed to build/apply settings from fields: %s', e)
         threading.Thread(target=self._run_task, daemon=True).start()
@@ -739,6 +1053,11 @@ class _UI:
             self._unsaved = True
             # Разрешим сохранение
             self.save_btn.config(state=tk.NORMAL)
+            with contextlib.suppress(Exception):
+                fm = getattr(self, 'file_menu', None)
+                idx = getattr(self, 'file_menu_save_index', 0)
+                if isinstance(fm, tk.Menu):
+                    fm.entryconfig(idx, state=tk.NORMAL)
             # Рассчитываем текущие доступные размеры и подгоняем
             self.root.update_idletasks()
             max_w = max(200, self.preview_container.winfo_width() or 0)
@@ -769,6 +1088,10 @@ class _UI:
             self.btn.config(state=state)
         with contextlib.suppress(Exception):
             self.save_btn.config(state=state)
+        with contextlib.suppress(Exception):
+            self.profile_load_btn.config(state=state)
+        with contextlib.suppress(Exception):
+            self.profile_save_btn.config(state=state)
         # Editable widgets (spinboxes, scale)
         for w in getattr(self, '_edit_controls', []):
             with contextlib.suppress(Exception):
@@ -797,6 +1120,9 @@ class _UI:
         profile_menu = getattr(self, 'profile_menu', None)
         if isinstance(profile_menu, tk.Menu):
             self._set_menu_enabled(profile_menu, enabled=enabled)
+        file_menu = getattr(self, 'file_menu', None)
+        if isinstance(file_menu, tk.Menu):
+            self._set_menu_enabled(file_menu, enabled=enabled)
 
     def mainloop(self) -> None:
         self.root.mainloop()
@@ -861,6 +1187,10 @@ class _UI:
                     self.status_var.set(f'Карта сохранена: {Path(fp).name}')
                     with contextlib.suppress(Exception):
                         self.save_btn.config(state=tk.DISABLED)
+                        fm = getattr(self, 'file_menu', None)
+                        idx = getattr(self, 'file_menu_save_index', 0)
+                        if isinstance(fm, tk.Menu):
+                            fm.entryconfig(idx, state=tk.DISABLED)
                 else:
                     # В случае ошибки разрешим повторную попытку сохранения
                     self.status_var.set('Ошибка сохранения')
@@ -869,6 +1199,10 @@ class _UI:
                     )
                     with contextlib.suppress(Exception):
                         self.save_btn.config(state=tk.NORMAL)
+                        fm = getattr(self, 'file_menu', None)
+                        idx = getattr(self, 'file_menu_save_index', 0)
+                        if isinstance(fm, tk.Menu):
+                            fm.entryconfig(idx, state=tk.NORMAL)
 
             self.root.after(0, _on_done)
 
@@ -922,6 +1256,11 @@ class _UI:
             self._preview_from_memory = False
             self._unsaved = False
             self.save_btn.config(state=tk.DISABLED)
+            with contextlib.suppress(Exception):
+                fm = getattr(self, 'file_menu', None)
+                idx = getattr(self, 'file_menu_save_index', 0)
+                if isinstance(fm, tk.Menu):
+                    fm.entryconfig(idx, state=tk.DISABLED)
             self.preview_label.config(
                 image='',
                 text='Профиль загружен. Предпросмотр появится после создания карты',
@@ -933,6 +1272,68 @@ class _UI:
                 'Профиль применён частично',
                 f'Профиль загружен, но возникла проблема при применении:\n{e}',
             )
+
+    def _handle_save_profile_click(self) -> None:
+        """Сохранить текущий профиль (MapSettings) в TOML."""
+        # Сначала пытаемся собрать настройки из текущих полей, чтобы учесть изменения
+        settings: MapSettings | None = None
+        with contextlib.suppress(Exception):
+            settings = self._build_settings_from_fields()
+        if settings is None:
+            # Фолбэк: берём последние известные настройки
+            with contextlib.suppress(Exception):
+                cs = getattr(self, '_current_settings', None)
+                if isinstance(cs, MapSettings):
+                    settings = cs
+        if settings is None:
+            # Ещё один фолбэк — пробуем загрузить текущий профиль
+            try:
+                settings = load_profile(constants.CURRENT_PROFILE)
+            except Exception as e:
+                messagebox.showerror('Сохранение профиля', f'Нет данных профиля для сохранения:\n{e}')
+                return
+
+        # Определяем каталог и предлагаемое имя файла
+        curp = Path(str(constants.CURRENT_PROFILE))
+        if curp.suffix.lower() == '.toml':
+            initialdir = curp.parent
+            initialfile = curp.name
+        else:
+            # Если указано имя без .toml — возьмём стандартную папку профилей
+            try:
+                initialdir = profile_path('default').parent
+            except Exception:
+                initialdir = Path.cwd()
+            # Предложим текущее имя + .toml
+            stem = str(constants.CURRENT_PROFILE).strip() or 'profile'
+            initialfile = f'{stem}.toml'
+
+        file_path = filedialog.asksaveasfilename(
+            parent=self.root,
+            title='Сохранить профиль как TOML',
+            initialdir=str(initialdir),
+            initialfile=str(initialfile),
+            defaultextension='.toml',
+            filetypes=[('TOML файлы', '*.toml'), ('Все файлы', '*.*')],
+        )
+        if not file_path:
+            return
+
+        # Формируем TOML и сохраняем
+        try:
+            data = settings.model_dump()
+            text = tomlkit.dumps(data)
+            Path(file_path).write_text(text, encoding='utf-8')
+        except Exception as e:
+            messagebox.showerror('Сохранение профиля', f'Не удалось сохранить профиль:\n{e}')
+            return
+
+        # Обновим текущий профиль и сообщим пользователю
+        try:
+            constants.CURRENT_PROFILE = file_path
+            self.status_var.set(f'Профиль сохранён: {Path(file_path).name}')
+        except Exception:
+            pass
 
     def _refresh_modules_with_settings(self, settings: _SettingsProto) -> None:
         """

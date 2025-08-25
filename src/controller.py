@@ -87,7 +87,16 @@ async def download_satellite_rectangle(  # noqa: PLR0915, PLR0913
     if zone < 1 or zone > MAX_GK_ZONE:
         # Fallback: пытаемся определить зону из координаты
         zone = max(1, min(MAX_GK_ZONE, int((center_x_sk42_gk - 500000) // 1000000) + 1))
-    crs_sk42_gk = CRS.from_epsg(28400 + zone)
+    try:
+        crs_sk42_gk = CRS.from_epsg(28400 + zone)
+    except Exception:
+        # Fallback: construct SK-42 / Gauss–Krüger (6°) CRS manually when EPSG code is unavailable
+        lon0 = zone * 6 - 3  # central meridian of the 6-degree zone
+        proj4 = (
+            f"+proj=tmerc +lat_0=0 +lon_0={lon0} +k=1 "
+            f"+x_0=500000 +y_0=0 +ellps=krass +units=m +no_defs +type=crs"
+        )
+        crs_sk42_gk = CRS.from_proj4(proj4)
     sp.stop('Подготовка: зона определена')
 
     sp = LiveSpinner('Подготовка: конвертация из ГК в СК-42')
@@ -99,6 +108,22 @@ async def download_satellite_rectangle(  # noqa: PLR0915, PLR0913
         center_y_sk42_gk,
     )
     sp.stop('Подготовка: координаты СК-42 готовы')
+
+    # Проверка зоны применимости СК-42 (без формирования карты вне зоны)
+    from constants import (
+        SK42_VALID_LAT_MIN,
+        SK42_VALID_LAT_MAX,
+        SK42_VALID_LON_MIN,
+        SK42_VALID_LON_MAX,
+    )
+    if not (
+        SK42_VALID_LON_MIN <= center_lng_sk42 <= SK42_VALID_LON_MAX
+        and SK42_VALID_LAT_MIN <= center_lat_sk42 <= SK42_VALID_LAT_MAX
+    ):
+        # Завершаем задачу с понятным предупреждением для пользователя
+        raise SystemExit(
+            'Выбранная область вне зоны применимости СК-42. Карта не будет сформирована.'
+        )
 
     sp = LiveSpinner('Подготовка: создание трансформеров')
     sp.start()

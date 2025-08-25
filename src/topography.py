@@ -49,7 +49,16 @@ def build_transformers_sk42(
     """
     zone = int(math.floor((zone_from_lon + 3) / 6.0) + 1)
     zone = max(1, min(60, zone))
-    crs_sk42_gk = CRS.from_epsg(28400 + zone)  # EPSG:284xx
+    try:
+        crs_sk42_gk = CRS.from_epsg(28400 + zone)  # EPSG:284xx
+    except Exception:
+        # Fallback: construct SK-42 / Gauss–Krüger (6°) CRS manually when EPSG code is unavailable
+        lon0 = zone * 6 - 3  # central meridian of the 6-degree zone
+        proj4 = (
+            f"+proj=tmerc +lat_0=0 +lon_0={lon0} +k=1 "
+            f"+x_0=500000 +y_0=0 +ellps=krass +units=m +no_defs +type=crs"
+        )
+        crs_sk42_gk = CRS.from_proj4(proj4)
 
     if custom_helmert:
         dx, dy, dz, rx_as, ry_as, rz_as, ds_ppm = custom_helmert

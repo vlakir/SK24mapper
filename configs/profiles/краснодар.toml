@@ -1,0 +1,14 @@
+from_x_high = 49
+from_y_high = 74
+to_x_high = 50
+to_y_high = 75
+from_x_low = 81
+from_y_low = 90
+to_x_low = 3
+to_y_low = 11
+output_path = "../maps/map.png"
+grid_width_px = 4
+grid_font_size = 86
+grid_text_margin = 43
+grid_label_bg_padding = 6
+mask_opacity = 0.35

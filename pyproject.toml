@@ -1,5 +1,5 @@
 [tool.poetry]
-name = "mil-mapper"
+name = "SK42mapper"
 version = "0.1.0"
 description = ""
 authors = ["vlakir <vladimir@kirievskiy.ru>"]
