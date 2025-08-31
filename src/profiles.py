@@ -3,14 +3,20 @@ from pathlib import Path
 import tomlkit
 
 from constants import PROFILES_DIR
-from model import MapSettings
-
-PROFILES_DIR = Path(PROFILES_DIR)
+from domen import MapSettings
 
 
 def ensure_profiles_dir() -> Path:
-    PROFILES_DIR.mkdir(parents=True, exist_ok=True)
-    return PROFILES_DIR
+    # Resolve path relative to project root
+    if Path(PROFILES_DIR).is_absolute():
+        profiles_dir = Path(PROFILES_DIR)
+    else:
+        # Get project root (parent of src directory)
+        project_root = Path(__file__).parent.parent
+        profiles_dir = project_root / PROFILES_DIR
+
+    profiles_dir.mkdir(parents=True, exist_ok=True)
+    return profiles_dir
 
 
 def list_profiles() -> list[str]:

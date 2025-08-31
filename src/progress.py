@@ -1,10 +1,12 @@
 import asyncio
 import contextlib
-import sys
+import logging
 import threading
 import time
 from collections.abc import Callable
 from typing import ClassVar
+
+logger = logging.getLogger(__name__)
 
 
 class SingleLineRenderer:
@@ -19,19 +21,18 @@ class SingleLineRenderer:
         """Полностью очистить текущую строку прогресса."""
         with self._lock:
             if self.single_line and self._last_len > 0:
-                sys.stdout.write('\r' + ' ' * self._last_len + '\r')
-                sys.stdout.flush()
+                # Console output removed - GUI callbacks handle progress display
                 self._last_len = 0
 
     def write_line(self, msg: str) -> None:
         """Перерисовать текущую строку прогресса."""
         with self._lock:
             if self.single_line:
-                pad = max(0, self._last_len - len(msg))
-                sys.stdout.write('\r' + msg + (' ' * pad))
+                max(0, self._last_len - len(msg))
+                # Console output removed - GUI callbacks handle progress display
             else:
-                sys.stdout.write('\r' + msg)
-            sys.stdout.flush()
+                # Console output removed - GUI callbacks handle progress display
+                pass
             self._last_len = len(msg)
 
 
@@ -84,6 +85,27 @@ def publish_preview_image(img: object) -> bool:
     return False
 
 
+def cleanup_all_progress_resources() -> None:
+    """
+    Очистка всех ресурсов прогресса: остановка спиннеров и очистка колбэков.
+
+    Вызывается при закрытии приложения.
+    """
+    # Останавливаем все активные спиннеры
+    _spinner_registry.stop_all()
+
+    # Очищаем все глобальные колбэки
+    _CbStore.progress = None
+    _CbStore.spinner_start = None
+    _CbStore.spinner_stop = None
+    _CbStore.preview_image = None
+
+
+def force_stop_all_spinners() -> None:
+    """Принудительная остановка всех активных спиннеров."""
+    _spinner_registry.stop_all()
+
+
 class LiveSpinner:
     """«Крутилка» для операций, у которых нет естественных шагов."""
 
@@ -115,17 +137,62 @@ class LiveSpinner:
         if _CbStore.spinner_start is not None:
             with contextlib.suppress(Exception):
                 _CbStore.spinner_start(self.label)
+        # Регистрируем спиннер в глобальном реестре
+        _spinner_registry.register(self)
         self._th.start()
 
     def stop(self, final_message: str | None = None) -> None:
         self._stop.set()
-        self._th.join()
+        # Ждем завершения потока с таймаутом
+        self._th.join(timeout=1.0)
+        if self._th.is_alive():
+            # Если поток не завершился, помечаем его как daemon для принудительного завершения
+            self._th.daemon = True
+        # Удаляем спиннер из реестра
+        _spinner_registry.unregister(self)
         # Сообщаем GUI о завершении неопределённой операции
         if _CbStore.spinner_stop is not None:
             with contextlib.suppress(Exception):
                 _CbStore.spinner_stop(self.label)
         if final_message is not None:
             self._writer.write_line(final_message)
+
+
+# Глобальный реестр активных LiveSpinner'ов для принудительной остановки
+class _SpinnerRegistry:
+    def __init__(self) -> None:
+        self._active_spinners: list[LiveSpinner] = []
+        self._lock = threading.Lock()
+
+    def register(self, spinner: LiveSpinner) -> None:
+        """Регистрирует активный спиннер."""
+        with self._lock:
+            if spinner not in self._active_spinners:
+                self._active_spinners.append(spinner)
+
+    def unregister(self, spinner: LiveSpinner) -> None:
+        """Удаляет спиннер из реестра."""
+        with self._lock:
+            if spinner in self._active_spinners:
+                self._active_spinners.remove(spinner)
+
+    def stop_all(self) -> None:
+        """Принудительно останавливает все активные спиннеры."""
+        with self._lock:
+            spinners_copy = self._active_spinners.copy()
+            self._active_spinners.clear()
+
+        for spinner in spinners_copy:
+            try:
+                if not spinner._stop.is_set():
+                    spinner.stop(final_message=None)
+            except Exception as e:
+                # Log errors during forced spinner shutdown but don't raise
+                logger.debug(f'Error stopping spinner {spinner.label}: {e}')
+
+
+# Глобальный экземпляр реестра спиннеров
+_spinner_registry = _SpinnerRegistry()
 
 
 class ConsoleProgress:
@@ -189,4 +256,5 @@ class ConsoleProgress:
             self.step_sync(n)
 
     def close(self) -> None:
-        sys.stdout.flush()
+        # Console output removed - GUI callbacks handle progress display
+        pass

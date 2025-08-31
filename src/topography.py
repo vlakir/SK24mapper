@@ -8,7 +8,6 @@ from PIL import Image
 from pyproj import CRS, Transformer
 
 from constants import (
-    CURRENT_PROFILE,
     EARTH_RADIUS_M,
     EAST_VECTOR_SAMPLE_M,
     EPSG_SK42_GK_BASE,
@@ -34,21 +33,11 @@ from constants import (
     WORLD_LNG_SPAN_DEG,
     XY_EPSILON,
 )
-from profiles import load_profile
-
-settings = load_profile(CURRENT_PROFILE)
 
 # Географическая СК-42 (Pulkovo 1942)
 crs_sk42_geog = CRS.from_epsg(SK42_CODE)
 # Географическая WGS84
 crs_wgs84 = CRS.from_epsg(WGS84_CODE)
-
-# Центр и размеры области в системе GK:
-# ширина по ΔX (горизонталь), высота по ΔY (вертикаль)
-center_x_sk42_gk = (settings.bottom_left_x_sk42_gk + settings.top_right_x_sk42_gk) / 2
-center_y_sk42_gk = (settings.bottom_left_y_sk42_gk + settings.top_right_y_sk42_gk) / 2
-width_m = settings.top_right_x_sk42_gk - settings.bottom_left_x_sk42_gk
-height_m = settings.top_right_y_sk42_gk - settings.bottom_left_y_sk42_gk
 
 
 def build_transformers_sk42(

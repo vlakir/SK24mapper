@@ -1,1 +1,1 @@
-# Package marker for gui subpackage.
+"""GUI module for mil_mapper application."""
