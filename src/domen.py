@@ -1,10 +1,15 @@
 from pydantic import BaseModel, field_validator
 
-from constants import ADDITIVE_RATIO, PNG_COMPRESS_MAX, PNG_COMPRESS_MIN
+from constants import ADDITIVE_RATIO
 
 
 class MapSettings(BaseModel):
     """Установки, которые раньше были разбросаны по модулю, собраны в один датакласс."""
+
+    model_config = {
+        'extra': 'ignore',  # игнорировать лишние поля из профилей
+        # (напр., устаревшие PNG настройки)
+    }
 
     # Координаты области по углам (СК-42 Гаусса-Крюгера, метры)
     # Старшие разряды
@@ -32,8 +37,8 @@ class MapSettings(BaseModel):
     grid_label_bg_padding: int
     # Прозрачность белой маски (0.0 — прозрачная, 1.0 — непрозрачная)
     mask_opacity: float
-    # Уровень сжатия PNG (0 — без сжатия, 9 — максимум). По умолчанию — 6.
-    png_compress_level: int = 6
+    # Качество JPEG (10–100). По умолчанию — 95.
+    jpeg_quality: int = 95
 
     # Валидации через Pydantic validators
     @field_validator('mask_opacity')
@@ -45,17 +50,12 @@ class MapSettings(BaseModel):
             raise ValueError(msg)
         return v
 
-    @field_validator('png_compress_level')
+    @field_validator('jpeg_quality')
     @classmethod
-    def validate_png_compress_level(cls, v: int | str) -> int:
+    def validate_jpeg_quality(cls, v: int | str) -> int:
         iv = int(v)
-        if not (PNG_COMPRESS_MIN <= iv <= PNG_COMPRESS_MAX):
-            msg = (
-                f'png_compress_level должен быть в диапазоне '
-                f'[{PNG_COMPRESS_MIN}, {PNG_COMPRESS_MAX}]'
-            )
-            raise ValueError(msg)
-        return iv
+        iv = max(iv, 10)
+        return min(iv, 100)
 
     # Вычисляемые свойства из исходных параметров + ADDITIVE_RATIO
     @property

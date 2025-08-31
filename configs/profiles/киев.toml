@@ -12,4 +12,4 @@ grid_font_size = 86
 grid_text_margin = 43
 grid_label_bg_padding = 6
 mask_opacity = 0.35
-png_compress_level = 6
+jpeg_quality = 95

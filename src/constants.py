@@ -76,7 +76,7 @@ SK42_CODE = 4284
 
 CURRENT_PROFILE = 'default'
 
-PROFILES_DIR = '../configs/profiles'
+PROFILES_DIR = 'configs/profiles'
 
 # HTTP диапазоны ошибок сервера
 HTTP_5XX_MIN = 500
@@ -97,7 +97,7 @@ DOWNLOAD_CONCURRENCY = 20
 # Значения совместимости для «статичного» источника
 STATIC_TILE_WIDTH_PX_PROFILE = 1024
 STATIC_TILE_HEIGHT_PX_PROFILE = 1024
-IMAGE_FORMAT_PROFILE = 'png'
+IMAGE_FORMAT_PROFILE = 'jpg'
 
 # --- Опции кэша (были в секции профиля [cache], перенесены в constants)
 HTTP_CACHE_ENABLED = True
@@ -175,10 +175,8 @@ GRID_LABEL_MOD = 100
 # --- Общие константы для валидаторов/обработчиков GUI
 # Минимальное число аргументов команды скролла (tk Scrollbar callback)
 SCROLL_CMD_MIN_ARGS = 3
-# Границы уровня сжатия PNG
-PNG_COMPRESS_MIN = 0
-PNG_COMPRESS_MAX = 9
 
 # --- Константы для окна предпросмотра
-# Фиксированный угол поворота изображения в градусах для улучшения видимости тонких линий
+# Фиксированный угол поворота изображения в градусах для улучшения
+# видимости тонких линий
 PREVIEW_ROTATION_ANGLE = 0.0

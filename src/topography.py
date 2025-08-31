@@ -8,7 +8,6 @@ from PIL import Image
 from pyproj import CRS, Transformer
 
 from constants import (
-    CURRENT_PROFILE,
     EARTH_RADIUS_M,
     EAST_VECTOR_SAMPLE_M,
     EPSG_SK42_GK_BASE,
@@ -34,6 +33,7 @@ from constants import (
     WORLD_LNG_SPAN_DEG,
     XY_EPSILON,
 )
+
 # Географическая СК-42 (Pulkovo 1942)
 crs_sk42_geog = CRS.from_epsg(SK42_CODE)
 # Географическая WGS84

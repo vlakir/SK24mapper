@@ -1,3 +1,4 @@
+import contextlib
 import logging
 import math
 
@@ -5,7 +6,6 @@ from PIL import Image, ImageDraw, ImageFont
 from pyproj import CRS, Transformer
 
 from constants import (
-    CURRENT_PROFILE,
     GRID_COLOR,
     GRID_FONT_BOLD,
     GRID_FONT_PATH,
@@ -21,6 +21,8 @@ from constants import (
 )
 from progress import ConsoleProgress, LiveSpinner
 from topography import crs_sk42_geog, meters_per_pixel
+
+logger = logging.getLogger(__name__)
 
 
 def assemble_and_crop(
@@ -43,6 +45,16 @@ def assemble_and_crop(
             if img.size != (eff_tile_px, eff_tile_px):
                 img = img.resize((eff_tile_px, eff_tile_px), Image.Resampling.LANCZOS)
             canvas.paste(img, (i * eff_tile_px, j * eff_tile_px))
+            # Proactively release memory of individual tile after paste
+            try:
+                if hasattr(images[idx], 'close'):
+                    images[idx].close()
+            except Exception as e:
+                logger.debug(f'Failed to close tile image: {e}')
+            # Replace consumed image with a tiny placeholder to keep type invariant
+            # (avoid assigning None which breaks type expectations and mypy contracts)
+            if isinstance(images, list):
+                images[idx] = Image.new('RGB', (1, 1))
             idx += 1
             paste_progress.step_sync(1)
     paste_progress.close()
@@ -52,6 +64,14 @@ def assemble_and_crop(
     out = canvas.crop((crop_x, crop_y, crop_x + crop_w, crop_y + crop_h))
     crop_progress.step_sync(1)
     crop_progress.close()
+    # Drop large temporary canvas and input list refs before returning
+    with contextlib.suppress(Exception):
+        del canvas
+    try:
+        # Remove None placeholders to free list memory sooner
+        images.clear()
+    except Exception as e:
+        logger.debug(f'Failed to clear images list: {e}')
     return out
 
 
@@ -188,7 +208,7 @@ def load_grid_font(font_size: int = 86) -> ImageFont.FreeTypeFont | ImageFont.Im
     return ImageFont.load_default()
 
 
-def draw_axis_aligned_km_grid(  # noqa: PLR0913, PLR0915
+def draw_axis_aligned_km_grid(  # noqa: PLR0913
     img: Image.Image,
     center_lat_sk42: float,
     center_lng_sk42: float,
