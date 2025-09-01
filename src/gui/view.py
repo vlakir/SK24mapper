@@ -985,9 +985,8 @@ class MainWindow(QMainWindow):
         QMessageBox.about(
             self,
             'О программе',
-            'Mil Mapper 2.0\n\nПриложение для создания военных карт\n'
-            'Миграция с tkinter на PySide6\n\nВерсия 2.0',
-        )
+            'SK42mapper v0.2\n\nПриложение для создания карт в системе Гаусса-Крюгера\n'
+         )
 
     def close_event(self, event: Any) -> None:
         """Handle window close event."""
