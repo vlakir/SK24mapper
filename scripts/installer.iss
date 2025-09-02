@@ -16,7 +16,8 @@ Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
 ArchitecturesInstallIn64BitMode=x64
-SetupIconFile=img\icon.ico
+; Важно: используем путь относительно текущего .iss файла
+SetupIconFile={#SourcePath}\..\img\icon.ico
 
 [Languages]
 Name: "ru"; MessagesFile: "compiler:Languages\\Russian.isl"
@@ -24,7 +25,8 @@ Name: "en"; MessagesFile: "compiler:Default.isl"
 
 [Files]
 ; Копируем всю сборку, подготовленную PyInstaller, в каталог установки
-Source: "dist\SK42mapper\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
+; Путь относительно расположения данного .iss файла (scripts/..)
+Source: "{#SourcePath}\..\dist\SK42mapper\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
 
 [Dirs]
 ; Создание обязательных директорий
@@ -33,6 +35,7 @@ Name: "{app}\.cache\tiles"; Flags: uninsremoveemptydirs
 Name: "{app}\maps"; Flags: uninsremoveemptydirs
 
 [Icons]
+; Рабочая директория ярлыка — {app}, чтобы относительные пути в приложении были корректны
 Name: "{commondesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"
 
 [Run]
