@@ -1,6 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
 
-
 a = Analysis(
     ['src/main.py'],
     pathex=[],
@@ -42,4 +41,14 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon='img/icon.ico',
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name='SK42mapper',  # Produces dist/SK42mapper/
 )
