@@ -41,17 +41,27 @@ jobs:
       - name: Install dependencies
         run: poetry install --no-interaction --no-root
 
-      - name: Build with PyInstaller
-        shell: bash
-        run: |
-          source ./.venv/Scripts/activate
-          pyinstaller SK42mapper.spec --noconfirm --clean
+      - name: Build with PyInstaller (Poetry)
+        run: poetry run pyinstaller SK42mapper.spec --noconfirm --clean
 
       - name: Verify PyInstaller output
-        shell: bash
+        shell: pwsh
         run: |
-          echo "dist contents:" && ls -la dist || true
-          echo "dist/SK42mapper contents:" && ls -la "dist/SK42mapper" || true
+          Write-Host "dist contents:"; if (Test-Path 'dist') { Get-ChildItem dist -Force | Format-List -Property Name,FullName } else { Write-Host 'dist not found' }
+          if (Test-Path 'dist/SK42mapper') { Get-ChildItem 'dist/SK42mapper' -Force | Format-List -Property Name,FullName } else { Write-Host 'dist/SK42mapper not found' }
+
+      - name: Assert PyInstaller output exists
+        shell: cmd
+        run: |
+          if not exist dist\SK42mapper\SK42mapper.exe (
+            echo ERROR: PyInstaller output not found.
+            echo Listing repo root: & dir
+            echo Listing dist: & dir dist
+            exit /b 1
+          ) else (
+            echo OK: Found dist\SK42mapper\SK42mapper.exe
+            dir dist\SK42mapper
+          )
 
       - name: Install Inno Setup
         run: choco install innosetup -y
