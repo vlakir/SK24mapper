@@ -30,9 +30,15 @@ Source: "{#SourcePath}\..\dist\SK42mapper\*"; DestDir: "{app}"; Flags: recursesu
 
 [Dirs]
 ; Создание обязательных директорий
-Name: "{app}\.cache"; Flags: uninsremoveemptydirs
-Name: "{app}\.cache\tiles"; Flags: uninsremoveemptydirs
-Name: "{app}\maps"; Flags: uninsremoveemptydirs
+Name: "{app}\.cache"
+Name: "{app}\.cache\tiles"
+Name: "{app}\maps"
+
+[UninstallDelete]
+; Удаляем директории при деинсталляции, если пустые
+Type: dirifempty; Name: "{app}\.cache\tiles"
+Type: dirifempty; Name: "{app}\.cache"
+Type: dirifempty; Name: "{app}\maps"
 
 [Icons]
 ; Рабочая директория ярлыка — {app}, чтобы относительные пути в приложении были корректны
