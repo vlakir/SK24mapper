@@ -79,11 +79,11 @@ jobs:
         with:
           name: SK42mapper-win64-installer
           path: |
-            scripts\SK42mapper-*-setup.exe
+            scripts/SK42mapper-*-setup.exe
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            scripts\SK42mapper-*-setup.exe
+            scripts/SK42mapper-*-setup.exe
