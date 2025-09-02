@@ -3,6 +3,9 @@ venv/
 env/
 doc/
 temp/
+dist/
+build/
+maps/
 *.log
 *.log.*
 __pycache__/
@@ -20,6 +23,5 @@ log/
 big_image_*.*
 vanilla_docker.sh
 secrets.env
-*.png
-*.jpg
 .cache/
+*.spec
