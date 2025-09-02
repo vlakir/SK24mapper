@@ -30,20 +30,42 @@ class MilMapperController:
         logger.info('MilMapperController initialized')
 
     def _load_api_key(self) -> None:
-        """Загрузка API-ключа из переменных окружения (.env, .secrets.env и т.д.)."""
+        """Загрузка API-ключа из переменных окружения (.env/.secrets.env) для разных сценариев запуска."""
         try:
+            import sys
+            # Каталог установленного приложения (папка с exe при сборке PyInstaller)
+            install_dir = Path(sys.argv[0]).resolve().parent
+            # Рабочая директория процесса (может отличаться от install_dir)
+            cwd = Path.cwd()
+            # Корень проекта при разработке (по исходникам)
             repo_root = Path(__file__).resolve().parent.parent.parent
+
+            # Путь в профиле пользователя (на будущее/альтернатива хранения)
+            appdata = os.getenv('APPDATA')
+            appdata_path = Path(appdata) / 'SK42mapper' if appdata else None
+
             candidates = [
-                Path('.secrets.env'),
-                Path('.env'),
+                install_dir / '.secrets.env',
+                install_dir / '.env',
+            ]
+            if appdata_path is not None:
+                candidates.insert(1, appdata_path / '.secrets.env')
+                candidates.insert(2, appdata_path / '.env')
+            candidates.extend([
+                cwd / '.secrets.env',
+                cwd / '.env',
                 repo_root / '.secrets.env',
                 repo_root / '.env',
-            ]
+            ])
 
             for p in candidates:
-                if p.exists():
-                    load_dotenv(p)
-                    break
+                try:
+                    if p and p.exists():
+                        load_dotenv(p)
+                        break
+                except Exception:
+                    # если конкретный файл проблемный — продолжаем искать
+                    continue
 
             self._api_key = os.getenv('API_KEY', '').strip()
             if not self._api_key:

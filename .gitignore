@@ -5,7 +5,6 @@ doc/
 temp/
 dist/
 build/
-maps/
 *.log
 *.log.*
 __pycache__/
@@ -24,4 +23,4 @@ big_image_*.*
 vanilla_docker.sh
 secrets.env
 .cache/
-*.spec
+maps/

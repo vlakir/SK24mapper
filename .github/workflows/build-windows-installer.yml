@@ -1,0 +1,76 @@
+name: build-windows-installer
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch: {}
+
+jobs:
+  win-installer:
+    runs-on: windows-latest
+
+    env:
+      # VERSION по умолчанию берется из имени тега. При ручном запуске можно передать input позже при необходимости.
+      VERSION: ${{ github.ref_name }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        id: setup-python
+        uses: actions/setup-python@v5
+        with:
+          # Если на 3.13 нет нужных wheels, поменяйте на '3.12'
+          python-version: '3.13'
+
+      - name: Install Poetry
+        run: pipx install poetry
+
+      - name: Configure Poetry to create in-project venv
+        shell: bash
+        run: poetry config virtualenvs.in-project true
+
+      - name: Cache virtualenv
+        uses: actions/cache@v4
+        with:
+          path: ./.venv
+          key: ${{ runner.os }}-py${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('**/poetry.lock', 'pyproject.toml') }}
+
+      - name: Install dependencies
+        run: poetry install --no-interaction --no-root
+
+      - name: Build with PyInstaller
+        shell: bash
+        run: |
+          source ./.venv/Scripts/activate
+          pyinstaller SK42mapper.spec --noconfirm --clean
+
+      - name: Verify PyInstaller output
+        shell: bash
+        run: |
+          echo "dist contents:" && ls -la dist || true
+          echo "dist/SK42mapper contents:" && ls -la "dist/SK42mapper" || true
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y
+
+      - name: Build installer with Inno Setup
+        run: |
+          set VERSION=${{ env.VERSION }}
+          iscc scripts\installer.iss
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: SK42mapper-win64-installer
+          path: |
+            SK42mapper-*-setup.exe
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            SK42mapper-*-setup.exe
