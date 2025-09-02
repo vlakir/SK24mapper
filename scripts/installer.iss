@@ -91,7 +91,7 @@ begin
     else
     begin
       try
-        FileSetAttr(F, faHidden);
+        SetFileAttributes(F, GetFileAttributes(F) or faHidden);
       except
       end;
     end;
