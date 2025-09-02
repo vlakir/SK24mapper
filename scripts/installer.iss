@@ -16,7 +16,7 @@ Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
 ArchitecturesInstallIn64BitMode=x64
-; Важно: используем путь относительно текущего .iss файла
+; Путь относительно текущего .iss файла (scripts)
 SetupIconFile={#SourcePath}\..\img\icon.ico
 
 [Languages]
@@ -24,8 +24,7 @@ Name: "ru"; MessagesFile: "compiler:Languages\\Russian.isl"
 Name: "en"; MessagesFile: "compiler:Default.isl"
 
 [Files]
-; Копируем всю сборку, подготовленную PyInstaller, в каталог установки
-; Путь относительно расположения данного .iss файла (scripts/..)
+; Копируем onedir-сборку PyInstaller в каталог установки
 Source: "{#SourcePath}\..\dist\SK42mapper\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
 
 [Dirs]
@@ -79,6 +78,7 @@ end;
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   F, Content: string;
+  ResultCode: Integer;
 begin
   if CurStep = ssInstall then
   begin
@@ -90,9 +90,10 @@ begin
     end
     else
     begin
-      try
-        SetFileAttributes(F, GetFileAttributes(F) or faHidden);
-      except
+      { Скрываем файл через системную утилиту attrib }
+      if not Exec(ExpandConstant('{cmd}'), '/c attrib +H "' + F + '"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+      begin
+        Log(Format('Не удалось скрыть файл атрибутом Hidden, код=%d', [ResultCode]));
       end;
     end;
   end;
