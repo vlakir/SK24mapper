@@ -107,8 +107,12 @@ def _resolve_cache_dir() -> Path | None:
     raw_dir = Path(HTTP_CACHE_DIR)
     if raw_dir.is_absolute():
         return raw_dir
-    repo_root = Path(__file__).resolve().parent.parent
-    return (repo_root / raw_dir).resolve()
+    # Prefer user LOCALAPPDATA for writable cache dir
+    local = os.getenv('LOCALAPPDATA')
+    if local:
+        return (Path(local) / 'SK42mapper' / '.cache' / 'tiles').resolve()
+    # Fallback: user's home directory
+    return (Path.home() / '.sk42mapper_cache' / 'tiles').resolve()
 
 
 def _cleanup_sqlite_cache(cache_dir: Path) -> None:

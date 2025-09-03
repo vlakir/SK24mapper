@@ -15,7 +15,7 @@ OutputBaseFilename=SK42mapper-{#MyAppVersion}-setup
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
-ArchitecturesInstallIn64BitMode=x64
+ArchitecturesInstallIn64BitMode=x64os
 ; Путь относительно текущего .iss файла (scripts)
 SetupIconFile={#SourcePath}\..\img\icon.ico
 
@@ -28,16 +28,24 @@ Name: "en"; MessagesFile: "compiler:Default.isl"
 Source: "{#SourcePath}\..\dist\SK42mapper\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
 
 [Dirs]
-; Создание обязательных директорий
-Name: "{app}\.cache"
-Name: "{app}\.cache\tiles"
-Name: "{app}\maps"
+; Создание обязательных директорий в профиле пользователя
+Name: "{userappdata}\\SK42mapper"
+Name: "{userappdata}\\SK42mapper\\configs"
+Name: "{userappdata}\\SK42mapper\\configs\\profiles"
+Name: "{userappdata}\\SK42mapper\\maps"
+Name: "{localappdata}\\SK42mapper"
+Name: "{localappdata}\\SK42mapper\\log"
+Name: "{localappdata}\\SK42mapper\\.cache\\tiles"
 
 [UninstallDelete]
 ; Удаляем директории при деинсталляции, если пустые
-Type: dirifempty; Name: "{app}\.cache\tiles"
-Type: dirifempty; Name: "{app}\.cache"
-Type: dirifempty; Name: "{app}\maps"
+Type: dirifempty; Name: "{userappdata}\\SK42mapper\\configs\\profiles"
+Type: dirifempty; Name: "{userappdata}\\SK42mapper\\configs"
+Type: dirifempty; Name: "{userappdata}\\SK42mapper\\maps"
+Type: dirifempty; Name: "{userappdata}\\SK42mapper"
+Type: dirifempty; Name: "{localappdata}\\SK42mapper\\.cache\\tiles"
+Type: dirifempty; Name: "{localappdata}\\SK42mapper\\log"
+Type: dirifempty; Name: "{localappdata}\\SK42mapper"
 
 [Icons]
 ; Рабочая директория ярлыка — {app}, чтобы относительные пути в приложении были корректны
@@ -56,7 +64,7 @@ begin
     wpSelectTasks,
     'Конфигурация ключа',
     'Введите ключ API',
-    'Ключ будет сохранён в файле .secrets.env в папке установки.'
+    'Ключ будет сохранён в профиле пользователя (%AppData%\\SK42mapper).'
   );
   { Второй параметр True — скрытый ввод, как пароль }
   SecretsPage.Add('API_KEY:', True);
@@ -82,7 +90,7 @@ var
 begin
   if CurStep = ssInstall then
   begin
-    F := ExpandConstant('{app}\.secrets.env');
+    F := ExpandConstant('{userappdata}\\SK42mapper\\.secrets.env');
     Content := 'API_KEY=' + SecretsPage.Values[0] + #13#10;
     if not SaveStringToFile(F, Content, False) then
     begin
@@ -103,6 +111,6 @@ procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep = usUninstall then
   begin
-    DeleteFile(ExpandConstant('{app}\.secrets.env'));
+    DeleteFile(ExpandConstant('{userappdata}\\SK42mapper\\.secrets.env'));
   end;
 end;

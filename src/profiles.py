@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 
 import tomlkit
 
@@ -6,15 +7,14 @@ from constants import PROFILES_DIR
 from domen import MapSettings
 
 
-def ensure_profiles_dir() -> Path:
-    # Resolve path relative to project root
-    if Path(PROFILES_DIR).is_absolute():
-        profiles_dir = Path(PROFILES_DIR)
-    else:
-        # Get project root (parent of src directory)
-        project_root = Path(__file__).parent.parent
-        profiles_dir = project_root / PROFILES_DIR
+def _user_profiles_dir() -> Path:
+    base = Path(os.getenv('APPDATA') or (Path.home() / 'AppData' / 'Roaming')) / 'SK42mapper' / 'configs' / 'profiles'
+    return base
 
+
+def ensure_profiles_dir() -> Path:
+    # Prefer user APPDATA directory for profiles
+    profiles_dir = _user_profiles_dir()
     profiles_dir.mkdir(parents=True, exist_ok=True)
     return profiles_dir
 
