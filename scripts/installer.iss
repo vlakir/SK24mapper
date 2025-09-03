@@ -53,8 +53,8 @@ Type: dirifempty; Name: "{localappdata}\\SK42mapper\\log"
 Type: dirifempty; Name: "{localappdata}\\SK42mapper"
 
 [Icons]
-; Рабочая директория ярлыка — {app}, чтобы относительные пути в приложении были корректны
-Name: "{commondesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"
+; Ярлык на рабочем столе текущего пользователя (per-user установка)
+Name: "{userdesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Запустить {#MyAppName}"; Flags: nowait postinstall skipifsilent
