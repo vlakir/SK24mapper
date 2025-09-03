@@ -11,7 +11,6 @@ AppPublisher={#MyAppPublisher}
 ; Install per-user without admin rights
 DefaultDirName={localappdata}\Programs\{#MyAppName}
 PrivilegesRequired=lowest
-AllUsers=no
 ; Do not reuse previous install dir (avoid Program Files if previously installed)
 UsePreviousAppDir=no
 ; Keep directory page but with correct default
