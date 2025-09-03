@@ -69,7 +69,7 @@ begin
     wpSelectTasks,
     'Конфигурация ключа',
     'Введите ключ API',
-    'Ключ будет сохранён в профиле пользователя (%AppData%\\SK42mapper).'
+    'Ключ будет сохранён в профиле пользователя (%AppData%\SK42mapper).'
   );
   { Второй параметр True — скрытый ввод, как пароль }
   SecretsPage.Add('API_KEY:', True);
@@ -90,13 +90,17 @@ end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 var
-  F, Content: string;
+  BaseDir, F, Content: string;
   ResultCode: Integer;
 begin
   if CurStep = ssInstall then
   begin
-    F := ExpandConstant('{userappdata}\\SK42mapper\\.secrets.env');
-    Content := 'API_KEY=' + SecretsPage.Values[0] + #13#10;
+    { Корректно формируем путь и создаём каталог }
+    BaseDir := AddBackslash(ExpandConstant('{userappdata}')) + 'SK42mapper';
+    ForceDirectories(BaseDir);
+
+    F := BaseDir + '\.secrets.env';
+    Content := 'API_KEY=' + Trim(SecretsPage.Values[0]) + #13#10;
     if not SaveStringToFile(F, Content, False) then
     begin
       MsgBox('Не удалось записать файл: ' + F, mbError, MB_OK);
@@ -113,9 +117,12 @@ begin
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  F: string;
 begin
   if CurUninstallStep = usUninstall then
   begin
-    DeleteFile(ExpandConstant('{userappdata}\\SK42mapper\\.secrets.env'));
+    F := AddBackslash(ExpandConstant('{userappdata}')) + 'SK42mapper' + '\.secrets.env';
+    DeleteFile(F);
   end;
 end;
