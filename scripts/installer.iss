@@ -8,8 +8,14 @@ AppId={{72A4E6B5-5F2F-4F1D-9A44-51FA6B5CFE01}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
-DefaultDirName={autopf}\{#MyAppPublisher}\{#MyAppName}
-DisableDirPage=no
+; Install per-user without admin rights
+DefaultDirName={localappdata}\Programs\{#MyAppName}
+PrivilegesRequired=lowest
+AllUsers=no
+; Do not reuse previous install dir (avoid Program Files if previously installed)
+UsePreviousAppDir=no
+; Keep directory page but with correct default
+DisableDirPage=auto
 OutputDir=.
 OutputBaseFilename=SK42mapper-{#MyAppVersion}-setup
 Compression=lzma
