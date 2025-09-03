@@ -32,6 +32,9 @@ Name: "en"; MessagesFile: "compiler:Default.isl"
 ; Копируем onedir-сборку PyInstaller в каталог установки
 Source: "{#SourcePath}\..\dist\SK42mapper\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
 
+; Вариант A: копируем конфиги непосредственно в профиль пользователя
+Source: "{#SourcePath}\..\configs\*"; DestDir: "{userappdata}\SK42mapper\configs"; Flags: recursesubdirs ignoreversion
+
 [Dirs]
 ; Создание обязательных директорий в профиле пользователя
 Name: "{userappdata}\\SK42mapper"
