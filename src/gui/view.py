@@ -300,7 +300,7 @@ class MainWindow(QMainWindow):
     def _setup_ui(self) -> None:
         """Setup the main window UI."""
         self.setWindowTitle('SK42mapper')
-        self.setFixedSize(800, 1200)
+        self.setFixedSize(800, 900)
 
         # Create central widget
         central_widget = QWidget()
@@ -450,7 +450,7 @@ class MainWindow(QMainWindow):
         from gui.preview_window import OptimizedImageView
 
         self._preview_area = OptimizedImageView()
-        self._preview_area.setMinimumHeight(500)
+        self._preview_area.setMinimumHeight(300)
         preview_layout.addWidget(self._preview_area)
 
         # Add spacing before the save button
@@ -462,9 +462,9 @@ class MainWindow(QMainWindow):
 
         self.save_map_btn.setToolTip('Сохранить карту в файл')
         self.save_map_btn.setEnabled(False)  # Disabled until image is loaded
-        preview_layout.addWidget(self.save_map_btn)
 
         main_layout.addWidget(preview_frame)
+        main_layout.addWidget(self.save_map_btn)
 
         # BusyDialog (QProgressDialog) will be created lazily on first use to avoid
         # any chance of it appearing during application startup.
