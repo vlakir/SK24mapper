@@ -44,6 +44,8 @@ class OptimizedImageView(QGraphicsView):
 
         # Configure view for optimal performance with proper antialiasing for thin lines
         self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+        # Zoom to cursor: anchor transformations under the mouse pointer
+        self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
 
         # Solution 1: Enable antialiasing for all elements
         self.setRenderHint(QPainter.RenderHint.Antialiasing, True)
@@ -169,24 +171,24 @@ class OptimizedImageView(QGraphicsView):
             )
         )
 
-    def wheel_event(self, event: QWheelEvent) -> None:
-        """Handle mouse wheel for zooming."""
+    def wheelEvent(self, event: QWheelEvent) -> None:
+        """Handle mouse wheel for zooming with zoom-to-cursor behavior."""
         if not self._image_item:
             return
 
-        # Get zoom direction
-        zoom_in = event.angleDelta().y() > 0
+        # Determine scroll amount (support angleDelta and pixelDelta for touchpads)
+        delta = event.angleDelta().y()
+        if delta == 0:
+            delta = event.pixelDelta().y()
+        if delta == 0:
+            event.ignore()
+            return
+
+        zoom_in = delta > 0
         factor = self._zoom_factor if zoom_in else (1.0 / self._zoom_factor)
 
-        # Get mouse position in scene coordinates before zoom
-        mouse_pos = self.mapToScene(event.position().toPoint())
-
-        # Apply zoom
+        # Apply zoom (anchor is under mouse, no manual centering needed)
         self._zoom(factor)
-
-        # Center the view on the mouse position
-        self.centerOn(mouse_pos)
-
         event.accept()
 
     def mousePressEvent(self, event) -> None:
