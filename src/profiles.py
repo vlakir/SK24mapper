@@ -8,6 +8,19 @@ from domen import MapSettings
 
 
 def _user_profiles_dir() -> Path:
+    """
+    Determine profiles directory.
+    1) If <project_root>/configs/profiles exists, use it (useful for portable/run-from-repo setups).
+    2) Otherwise, fall back to user APPDATA directory: %APPDATA%/SK42mapper/configs/profiles
+       or ~/AppData/Roaming/SK42mapper/configs/profiles when APPDATA is not set.
+    """
+    # Try project-local configs/profiles
+    project_root = Path(__file__).resolve().parent.parent
+    local_profiles = project_root / 'configs' / 'profiles'
+    if local_profiles.exists():
+        return local_profiles
+
+    # Fallback to user-specific APPDATA location
     base = Path(os.getenv('APPDATA') or (Path.home() / 'AppData' / 'Roaming')) / 'SK42mapper' / 'configs' / 'profiles'
     return base
 
