@@ -95,6 +95,7 @@ procedure CurStepChanged(CurStep: TSetupStep);
 var
   BaseDir, F, Content: string;
   ResultCode: Integer;
+  Resp: Integer;
 begin
   if CurStep = ssInstall then
   begin
@@ -104,16 +105,54 @@ begin
 
     F := BaseDir + '\.secrets.env';
     Content := 'API_KEY=' + Trim(SecretsPage.Values[0]) + #13#10;
-    if not SaveStringToFile(F, Content, False) then
+
+    if FileExists(F) then
     begin
-      MsgBox('Не удалось записать файл: ' + F, mbError, MB_OK);
+      Resp := MsgBox(
+        'Файл с ключом уже существует:\n' + F + '\n\nПерезаписать новым значением?\n' +
+        'ДА — перезаписать, НЕТ — оставить как есть, ОТМЕНА — прервать установку.',
+        mbConfirmation, MB_YESNOCANCEL);
+
+      case Resp of
+        IDYES:
+          begin
+            { Снимем атрибут Read-only на всякий случай }
+            Exec(ExpandConstant('{cmd}'), '/c attrib -R "' + F + '"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+            if not SaveStringToFile(F, Content, False) then
+            begin
+              MsgBox('Не удалось записать файл: ' + F, mbError, MB_OK);
+            end
+            else
+            begin
+              if not Exec(ExpandConstant('{cmd}'), '/c attrib +H "' + F + '"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+                Log(Format('Не удалось скрыть файл атрибутом Hidden, код=%d', [ResultCode]));
+            end;
+          end;
+        IDNO:
+          begin
+            Log('Сохраняем существующий .secrets.env без изменений: ' + F);
+            { Ничего не делаем }
+          end;
+        IDCANCEL:
+          begin
+            Log('Пользователь отменил установку при обнаружении существующего .secrets.env');
+            WizardForm.Close;
+          end;
+      end;
     end
     else
     begin
-      { Скрываем файл через системную утилиту attrib }
-      if not Exec(ExpandConstant('{cmd}'), '/c attrib +H "' + F + '"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+      if not SaveStringToFile(F, Content, False) then
       begin
-        Log(Format('Не удалось скрыть файл атрибутом Hidden, код=%d', [ResultCode]));
+        MsgBox('Не удалось записать файл: ' + F, mbError, MB_OK);
+      end
+      else
+      begin
+        { Скрываем файл через системную утилиту attrib }
+        if not Exec(ExpandConstant('{cmd}'), '/c attrib +H "' + F + '"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+        begin
+          Log(Format('Не удалось скрыть файл атрибутом Hidden, код=%d', [ResultCode]));
+        end;
       end;
     end;
   end;
