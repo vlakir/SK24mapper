@@ -97,7 +97,7 @@ var
   ResultCode: Integer;
   Resp: Integer;
 begin
-  if CurStep = ssInstall then
+  if CurStep = ssPostInstall then
   begin
     { Корректно формируем путь и создаём каталог }
     BaseDir := AddBackslash(ExpandConstant('{userappdata}')) + 'SK42mapper';
@@ -116,11 +116,21 @@ begin
       case Resp of
         IDYES:
           begin
-            { Снимем атрибут Read-only на всякий случай }
-            Exec(ExpandConstant('{cmd}'), '/c attrib -R "' + F + '"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+            { Снимаем все атрибуты и удаляем файл, затем создаём заново — максимально чистая перезапись }
+            if not Exec(ExpandConstant('{cmd}'), '/c attrib -R -H -S "' + F + '"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+              Log('Не удалось снять атрибуты (attrib -R -H -S). Код=' + IntToStr(ResultCode));
+
+            if FileExists(F) then
+            begin
+              if not DeleteFile(F) then
+                Log('Предупреждение: не удалось удалить старый файл перед записью: ' + F);
+            end;
+
             if not SaveStringToFile(F, Content, False) then
             begin
-              MsgBox('Не удалось записать файл: ' + F, mbError, MB_OK);
+              MsgBox('Не удалось записать файл: ' + F + '\n' +
+                     'Попробуйте закрыть приложение и переустановить, либо запустите установщик от имени текущего пользователя.',
+                     mbError, MB_OK);
             end
             else
             begin
