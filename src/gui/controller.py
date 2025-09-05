@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 
 from diagnostics import ResourceMonitor, log_memory_usage
 from gui.model import MilMapperModel, ModelEvent
-from profiles import ensure_profiles_dir, load_profile, save_profile
+from profiles import ensure_profiles_dir, list_profiles, load_profile, save_profile
 from service import download_satellite_rectangle
 
 logger = logging.getLogger(__name__)
@@ -105,6 +105,20 @@ class MilMapperController:
             logger.info(f'Профиль загружен: {profile_name}')
         except Exception as e:
             error_msg = f'Не удалось загрузить профиль {profile_name}: {e}'
+            logger.exception(error_msg)
+            self._model.notify_observers(
+                ModelEvent.ERROR_OCCURRED, {'error': error_msg}
+            )
+
+    def load_profile_from_path(self, file_path: str) -> None:
+        """Загрузка профиля из произвольного TOML файла по полному пути."""
+        try:
+            settings = load_profile(file_path)
+            profile_name = Path(file_path).stem
+            self._model.load_profile(profile_name, settings)
+            logger.info(f'Профиль загружен из файла: {file_path}')
+        except Exception as e:
+            error_msg = f'Не удалось открыть профиль {file_path}: {e}'
             logger.exception(error_msg)
             self._model.notify_observers(
                 ModelEvent.ERROR_OCCURRED, {'error': error_msg}
@@ -220,16 +234,8 @@ class MilMapperController:
     def get_available_profiles(self) -> list[str]:
         """Получение списка доступных профилей (по именам файлов TOML)."""
         try:
-            profiles_dir = Path(__file__).parent.parent / 'configs' / 'profiles'
-            if not profiles_dir.exists():
-                return ['default']
-
-            profiles = []
-            for file_path in profiles_dir.glob('*.toml'):
-                profiles.append(file_path.stem)
-
-            return sorted(profiles) if profiles else ['default']
-
+            names = list_profiles()
+            return names if names else ['default']
         except Exception as e:
             logger.exception(f'Не удалось получить список профилей: {e}')
             return ['default']
@@ -285,7 +291,14 @@ class MilMapperController:
     def update_output_settings(self, output_settings: dict[str, Any]) -> None:
         """Обновление настроек вывода (фильтруются только допустимые ключи)."""
         try:
-            valid_keys = {'output_path', 'mask_opacity', 'jpeg_quality'}
+            valid_keys = {
+                'output_path',
+                'mask_opacity',
+                'jpeg_quality',
+                'brightness',
+                'contrast',
+                'saturation',
+            }
 
             filtered_settings = {
                 k: v for k, v in output_settings.items() if k in valid_keys

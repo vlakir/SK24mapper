@@ -281,6 +281,9 @@ class OutputSettingsWidget(QWidget):
         """Get output settings as dictionary."""
         return {
             'jpeg_quality': self.quality_slider.value(),
+            'brightness': self.brightness_slider.value() / 100.0,
+            'contrast': self.contrast_slider.value() / 100.0,
+            'saturation': self.saturation_slider.value() / 100.0,
         }
 
     def set_settings(self, settings: dict[str, Any]) -> None:
@@ -290,6 +293,18 @@ class OutputSettingsWidget(QWidget):
         q = min(q, 100)
         self.quality_slider.setValue(q)
         self.quality_label.setText(f'{q}')
+
+        # Adjustments
+        b = float(settings.get('brightness', 1.0))
+        c = float(settings.get('contrast', 1.0))
+        s = float(settings.get('saturation', 1.0))
+        # Clamp within 0..2
+        b = 0.0 if b < 0.0 else (min(b, 2.0))
+        c = 0.0 if c < 0.0 else (min(c, 2.0))
+        s = 0.0 if s < 0.0 else (min(s, 2.0))
+        self.brightness_slider.setValue(round(b * 100))
+        self.contrast_slider.setValue(round(c * 100))
+        self.saturation_slider.setValue(round(s * 100))
 
 
 class _ViewObserver(Observer):
@@ -854,6 +869,26 @@ class MainWindow(QMainWindow):
         if event == ModelEvent.SETTINGS_CHANGED:
             self._update_ui_from_settings(data.get('settings'))
         elif event == ModelEvent.PROFILE_LOADED:
+            # After loading a new profile, clear the preview and reset related UI
+            try:
+                with contextlib.suppress(Exception):
+                    self._preview_area.clear()
+                self._current_image = None
+                self._base_image = None
+                # Reset adjustments to defaults and sync labels (sliders stay disabled)
+                self._adj = {'brightness': 1.0, 'contrast': 1.0, 'saturation': 1.0}
+                self._sync_adj_ui_from_state()
+                # Disable save controls as no image is present
+                self.save_map_btn.setEnabled(False)
+                self.save_map_action.setEnabled(False)
+                # Disable adjustment sliders when no image
+                self._set_sliders_enabled(False)
+                # Reset size estimate
+                with contextlib.suppress(Exception):
+                    self.output_widget.size_estimate_value.setText('—')
+            except Exception as e:
+                logger.debug(f'Failed to clear preview on profile load: {e}')
+            # Update the rest of the UI from profile settings
             self._update_ui_from_settings(data.get('settings'))
             self._status_proxy.show_message(
                 f'Профиль загружен: {data.get("profile_name")}', 3000
@@ -893,6 +928,9 @@ class MainWindow(QMainWindow):
         output_settings = {
             'output_path': settings.output_path,
             'jpeg_quality': getattr(settings, 'jpeg_quality', 95),
+            'brightness': getattr(settings, 'brightness', 1.0),
+            'contrast': getattr(settings, 'contrast', 1.0),
+            'saturation': getattr(settings, 'saturation', 1.0),
         }
         self.output_widget.set_settings(output_settings)
 
@@ -935,10 +973,20 @@ class MainWindow(QMainWindow):
                 logger.warning('Invalid image object for preview')
                 return
 
-            # Set base image (full size) and reset adjustments
+            # Set base image (full size) and keep current adjustment sliders unchanged
             self._base_image = image.convert('RGB') if image.mode != 'RGB' else image
-            self._adj = {'brightness': 1.0, 'contrast': 1.0, 'saturation': 1.0}
-            self._sync_adj_ui_from_state()
+            # Initialize adjustments from current model settings (preferred) or from sliders
+            try:
+                b = float(getattr(self._model.settings, 'brightness', 1.0))
+                c = float(getattr(self._model.settings, 'contrast', 1.0))
+                s = float(getattr(self._model.settings, 'saturation', 1.0))
+            except Exception:
+                b = self.brightness_slider.value() / 100.0
+                c = self.contrast_slider.value() / 100.0
+                s = self.saturation_slider.value() / 100.0
+            self._adj = {'brightness': b, 'contrast': c, 'saturation': s}
+            # Update only labels according to current sliders; do not move sliders here
+            self._update_adj_labels()
 
             # Display original first
             self._current_image = self._base_image
@@ -951,6 +999,21 @@ class MainWindow(QMainWindow):
             self.save_map_action.setEnabled(True)
             # Enable adjustment sliders now that image is available
             self._set_sliders_enabled(True)
+
+            # If a modal busy dialog is still visible, hide it to allow user interaction
+            try:
+                dlg = getattr(self, '_busy_dialog', None)
+                if isinstance(dlg, QProgressDialog) and dlg.isVisible():
+                    dlg.reset()
+                    dlg.hide()
+            except Exception as _e:
+                logger.debug(f'Failed to hide busy dialog on preview: {_e}')
+
+            # Apply profile adjustments immediately to the preview
+            try:
+                self._start_fullres_adjustment_immediate()
+            except Exception as e:
+                logger.debug(f'Failed to start immediate adjustment: {e}')
 
             logger.info('Preview displayed in main window')
 
@@ -1142,6 +1205,9 @@ class MainWindow(QMainWindow):
         self._adj['contrast'] = self.contrast_slider.value() / 100.0
         self._adj['saturation'] = self.saturation_slider.value() / 100.0
         self._update_adj_labels()
+        # Propagate adjustments to model settings so they are saved in profiles
+        with contextlib.suppress(Exception):
+            self._controller.update_output_settings(self.output_widget.get_settings())
         # Request debounced adjust strictly via GUI signal
         self._sig_schedule_adjust.emit()
         # Also schedule size estimate (debounced)
@@ -1380,8 +1446,34 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _open_profile(self) -> None:
-        """Open profile file (placeholder)."""
-        QMessageBox.information(self, 'Информация', 'Функция открытия профиля из файла')
+        """Open profile file from disk and load settings."""
+        # Default directory: profiles dir (user or local)
+        from profiles import ensure_profiles_dir
+
+        default_dir = ensure_profiles_dir()
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            'Открыть профиль',
+            str(default_dir),
+            'Файлы профилей (*.toml);;Все файлы (*)',
+        )
+        if not file_path:
+            return
+        try:
+            profile_name = Path(file_path).stem
+            # Use controller method to load from arbitrary path
+            self._controller.load_profile_from_path(file_path)
+            # Update combo selection if this profile is in the list
+            idx = self.profile_combo.findText(profile_name)
+            if idx >= 0:
+                self.profile_combo.setCurrentIndex(idx)
+            else:
+                # If it’s not in list, add it temporarily
+                self.profile_combo.addItem(profile_name)
+                self.profile_combo.setCurrentText(profile_name)
+            self._status_proxy.show_message(f'Профиль загружен: {profile_name}', 3000)
+        except Exception as e:
+            QMessageBox.critical(self, 'Ошибка', f'Не удалось открыть профиль:\n{e}')
 
     @Slot()
     def _show_about(self) -> None:

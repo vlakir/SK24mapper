@@ -40,6 +40,11 @@ class MapSettings(BaseModel):
     # Качество JPEG (10–100). По умолчанию — 95.
     jpeg_quality: int = 95
 
+    # Коррекция изображения
+    brightness: float = 1.0
+    contrast: float = 1.0
+    saturation: float = 1.0
+
     # Валидации через Pydantic validators
     @field_validator('mask_opacity')
     @classmethod
@@ -56,6 +61,14 @@ class MapSettings(BaseModel):
         iv = int(v)
         iv = max(iv, 10)
         return min(iv, 100)
+
+    @field_validator('brightness', 'contrast', 'saturation')
+    @classmethod
+    def validate_adjustments(cls, v: float | str) -> float:
+        fv = float(v)
+        # Допускаем диапазон 0.0–2.0 (0%–200%)
+        fv = max(fv, 0.0)
+        return min(fv, 2.0)
 
     # Вычисляемые свойства из исходных параметров + ADDITIVE_RATIO
     @property
