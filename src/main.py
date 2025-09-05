@@ -1,6 +1,7 @@
 """Main entry point for Mil Mapper 2.0 with PySide6 MVC architecture."""
 
 import argparse
+import contextlib
 import logging
 import sys
 from pathlib import Path
@@ -15,15 +16,23 @@ logger = logging.getLogger(__name__)
 
 
 def setup_logging() -> tuple[Path, Path]:
-    """Configure application logging to LOCALAPPDATA and ensure user dirs.
+    """
+    Configure application logging to LOCALAPPDATA and ensure user dirs.
 
     Returns:
         Tuple (appdata_base, local_base) for further use.
+
     """
     import os
+
     # Determine user profile dirs
-    appdata_base = Path(os.getenv('APPDATA') or Path.home() / 'AppData' / 'Roaming') / 'SK42mapper'
-    local_base = Path(os.getenv('LOCALAPPDATA') or Path.home() / 'AppData' / 'Local') / 'SK42mapper'
+    appdata_base = (
+        Path(os.getenv('APPDATA') or Path.home() / 'AppData' / 'Roaming') / 'SK42mapper'
+    )
+    local_base = (
+        Path(os.getenv('LOCALAPPDATA') or Path.home() / 'AppData' / 'Local')
+        / 'SK42mapper'
+    )
     log_dir = local_base / 'log'
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / 'mil_mapper.log'
@@ -46,9 +55,9 @@ def main() -> int:
 
     # Ensure user data directories and bootstrap defaults
     try:
-        import os
         import shutil
         import sys as _sys
+
         # Create user dirs
         (appdata_base / 'configs' / 'profiles').mkdir(parents=True, exist_ok=True)
         (appdata_base / 'maps').mkdir(parents=True, exist_ok=True)
@@ -64,10 +73,8 @@ def main() -> int:
                     dst = appdata_base / 'configs' / rel
                     if not dst.exists():
                         dst.parent.mkdir(parents=True, exist_ok=True)
-                        try:
+                        with contextlib.suppress(Exception):
                             shutil.copy2(src, dst)
-                        except Exception:
-                            pass
     except Exception as _e:
         logger.warning(f'User data bootstrap failed: {_e}')
 
@@ -100,6 +107,7 @@ def main() -> int:
 
         # Set application icon if available
         import sys as _sys2
+
         install_dir2 = Path(_sys2.argv[0]).resolve().parent
         icon_path = install_dir2 / 'img' / 'icon.ico'
         if not icon_path.exists():

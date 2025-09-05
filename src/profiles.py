@@ -1,15 +1,15 @@
-from pathlib import Path
 import os
+from pathlib import Path
 
 import tomlkit
 
-from constants import PROFILES_DIR
 from domen import MapSettings
 
 
 def _user_profiles_dir() -> Path:
     """
     Determine profiles directory.
+
     1) If <project_root>/configs/profiles exists, use it (useful for portable/run-from-repo setups).
     2) Otherwise, fall back to user APPDATA directory: %APPDATA%/SK42mapper/configs/profiles
        or ~/AppData/Roaming/SK42mapper/configs/profiles when APPDATA is not set.
@@ -21,8 +21,12 @@ def _user_profiles_dir() -> Path:
         return local_profiles
 
     # Fallback to user-specific APPDATA location
-    base = Path(os.getenv('APPDATA') or (Path.home() / 'AppData' / 'Roaming')) / 'SK42mapper' / 'configs' / 'profiles'
-    return base
+    return (
+        Path(os.getenv('APPDATA') or (Path.home() / 'AppData' / 'Roaming'))
+        / 'SK42mapper'
+        / 'configs'
+        / 'profiles'
+    )
 
 
 def ensure_profiles_dir() -> Path:

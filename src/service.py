@@ -15,7 +15,6 @@ from pyproj import CRS, Transformer
 from constants import (
     ASYNC_MAX_CONCURRENCY,
     DOWNLOAD_CONCURRENCY,
-    ENABLE_WHITE_MASK,
     EPSG_SK42_GK_BASE,
     GK_FALSE_EASTING,
     GK_ZONE_CM_OFFSET_DEG,
@@ -45,7 +44,6 @@ from constants import (
 from diagnostics import log_memory_usage, log_thread_status
 from domen import MapSettings
 from image import (
-    apply_white_mask,
     assemble_and_crop,
     center_crop,
     draw_axis_aligned_km_grid,
@@ -375,9 +373,6 @@ async def download_satellite_rectangle(  # noqa: PLR0913
     result = rotate_keep_size(result, angle_deg, fill=(255, 255, 255))
 
     result = center_crop(result, target_w_px, target_h_px)
-
-    if ENABLE_WHITE_MASK and settings.mask_opacity > 0:
-        result = apply_white_mask(result, settings.mask_opacity)
 
     draw_axis_aligned_km_grid(
         img=result,
