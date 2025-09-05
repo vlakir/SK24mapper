@@ -1090,8 +1090,8 @@ class MainWindow(QMainWindow):
                             lut_y = [0] * 256
                             lut_c = [0] * 256
                             for i in range(256):
-                                y = round(((i - 128) * c + 128) * b)
-                                lut_y[i] = clamp(y)
+                                y_int = round(((i - 128) * c + 128) * b)
+                                lut_y[i] = clamp(y_int)
                                 cc = round(128 + (i - 128) * s)
                                 lut_c[i] = clamp(cc)
                             ycbcr = img.convert('YCbCr')
@@ -1289,8 +1289,8 @@ class MainWindow(QMainWindow):
                     lut_y = [0] * 256
                     lut_c = [0] * 256
                     for i in range(256):
-                        y = round(((i - 128) * c + 128) * b)
-                        lut_y[i] = clamp(y)
+                        y_int = round(((i - 128) * c + 128) * b)
+                        lut_y[i] = clamp(y_int)
                         cc = round(128 + (i - 128) * s)
                         lut_c[i] = clamp(cc)
 
@@ -1547,8 +1547,8 @@ class MainWindow(QMainWindow):
                             lut_y = [0] * 256
                             lut_c = [0] * 256
                             for i in range(256):
-                                y = round(((i - 128) * c + 128) * b)
-                                lut_y[i] = clamp(y)
+                                y_int = round(((i - 128) * c + 128) * b)
+                                lut_y[i] = clamp(y_int)
                                 cc = round(128 + (i - 128) * s)
                                 lut_c[i] = clamp(cc)
                             ycbcr = img.convert('YCbCr')

@@ -21,7 +21,7 @@ aiosqlite = "^0.21.0"
 pyside6 = "^6.9.1"
 psutil = "^6.0.0"
 pyinstaller = "^6.15.0"
-pillow-simd = "^9.5.0.post2"
+pillow = "^11.3.0"
 
 
 [build-system]
