@@ -3,20 +3,14 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage, QPainter, QPixmap, QTransform, QWheelEvent
 from PySide6.QtWidgets import (
-    QDialog,
-    QFileDialog,
     QGraphicsPixmapItem,
     QGraphicsScene,
     QGraphicsView,
-    QHBoxLayout,
-    QMessageBox,
-    QPushButton,
-    QVBoxLayout,
     QWidget,
 )
 
@@ -81,7 +75,20 @@ class OptimizedImageView(QGraphicsView):
         self.setMouseTracking(True)
 
     def set_image(self, pil_image: Image.Image) -> None:
-        """Set the image to display with fixed rotation to improve thin line visibility."""
+        """
+        Set the image to display with fixed rotation to improve thin line visibility.
+
+        Keeps current zoom/center if an image is already displayed.
+        """
+        # Preserve current view transform and center if already showing an image
+        preserve_transform = self._image_item is not None
+        current_transform = QTransform(self.transform()) if preserve_transform else None
+        current_center = (
+            self.mapToScene(self.viewport().rect().center())
+            if preserve_transform
+            else None
+        )
+
         self._original_image = pil_image
 
         # Convert PIL image to QPixmap efficiently
@@ -115,8 +122,15 @@ class OptimizedImageView(QGraphicsView):
             # Set scene rect to image bounds
             self._scene.setSceneRect(qpixmap.rect())
 
-        # Fit image to view
-        self.fit_to_window()
+        # Fit or restore transform
+        if preserve_transform and current_transform is not None:
+            # Restore previous transform and keep center
+            self.setTransform(current_transform)
+            if current_center is not None:
+                self.centerOn(current_center)
+        else:
+            # First time: fit image to view
+            self.fit_to_window()
 
     def clear(self) -> None:
         """Clear the preview area."""
@@ -217,128 +231,3 @@ class OptimizedImageView(QGraphicsView):
             if current_scale > self._fit_to_window_scale:
                 factor = current_scale / self._fit_to_window_scale
                 self.scale(factor, factor)
-
-
-class OptimizedPreviewWindow(QDialog):
-    """Optimized preview window using QGraphicsView for better performance."""
-
-    saved = Signal(str)  # Emitted when image is saved with file path
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle('Предпросмотр карты (Оптимизированный)')
-        self.setModal(True)
-        self.resize(1000, 800)
-
-        # Store the image for saving
-        self._image: Image.Image | None = None
-
-        self._setup_ui()
-        self._setup_connections()
-
-        logger.info('OptimizedPreviewWindow initialized')
-
-    def _setup_ui(self) -> None:
-        """Set up the user interface."""
-        layout = QVBoxLayout(self)
-
-        # Create optimized image view
-        self._image_view = OptimizedImageView(self)
-        layout.addWidget(self._image_view)
-
-        # Button layout
-        button_layout = QHBoxLayout()
-
-        # Zoom controls
-        self._zoom_in_btn = QPushButton('Увеличить (+)')
-        self._zoom_out_btn = QPushButton('Уменьшить (-)')
-        self._fit_btn = QPushButton('По размеру окна')
-
-        # Action buttons
-        self._save_btn = QPushButton('Сохранить')
-        self._close_btn = QPushButton('Закрыть')
-
-        # Add buttons to layout
-        button_layout.addWidget(self._zoom_in_btn)
-        button_layout.addWidget(self._zoom_out_btn)
-        button_layout.addWidget(self._fit_btn)
-        button_layout.addStretch()
-        button_layout.addWidget(self._save_btn)
-        button_layout.addWidget(self._close_btn)
-
-        layout.addLayout(button_layout)
-
-    def _setup_connections(self) -> None:
-        """Connect signals and slots."""
-        self._zoom_in_btn.clicked.connect(self._image_view.zoom_in)
-        self._zoom_out_btn.clicked.connect(self._image_view.zoom_out)
-        self._fit_btn.clicked.connect(self._image_view.fit_to_window)
-        self._save_btn.clicked.connect(self._save_image)
-        self._close_btn.clicked.connect(self.reject)
-
-    def show_image(self, pil_image: Image.Image) -> None:
-        """Display the given PIL image."""
-        self._image = pil_image
-        self._image_view.set_image(pil_image)
-        logger.info(f'Displaying image: {pil_image.size}')
-
-    def _save_image(self) -> None:
-        """Save the current image to file."""
-        if not self._image:
-            QMessageBox.warning(
-                self, 'Предупреждение', 'Нет изображения для сохранения'
-            )
-            return
-
-        # Get save file path with default directory <project root>/maps
-        from pathlib import Path
-
-        maps_dir = Path(__file__).resolve().parent.parent.parent / 'maps'
-        maps_dir.mkdir(exist_ok=True)
-        default_path = str(maps_dir / 'map.png')
-        file_path, _ = QFileDialog.getSaveFileName(
-            self,
-            'Сохранить карту',
-            default_path,
-            'PNG files (*.png);;JPEG files (*.jpg);;All files (*.*)',
-        )
-
-        if not file_path:
-            return
-
-        try:
-            # Save image
-            self._image.save(file_path)
-            logger.info(f'Image saved to: {file_path}')
-
-            # Emit saved signal
-            self.saved.emit(file_path)
-
-            # Show success message
-            QMessageBox.information(
-                self, 'Успех', f'Карта успешно сохранена:\n{file_path}'
-            )
-
-        except Exception as e:
-            logger.exception(f'Failed to save image: {e}')
-            QMessageBox.critical(
-                self, 'Ошибка', f'Не удалось сохранить изображение:\n{e!s}'
-            )
-
-    def keyPressEvent(self, event: Any) -> None:
-        """Handle keyboard shortcuts."""
-        if event.key() == Qt.Key.Key_Escape:
-            self.reject()
-        elif event.key() == Qt.Key.Key_Plus or event.key() == Qt.Key.Key_Equal:
-            self._image_view.zoom_in()
-        elif event.key() == Qt.Key.Key_Minus:
-            self._image_view.zoom_out()
-        elif event.key() == Qt.Key.Key_0:
-            self._image_view.fit_to_window()
-        elif (
-            event.key() == Qt.Key.Key_S
-            and event.modifiers() == Qt.KeyboardModifier.ControlModifier
-        ):
-            self._save_image()
-        else:
-            super().keyPressEvent(event)

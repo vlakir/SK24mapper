@@ -33,6 +33,7 @@ class MilMapperController:
         """Загрузка API-ключа из переменных окружения (.env/.secrets.env) для разных сценариев запуска."""
         try:
             import sys
+
             # Каталог установленного приложения (папка с exe при сборке PyInstaller)
             install_dir = Path(sys.argv[0]).resolve().parent
             # Рабочая директория процесса (может отличаться от install_dir)
@@ -51,20 +52,23 @@ class MilMapperController:
             if appdata_path is not None:
                 candidates.insert(1, appdata_path / '.secrets.env')
                 candidates.insert(2, appdata_path / '.env')
-            candidates.extend([
-                cwd / '.secrets.env',
-                cwd / '.env',
-                repo_root / '.secrets.env',
-                repo_root / '.env',
-            ])
+            candidates.extend(
+                [
+                    cwd / '.secrets.env',
+                    cwd / '.env',
+                    repo_root / '.secrets.env',
+                    repo_root / '.env',
+                ]
+            )
 
             for p in candidates:
                 try:
                     if p and p.exists():
                         load_dotenv(p)
                         break
-                except Exception:
+                except Exception as e:
                     # если конкретный файл проблемный — продолжаем искать
+                    logger.debug(f'Не удалось загрузить env файл {p}: {e}')
                     continue
 
             self._api_key = os.getenv('API_KEY', '').strip()

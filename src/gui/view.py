@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
+from io import BytesIO
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -28,6 +30,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from constants import (
+    BYTES_CONVERSION_FACTOR,
+    BYTES_TO_KB_THRESHOLD,
+    FLOAT_COMPARISON_TOLERANCE,
+    PROFILES_DIR,
+)
 from diagnostics import (
     log_comprehensive_diagnostics,
     log_memory_usage,
@@ -35,6 +43,16 @@ from diagnostics import (
 )
 from gui.controller import MilMapperController
 from gui.model import EventData, MilMapperModel, ModelEvent, Observer
+from gui.preview_window import OptimizedImageView
+from progress import (
+    cleanup_all_progress_resources,
+    set_preview_image_callback,
+    set_spinner_callbacks,
+)
+from status_bar_proxy import StatusBarProxy
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -69,8 +87,7 @@ class DownloadWorker(QThread):
                     logger.warning(f'Failed to process preview image: {e}')
                     return False
 
-            # Import and setup progress system with thread-safe callbacks
-            from progress import set_preview_image_callback, set_spinner_callbacks
+            # Setup progress system with thread-safe callbacks
 
             set_spinner_callbacks(
                 lambda label: self.progress_update.emit(0, 0, label), lambda label: None
@@ -210,59 +227,69 @@ class OutputSettingsWidget(QWidget):
         """Setup output settings UI."""
         layout = QGridLayout()
 
-        # Mask opacity
-        layout.addWidget(QLabel('Прозрачность маски:'), 0, 0)
-        self.opacity_slider = QSlider()
-        self.opacity_slider.setRange(0, 100)
-        self.opacity_slider.setValue(35)
-        self.opacity_slider.setOrientation(Qt.Orientation.Horizontal)
-        self.opacity_slider.setToolTip('Прозрачность белой маски (0-100%)')
-        layout.addWidget(self.opacity_slider, 0, 1)
-
-        self.opacity_label = QLabel('35%')
-        self.opacity_slider.valueChanged.connect(
-            lambda v: self.opacity_label.setText(f'{v}%')
-        )
-        layout.addWidget(self.opacity_label, 0, 2)
-
         # Качество JPEG
-        layout.addWidget(QLabel('Качество JPG:'), 1, 0)
+        layout.addWidget(QLabel('Качество JPG:'), 0, 0)
         self.quality_slider = QSlider()
         self.quality_slider.setRange(10, 100)
         self.quality_slider.setValue(95)
         self.quality_slider.setOrientation(Qt.Orientation.Horizontal)
         self.quality_slider.setToolTip('Качество JPEG (10-100, 100=лучшее)')
-        layout.addWidget(self.quality_slider, 1, 1)
+        layout.addWidget(self.quality_slider, 0, 1)
 
         self.quality_label = QLabel('95')
         self.quality_slider.valueChanged.connect(
             lambda v: self.quality_label.setText(f'{v}')
         )
-        layout.addWidget(self.quality_label, 1, 2)
+        layout.addWidget(self.quality_label, 0, 2)
+
+        # Оценка размера
+        self.size_estimate_title = QLabel('Оценка размера:')
+        self.size_estimate_value = QLabel('—')
+        self.size_estimate_value.setToolTip(
+            'Приблизительный размер итогового JPEG при текущем качестве'
+        )
+        layout.addWidget(self.size_estimate_title, 1, 0)
+        layout.addWidget(self.size_estimate_value, 1, 1)
+
+        # Яркость
+        self.brightness_label = QLabel('Яркость: 100%')
+        self.brightness_slider = QSlider(Qt.Orientation.Horizontal)
+        self.brightness_slider.setRange(0, 200)
+        self.brightness_slider.setValue(100)
+        layout.addWidget(self.brightness_label, 2, 0)
+        layout.addWidget(self.brightness_slider, 2, 1)
+
+        # Контраст
+        self.contrast_label = QLabel('Контрастность: 100%')
+        self.contrast_slider = QSlider(Qt.Orientation.Horizontal)
+        self.contrast_slider.setRange(0, 200)
+        self.contrast_slider.setValue(100)
+        layout.addWidget(self.contrast_label, 3, 0)
+        layout.addWidget(self.contrast_slider, 3, 1)
+
+        # Насыщенность
+        self.saturation_label = QLabel('Насыщенность: 100%')
+        self.saturation_slider = QSlider(Qt.Orientation.Horizontal)
+        self.saturation_slider.setRange(0, 200)
+        self.saturation_slider.setValue(100)
+        layout.addWidget(self.saturation_label, 4, 0)
+        layout.addWidget(self.saturation_slider, 4, 1)
 
         self.setLayout(layout)
 
     def get_settings(self) -> dict[str, Any]:
         """Get output settings as dictionary."""
         return {
-            'mask_opacity': self.opacity_slider.value() / 100.0,
             'jpeg_quality': self.quality_slider.value(),
         }
 
     def set_settings(self, settings: dict[str, Any]) -> None:
         """Set output settings from dictionary."""
-        opacity_percent = int(settings.get('mask_opacity', 0.35) * 100)
-        self.opacity_slider.setValue(opacity_percent)
-        self.opacity_label.setText(f'{opacity_percent}%')
         q = int(settings.get('jpeg_quality', 95))
         q = max(q, 10)
         q = min(q, 100)
         self.quality_slider.setValue(q)
         self.quality_label.setText(f'{q}')
-
-
-if TYPE_CHECKING:
-    from collections.abc import Callable
 
 
 class _ViewObserver(Observer):
@@ -276,6 +303,52 @@ class _ViewObserver(Observer):
 
 
 class MainWindow(QMainWindow):
+    _sig_schedule_adjust = Signal()
+    _sig_run_adjust_now = Signal()
+
+    # Slots to ensure results/cleanup run on GUI thread
+    @Slot(int, object, str)
+    def _on_adjust_done_slot(self, gen: int, img_obj: object, err: str) -> None:
+        # Always on GUI thread
+        self.save_map_btn.setEnabled(True)
+        self.save_map_action.setEnabled(True)
+        if gen != self._adj_generation:
+            return
+        if err:
+            logger.error(f'Adjustment error: {err}')
+            return
+        if isinstance(img_obj, Image.Image):
+            try:
+                self._preview_area.set_image(img_obj)
+            except Exception as ex:
+                logger.exception(f'[ADJ] set_image failed: {ex}')
+
+    @Slot()
+    def _on_adjust_thread_finished_slot(self) -> None:
+        # Identify sender thread and cleanup mappings if present
+        sender = self.sender()
+        th = sender if isinstance(sender, QThread) else None
+        if th is None:
+            return
+        # Remove and delete associated worker if tracked via map
+        worker = (
+            getattr(self, '_adjust_map', {}).pop(th, None)
+            if hasattr(self, '_adjust_map')
+            else None
+        )
+        try:
+            if worker is not None and worker in self._adjust_workers:
+                self._adjust_workers.remove(worker)
+                worker.deleteLater()
+        except Exception as e:
+            logger.debug(f'Error cleaning up adjust worker: {e}')
+        try:
+            if th in self._adjust_threads:
+                self._adjust_threads.remove(th)
+            th.deleteLater()
+        except Exception as e:
+            logger.debug(f'Error cleaning up adjust thread: {e}')
+
     """Main application window implementing Observer pattern."""
 
     def __init__(self, model: MilMapperModel, controller: MilMapperController) -> None:
@@ -292,8 +365,38 @@ class MainWindow(QMainWindow):
         self._observer_adapter = _ViewObserver(self._handle_model_event)
         self._model.add_observer(self._observer_adapter)
 
+        # Adjustment state
+        self._base_image: Image.Image | None = None
+        self._adj = {'brightness': 1.0, 'contrast': 1.0, 'saturation': 1.0}
+        self._adj_generation: int = 0
+        # Keep strong references to all active adjustment threads/workers until they finish
+        self._adjust_threads: list[QThread] = []
+        self._adjust_workers: list[QObject] = []
+        self._adjust_map: dict[QThread, QObject] = {}
+        self._preview_update_timer = QTimer(self)
+        self._preview_update_timer.setSingleShot(True)
+        self._preview_update_timer.setInterval(130)
+
+        # Size estimate debounce timer
+        self._estimate_timer = QTimer(self)
+        self._estimate_timer.setSingleShot(True)
+        self._estimate_timer.setInterval(400)
+
+        # Storage for estimate workers
+        self._estimate_threads: list[QThread] = []
+        self._estimate_workers: list[QObject] = []
+
         self._setup_ui()
         self._setup_connections()
+
+        # Connect internal signals to GUI-only slots (Queued)
+        self._sig_schedule_adjust.connect(
+            self._schedule_adjust_gui, Qt.ConnectionType.QueuedConnection
+        )
+        self._sig_run_adjust_now.connect(
+            self._run_adjust_now_gui, Qt.ConnectionType.QueuedConnection
+        )
+
         self._load_initial_data()
         logger.info('MainWindow initialized')
 
@@ -316,8 +419,6 @@ class MainWindow(QMainWindow):
         # Create status bar
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
-        from status_bar_proxy import StatusBarProxy
-
         self._status_proxy = StatusBarProxy(self.status_bar)
         self._status_proxy.show_message('Готов к работе')
 
@@ -422,6 +523,14 @@ class MainWindow(QMainWindow):
         # output_layout.addWidget(QLabel("Файл:"))
         self.output_widget = OutputSettingsWidget()
         output_layout.addWidget(self.output_widget)
+        # Alias sliders/labels from output settings to main window for event wiring
+        self.quality_slider = self.output_widget.quality_slider
+        self.brightness_slider = self.output_widget.brightness_slider
+        self.contrast_slider = self.output_widget.contrast_slider
+        self.saturation_slider = self.output_widget.saturation_slider
+        self.brightness_label = self.output_widget.brightness_label
+        self.contrast_label = self.output_widget.contrast_label
+        self.saturation_label = self.output_widget.saturation_label
 
         settings_horizontal_layout.addWidget(output_frame)
 
@@ -446,12 +555,11 @@ class MainWindow(QMainWindow):
 
         preview_layout.addWidget(QLabel('Предпросмотр карты:'))
 
-        # Import OptimizedImageView from preview_window
-        from gui.preview_window import OptimizedImageView
-
         self._preview_area = OptimizedImageView()
-        self._preview_area.setMinimumHeight(300)
+        self._preview_area.setMinimumHeight(220)
         preview_layout.addWidget(self._preview_area)
+
+        self._set_sliders_enabled(False)
 
         # Add spacing before the save button
         preview_layout.addSpacing(10)
@@ -469,6 +577,8 @@ class MainWindow(QMainWindow):
         # BusyDialog (QProgressDialog) will be created lazily on first use to avoid
         # any chance of it appearing during application startup.
         self._busy_dialog = None
+        # Ensure sliders disabled at startup
+        self._set_sliders_enabled(False)
 
     def _create_menu(self) -> None:
         """Create application menu."""
@@ -536,6 +646,26 @@ class MainWindow(QMainWindow):
         # Save map
         self.save_map_btn.clicked.connect(self._save_map)
 
+        # Adjustment sliders
+        self.brightness_slider.valueChanged.connect(self._on_adj_slider_changed)
+        self.contrast_slider.valueChanged.connect(self._on_adj_slider_changed)
+        self.saturation_slider.valueChanged.connect(self._on_adj_slider_changed)
+        # Immediate update on release
+        self.brightness_slider.sliderReleased.connect(
+            self._start_fullres_adjustment_immediate
+        )
+        self.contrast_slider.sliderReleased.connect(
+            self._start_fullres_adjustment_immediate
+        )
+        self.saturation_slider.sliderReleased.connect(
+            self._start_fullres_adjustment_immediate
+        )
+        # Debounce timer
+        self._preview_update_timer.timeout.connect(self._start_fullres_adjustment)
+
+        # Size estimate timer
+        self._estimate_timer.timeout.connect(self._start_size_estimate)
+
         # Settings change tracking
         self._connect_setting_changes()
 
@@ -558,11 +688,12 @@ class MainWindow(QMainWindow):
         self.grid_widget.padding_spin.valueChanged.connect(self._on_settings_changed)
 
         # Output settings
-        self.output_widget.opacity_slider.valueChanged.connect(
-            self._on_settings_changed
-        )
         self.output_widget.quality_slider.valueChanged.connect(
             self._on_settings_changed
+        )
+        # Also schedule size estimate on quality changes
+        self.output_widget.quality_slider.valueChanged.connect(
+            self._schedule_size_estimate
         )
 
     def _load_initial_data(self) -> None:
@@ -625,8 +756,6 @@ class MainWindow(QMainWindow):
     def _save_profile_as(self) -> None:
         """Save current settings to a new profile file."""
         # Get default directory
-        from constants import PROFILES_DIR
-
         project_root = Path(__file__).parent.parent.parent
         default_dir = project_root / PROFILES_DIR
 
@@ -763,7 +892,6 @@ class MainWindow(QMainWindow):
         # Update output settings
         output_settings = {
             'output_path': settings.output_path,
-            'mask_opacity': settings.mask_opacity,
             'jpeg_quality': getattr(settings, 'jpeg_quality', 95),
         }
         self.output_widget.set_settings(output_settings)
@@ -807,15 +935,22 @@ class MainWindow(QMainWindow):
                 logger.warning('Invalid image object for preview')
                 return
 
-            # Store current image for saving
-            self._current_image = image
+            # Set base image (full size) and reset adjustments
+            self._base_image = image.convert('RGB') if image.mode != 'RGB' else image
+            self._adj = {'brightness': 1.0, 'contrast': 1.0, 'saturation': 1.0}
+            self._sync_adj_ui_from_state()
 
-            # Display image in the preview area
-            self._preview_area.set_image(image)
+            # Display original first
+            self._current_image = self._base_image
+            self._preview_area.set_image(self._current_image)
+            # Show size estimate immediately after preview loading
+            self._start_size_estimate()
 
             # Enable save button and menu action
             self.save_map_btn.setEnabled(True)
             self.save_map_action.setEnabled(True)
+            # Enable adjustment sliders now that image is available
+            self._set_sliders_enabled(True)
 
             logger.info('Preview displayed in main window')
 
@@ -834,8 +969,6 @@ class MainWindow(QMainWindow):
             return
 
         # Get file path from user
-        from pathlib import Path
-
         maps_dir = Path(__file__).resolve().parent.parent.parent / 'maps'
         maps_dir.mkdir(exist_ok=True)  # Ensure maps directory exists
         default_path = str(maps_dir / 'map.jpg')
@@ -863,17 +996,54 @@ class MainWindow(QMainWindow):
             class _SaveWorker(QObject):
                 finished = Signal(bool, str)  # success, error_message
 
-                def __init__(self, image, path: Path, quality: int):
+                def __init__(
+                    self, image, path: Path, quality: int, adj: dict[str, float]
+                ):
                     super().__init__()
                     self.image = image
                     self.path = path
                     self.quality = quality
+                    self.adj = adj
 
                 def run(self) -> None:
                     """Save the image in background thread."""
                     try:
-                        self.image.save(
-                            str(self.path), 'JPEG', quality=self.quality, optimize=True
+                        img = self.image
+                        if img.mode != 'RGB':
+                            img = img.convert('RGB')
+                        # Apply same LUT adjustments
+                        b = float(self.adj.get('brightness', 1.0))
+                        c = float(self.adj.get('contrast', 1.0))
+                        s = float(self.adj.get('saturation', 1.0))
+                        if not (
+                            abs(b - 1.0) < FLOAT_COMPARISON_TOLERANCE
+                            and abs(c - 1.0) < FLOAT_COMPARISON_TOLERANCE
+                            and abs(s - 1.0) < FLOAT_COMPARISON_TOLERANCE
+                        ):
+
+                            def clamp(v: int) -> int:
+                                return 0 if v < 0 else (min(v, 255))
+
+                            lut_y = [0] * 256
+                            lut_c = [0] * 256
+                            for i in range(256):
+                                y = round(((i - 128) * c + 128) * b)
+                                lut_y[i] = clamp(y)
+                                cc = round(128 + (i - 128) * s)
+                                lut_c[i] = clamp(cc)
+                            ycbcr = img.convert('YCbCr')
+                            y, cb, cr = ycbcr.split()
+                            y = y.point(lut_y)
+                            cb = cb.point(lut_c)
+                            cr = cr.point(lut_c)
+                            img = Image.merge('YCbCr', (y, cb, cr)).convert('RGB')
+
+                        img.save(
+                            str(self.path),
+                            'JPEG',
+                            quality=self.quality,
+                            optimize=True,
+                            subsampling='4:4:4',
                         )
                         self.finished.emit(True, '')
                     except Exception as e:
@@ -884,7 +1054,9 @@ class MainWindow(QMainWindow):
 
             # Create and setup worker thread
             th = QThread()
-            worker = _SaveWorker(self._current_image, out_path, quality)
+            # Use base image to ensure full resolution; apply current adjustments in worker
+            base_for_save = self._base_image or self._current_image
+            worker = _SaveWorker(base_for_save, out_path, quality, dict(self._adj))
             worker.moveToThread(th)
 
             # Store references for cleanup
@@ -910,8 +1082,18 @@ class MainWindow(QMainWindow):
                     # Clear preview area after successful save
                     self._preview_area.clear()
                     self._current_image = None
+                    self._base_image = None
+                    # Reset adjustments to defaults and sync labels (sliders stay disabled)
+                    self._adj = {'brightness': 1.0, 'contrast': 1.0, 'saturation': 1.0}
+                    self._sync_adj_ui_from_state()
+                    # Disable save controls as no image is present
                     self.save_map_btn.setEnabled(False)
                     self.save_map_action.setEnabled(False)
+                    # Disable adjustment sliders when no image
+                    self._set_sliders_enabled(False)
+                    # Reset size estimate
+                    with contextlib.suppress(Exception):
+                        self.output_widget.size_estimate_value.setText('—')
                 else:
                     logger.error(f'Failed to save image: {err}')
                     err_text = str(err)
@@ -939,6 +1121,168 @@ class MainWindow(QMainWindow):
             error_msg = f'Ошибка при сохранении: {e}'
             logger.exception(error_msg)
             QMessageBox.critical(self, 'Ошибка', error_msg)
+
+    # ----- Adjustments (brightness/contrast/saturation) -----
+    def _sync_adj_ui_from_state(self) -> None:
+        self.brightness_slider.setValue(round(self._adj['brightness'] * 100))
+        self.contrast_slider.setValue(round(self._adj['contrast'] * 100))
+        self.saturation_slider.setValue(round(self._adj['saturation'] * 100))
+        self._update_adj_labels()
+
+    def _update_adj_labels(self) -> None:
+        self.brightness_label.setText(f'Яркость: {self.brightness_slider.value()}%')
+        self.contrast_label.setText(f'Контрастность: {self.contrast_slider.value()}%')
+        self.saturation_label.setText(
+            f'Насыщенность: {self.saturation_slider.value()}%'
+        )
+
+    def _on_adj_slider_changed(self, *args) -> None:
+        # Update state from sliders
+        self._adj['brightness'] = self.brightness_slider.value() / 100.0
+        self._adj['contrast'] = self.contrast_slider.value() / 100.0
+        self._adj['saturation'] = self.saturation_slider.value() / 100.0
+        self._update_adj_labels()
+        # Request debounced adjust strictly via GUI signal
+        self._sig_schedule_adjust.emit()
+        # Also schedule size estimate (debounced)
+        self._schedule_size_estimate()
+
+    def _start_fullres_adjustment_immediate(self) -> None:
+        # Immediate run strictly via GUI signal
+        self._sig_run_adjust_now.emit()
+
+    @Slot()
+    def _schedule_adjust_gui(self) -> None:
+        try:
+            logger.debug(
+                f'[ADJ] schedule_adjust_gui on_gui={QThread.currentThread() is self.thread()}'
+            )
+            self._preview_update_timer.start()
+        except Exception as e:
+            logger.warning(f'Debounce timer start failed: {e}')
+
+    @Slot()
+    def _run_adjust_now_gui(self) -> None:
+        try:
+            logger.debug(
+                f'[ADJ] run_adjust_now_gui on_gui={QThread.currentThread() is self.thread()}'
+            )
+            self._preview_update_timer.stop()
+        except Exception as e:
+            logger.debug(f'Error stopping preview update timer: {e}')
+        self._start_fullres_adjustment()
+
+    def _start_fullres_adjustment(self) -> None:
+        if self._base_image is None:
+            return
+        # Increment generation
+        self._adj_generation += 1
+        generation = self._adj_generation
+        adj = dict(self._adj)
+
+        # Disable save during processing
+        self.save_map_btn.setEnabled(False)
+        self.save_map_action.setEnabled(False)
+
+        # Stop previous thread if running (let it finish; we will ignore result)
+        # Create worker
+        class _AdjustWorker(QObject):
+            finished = Signal(int, object, str)  # generation, image or None, error
+
+            def __init__(
+                self, image: Image.Image, adj: dict[str, float], gen: int
+            ) -> None:
+                super().__init__()
+                self.image = image
+                self.adj = adj
+                self.gen = gen
+
+            @Slot()
+            def run(self) -> None:
+                try:
+                    img = self.image
+                    if img.mode != 'RGB':
+                        img = img.convert('RGB')
+                    # Build LUTs
+                    b = float(self.adj.get('brightness', 1.0))
+                    c = float(self.adj.get('contrast', 1.0))
+                    s = float(self.adj.get('saturation', 1.0))
+
+                    # Early out if identity
+                    if (
+                        abs(b - 1.0) < FLOAT_COMPARISON_TOLERANCE
+                        and abs(c - 1.0) < FLOAT_COMPARISON_TOLERANCE
+                        and abs(s - 1.0) < FLOAT_COMPARISON_TOLERANCE
+                    ):
+                        self.finished.emit(self.gen, img, '')
+                        return
+
+                    def clamp(v: int) -> int:
+                        return 0 if v < 0 else (min(v, 255))
+
+                    lut_y = [0] * 256
+                    lut_c = [0] * 256
+                    for i in range(256):
+                        y = round(((i - 128) * c + 128) * b)
+                        lut_y[i] = clamp(y)
+                        cc = round(128 + (i - 128) * s)
+                        lut_c[i] = clamp(cc)
+
+                    ycbcr = img.convert('YCbCr')
+                    y, cb, cr = ycbcr.split()
+                    y = y.point(lut_y)
+                    cb = cb.point(lut_c)
+                    cr = cr.point(lut_c)
+                    merged = Image.merge('YCbCr', (y, cb, cr)).convert('RGB')
+                    self.finished.emit(self.gen, merged, '')
+                except Exception as e:
+                    self.finished.emit(self.gen, None, str(e))
+
+        # Setup thread (canonical pattern: finished->quit, thread.finished->deleteLater)
+        th = QThread()
+        worker = _AdjustWorker(self._base_image, adj, generation)
+        worker.moveToThread(th)
+        # Store strong references until finished
+        self._adjust_threads.append(th)
+        self._adjust_workers.append(worker)
+
+        th.started.connect(worker.run)
+
+        def _on_done(gen: int, img_obj: object, err: str) -> None:
+            # Ensure this slot runs in GUI thread via QueuedConnection
+            self.save_map_btn.setEnabled(True)
+            self.save_map_action.setEnabled(True)
+            if gen != self._adj_generation:
+                return  # stale result
+            if err:
+                logger.error(f'Adjustment error: {err}')
+                return
+            if isinstance(img_obj, Image.Image):
+                logger.debug(
+                    f'[ADJ] Applying adjusted image gen={gen} matches current gen; size={getattr(img_obj, "size", None)}'
+                )
+                self._current_image = img_obj
+                try:
+                    self._preview_area.set_image(img_obj)
+                except Exception as ex:
+                    logger.exception(f'[ADJ] set_image failed: {ex}')
+
+        # Deliver result back to UI via class slot to guarantee GUI thread
+        worker.finished.connect(
+            self._on_adjust_done_slot, Qt.ConnectionType.QueuedConnection
+        )
+        # Stop the worker thread event loop when work is finished
+        worker.finished.connect(th.quit, Qt.ConnectionType.QueuedConnection)
+
+        # Track worker by thread for cleanup
+        self._adjust_map[th] = worker
+        # Cleanup in GUI slot when thread finishes
+        th.finished.connect(
+            self._on_adjust_thread_finished_slot, Qt.ConnectionType.QueuedConnection
+        )
+        th.start()
+        # After adjustment result, also schedule size estimate (image content changed)
+        self._schedule_size_estimate()
 
     def _cleanup_save_resources(self) -> None:
         """Clean up save operation resources."""
@@ -969,6 +1313,66 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.exception(f'Error cleaning up save resources: {e}')
 
+    def _set_sliders_enabled(self, enabled: bool) -> None:
+        """Enable/disable sliders with enhanced fade effect."""
+        sliders = [
+            self.brightness_slider,
+            self.contrast_slider,
+            self.saturation_slider,
+            self.quality_slider,
+        ]
+
+        if enabled:
+            # Активное состояние - оранжевые стили
+            slider_style = """
+            QSlider {
+                background: transparent;
+            }
+            QSlider::groove:horizontal {
+                border: 1px solid #cc6600;
+                height: 8px;
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #ff8800, stop:1 #ff9933);
+                margin: 2px 0;
+                border-radius: 4px;
+            }
+            QSlider::handle:horizontal {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #ff9933, stop:1 #cc6600);
+                border: 1px solid #994400;
+                width: 18px;
+                margin: -2px 0;
+                border-radius: 9px;
+            }
+            QSlider::handle:horizontal:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #ffaa44, stop:1 #dd7711);
+            }
+            """
+        else:
+            # Неактивное состояние - сильно приглушенные стили
+            slider_style = """
+            QSlider {
+                background: transparent;
+                opacity: 0.3;
+            }
+            QSlider::groove:horizontal {
+                border: 1px solid #e0e0e0;
+                height: 8px;
+                background: #f5f5f5;
+                margin: 2px 0;
+                border-radius: 4px;
+            }
+            QSlider::handle:horizontal {
+                background: #e0e0e0;
+                border: 1px solid #d0d0d0;
+                width: 18px;
+                margin: -2px 0;
+                border-radius: 9px;
+            }
+            """
+
+        for slider in sliders:
+            slider.setEnabled(enabled)
+            slider.setStyleSheet(slider_style)
+
     @Slot()
     def _new_profile(self) -> None:
         """Create new profile (placeholder)."""
@@ -985,10 +1389,159 @@ class MainWindow(QMainWindow):
         QMessageBox.about(
             self,
             'О программе',
-            'SK42mapper v0.2\n\nПриложение для создания карт в системе Гаусса-Крюгера\n'
-         )
+            'SK42mapper v0.2\n\nПриложение для создания карт в системе Гаусса-Крюгера\n',
+        )
 
-    def close_event(self, event: Any) -> None:
+    # ----- Size estimate helpers -----
+    def _schedule_size_estimate(self) -> None:
+        try:
+            self._estimate_timer.start()
+        except Exception:
+            # Fallback: run immediately
+            self._start_size_estimate()
+
+    @staticmethod
+    def _format_bytes(num: int) -> str:
+        try:
+            if num < BYTES_TO_KB_THRESHOLD:
+                return f'{num} Б'
+            num_float = float(num)
+            for unit in ['КБ', 'МБ', 'ГБ', 'ТБ']:
+                num_float /= BYTES_CONVERSION_FACTOR
+                if num_float < BYTES_CONVERSION_FACTOR:
+                    return f'{num_float:.1f} {unit}'
+            return f'{num_float:.1f} ПБ'
+        except Exception:
+            return '—'
+
+    def _start_size_estimate(self) -> None:
+        # Preconditions
+        base = self._base_image
+        if base is None:
+            self.output_widget.size_estimate_value.setText('—')
+            return
+        try:
+
+            class _EstimateWorker(QObject):
+                finished = Signal(int, str)  # estimate_bytes, error
+
+                def __init__(
+                    self, img: Image.Image, adj: dict[str, float], quality: int
+                ) -> None:
+                    super().__init__()
+                    self.image = img
+                    self.adj = adj
+                    self.quality = int(max(10, min(100, quality)))
+
+                @Slot()
+                def run(self) -> None:
+                    try:
+                        img = self.image
+                        if img.mode != 'RGB':
+                            img = img.convert('RGB')
+                        # Apply LUT same as elsewhere
+                        b = float(self.adj.get('brightness', 1.0))
+                        c = float(self.adj.get('contrast', 1.0))
+                        s = float(self.adj.get('saturation', 1.0))
+                        if not (
+                            abs(b - 1.0) < FLOAT_COMPARISON_TOLERANCE
+                            and abs(c - 1.0) < FLOAT_COMPARISON_TOLERANCE
+                            and abs(s - 1.0) < FLOAT_COMPARISON_TOLERANCE
+                        ):
+
+                            def clamp(v: int) -> int:
+                                return 0 if v < 0 else (min(v, 255))
+
+                            lut_y = [0] * 256
+                            lut_c = [0] * 256
+                            for i in range(256):
+                                y = round(((i - 128) * c + 128) * b)
+                                lut_y[i] = clamp(y)
+                                cc = round(128 + (i - 128) * s)
+                                lut_c[i] = clamp(cc)
+                            ycbcr = img.convert('YCbCr')
+                            y, cb, cr = ycbcr.split()
+                            y = y.point(lut_y)
+                            cb = cb.point(lut_c)
+                            cr = cr.point(lut_c)
+                            img = Image.merge('YCbCr', (y, cb, cr)).convert('RGB')
+
+                        # Downscale for fast estimation
+                        max_side = 1600
+                        w, h = img.size
+                        scale = 1.0
+                        if max(w, h) > max_side:
+                            scale = max_side / float(max(w, h))
+                            new_w = max(1, round(w * scale))
+                            new_h = max(1, round(h * scale))
+                            img_small = img.resize(
+                                (new_w, new_h), Image.Resampling.LANCZOS
+                            )
+                        else:
+                            img_small = img
+                            new_w, new_h = w, h
+
+                        buf = BytesIO()
+                        img_small.save(
+                            buf,
+                            'JPEG',
+                            quality=self.quality,
+                            optimize=True,
+                            subsampling='4:4:4',
+                            progressive=False,
+                        )
+                        bytes_down = buf.tell()
+                        # Scale up by pixel count ratio and add small header constant
+                        k = (w * h) / float(new_w * new_h)
+                        estimate = int(bytes_down * k + 2048)
+                        self.finished.emit(estimate, '')
+                    except Exception as e:
+                        self.finished.emit(0, str(e))
+
+            th = QThread()
+            worker = _EstimateWorker(
+                base,
+                dict(self._adj),
+                int(getattr(self._model.settings, 'jpeg_quality', 95)),
+            )
+            worker.moveToThread(th)
+            self._estimate_threads.append(th)
+            self._estimate_workers.append(worker)
+
+            def _on_estimate_done(estimate: int, err: str) -> None:
+                if err or estimate <= 0:
+                    self.output_widget.size_estimate_value.setText('—')
+                else:
+                    self.output_widget.size_estimate_value.setText(
+                        f'≈ {self._format_bytes(estimate)}'
+                    )
+
+            th.started.connect(worker.run)
+            worker.finished.connect(
+                _on_estimate_done, Qt.ConnectionType.QueuedConnection
+            )
+            worker.finished.connect(th.quit, Qt.ConnectionType.QueuedConnection)
+
+            def _cleanup() -> None:
+                try:
+                    if worker in self._estimate_workers:
+                        self._estimate_workers.remove(worker)
+                        worker.deleteLater()
+                except Exception as e:
+                    logger.debug(f'Error cleaning up estimate worker: {e}')
+                try:
+                    if th in self._estimate_threads:
+                        self._estimate_threads.remove(th)
+                        th.deleteLater()
+                except Exception as e:
+                    logger.debug(f'Error cleaning up estimate thread: {e}')
+
+            th.finished.connect(_cleanup, Qt.ConnectionType.QueuedConnection)
+            th.start()
+        except Exception:
+            self.output_widget.size_estimate_value.setText('—')
+
+    def closeEvent(self, event) -> None:
         """Handle window close event."""
         logger.info('Application closing - cleaning up resources')
         log_comprehensive_diagnostics('CLEANUP_START')
@@ -1005,8 +1558,6 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 logger.warning(f'Failed to hide busy dialog during cleanup: {e}')
             self._busy_dialog = None
-        from progress import cleanup_all_progress_resources
-
         cleanup_all_progress_resources()
         log_memory_usage('after progress cleanup')
         log_thread_status('after progress cleanup')
@@ -1028,6 +1579,20 @@ class MainWindow(QMainWindow):
         # Cleanup save resources
         self._cleanup_save_resources()
         log_memory_usage('after save resources cleanup')
+
+        # Stop and cleanup any adjustment threads
+        try:
+            for th in list(self._adjust_threads):
+                try:
+                    th.quit()
+                    th.wait(5000)
+                except Exception as e:
+                    logger.debug(f'Error stopping adjustment thread on close: {e}')
+            # deleteLater scheduled already in their cleanup, but ensure lists are cleared
+            self._adjust_threads.clear()
+            self._adjust_workers.clear()
+        except Exception as e:
+            logger.warning(f'Error cleaning adjustment threads on close: {e}')
 
         # Remove observer
         self._model.remove_observer(self._observer_adapter)
