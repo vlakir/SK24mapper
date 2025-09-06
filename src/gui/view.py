@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressDialog,
     QPushButton,
+    QSizePolicy,
     QSlider,
     QSpinBox,
     QStatusBar,
@@ -418,7 +419,10 @@ class MainWindow(QMainWindow):
     def _setup_ui(self) -> None:
         """Setup the main window UI."""
         self.setWindowTitle('SK42mapper')
-        self.setFixedSize(1500, 600)
+        # Use a responsive window: set a reasonable minimum size and allow resizing
+        self.setMinimumSize(900, 500)
+        # Set a preferred starting size without fixing it, so users on smaller screens can resize
+        self.resize(1200, 700)
 
         # Create central widget
         central_widget = QWidget()
@@ -576,7 +580,6 @@ class MainWindow(QMainWindow):
         self.download_btn.setToolTip('Начать создание карты')
         self.download_btn.setStyleSheet('QPushButton { font-weight: bold; }')
         # Make the button expand to full available width like the save button on the right
-        from PySide6.QtWidgets import QSizePolicy
 
         self.download_btn.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
@@ -593,7 +596,6 @@ class MainWindow(QMainWindow):
 
         self._preview_area = OptimizedImageView()
         # Let preview take all available vertical space
-        from PySide6.QtWidgets import QSizePolicy
 
         self._preview_area.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
@@ -612,7 +614,6 @@ class MainWindow(QMainWindow):
         self.save_map_btn.setStyleSheet('QPushButton { font-weight: bold; }')
         self.save_map_btn.setToolTip('Сохранить карту в файл')
         self.save_map_btn.setEnabled(False)
-        from PySide6.QtWidgets import QSizePolicy
 
         self.save_map_btn.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
@@ -624,8 +625,6 @@ class MainWindow(QMainWindow):
         # BusyDialog (QProgressDialog) will be created lazily on first use to avoid
         # any chance of it appearing during application startup.
         self._busy_dialog = None
-        # Ensure sliders disabled at startup
-        self._set_sliders_enabled(False)
 
         # Finally, add left and right widgets to the main layout
         # Give left side more stretch to fit forms, right side for preview
