@@ -418,15 +418,27 @@ class MainWindow(QMainWindow):
     def _setup_ui(self) -> None:
         """Setup the main window UI."""
         self.setWindowTitle('SK42mapper')
-        self.setFixedSize(800, 900)
+        self.setFixedSize(1500, 600)
 
         # Create central widget
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
 
-        # Main layout
-        main_layout = QVBoxLayout()
+        # Main layout: split left controls and right preview
+        main_layout = QHBoxLayout()
         central_widget.setLayout(main_layout)
+
+        # Left side vertical container
+        left_container = QVBoxLayout()
+        # Ensure all left-side elements are aligned to the top except we will use stretches for alignment where needed
+        # left_container.setAlignment(Qt.AlignmentFlag.AlignTop)
+        left_widget = QWidget()
+        left_widget.setLayout(left_container)
+
+        # Right side preview container
+        right_container = QVBoxLayout()
+        right_widget = QWidget()
+        right_widget.setLayout(right_container)
 
         # Create menu
         self._create_menu()
@@ -460,7 +472,7 @@ class MainWindow(QMainWindow):
         profile_layout.addWidget(self.save_profile_as_btn)
 
         profile_layout.addStretch()
-        main_layout.addLayout(profile_layout)
+        left_container.addLayout(profile_layout)
 
         # Coordinates section
         coords_frame = QFrame()
@@ -504,7 +516,7 @@ class MainWindow(QMainWindow):
 
         coords_layout.addLayout(panels_layout)
 
-        main_layout.addWidget(coords_frame)
+        left_container.addWidget(coords_frame)
 
         # Settings sections arranged vertically with header above panels
         settings_container = QFrame()
@@ -554,13 +566,22 @@ class MainWindow(QMainWindow):
 
         settings_container.setLayout(settings_vertical_layout)
 
-        main_layout.addWidget(settings_container)
+        left_container.addWidget(settings_container)
 
-        # Create map button - positioned below settings panels
+        # Add a stretch so that the create button can align vertically with the right save button
+        left_container.addStretch()
+
+        # Create map button - positioned below settings panels; make it fill full width of left column
         self.download_btn = QPushButton('Создать карту')
         self.download_btn.setToolTip('Начать создание карты')
         self.download_btn.setStyleSheet('QPushButton { font-weight: bold; }')
-        main_layout.addWidget(self.download_btn)
+        # Make the button expand to full available width like the save button on the right
+        from PySide6.QtWidgets import QSizePolicy
+
+        self.download_btn.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+        left_container.addWidget(self.download_btn)
 
         # Preview area section
         preview_frame = QFrame()
@@ -571,29 +592,45 @@ class MainWindow(QMainWindow):
         preview_layout.addWidget(QLabel('Предпросмотр карты:'))
 
         self._preview_area = OptimizedImageView()
+        # Let preview take all available vertical space
+        from PySide6.QtWidgets import QSizePolicy
+
+        self._preview_area.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
         self._preview_area.setMinimumHeight(220)
-        preview_layout.addWidget(self._preview_area)
+        preview_layout.addWidget(self._preview_area, 1)
 
-        self._set_sliders_enabled(False)
+        # Put preview frame into right container with stretch so it occupies all remaining space above the save button
+        right_container.addWidget(preview_frame, 1)
 
-        # Add spacing before the save button
+        # Add spacing before the save button inside preview layout (visual separation)
         preview_layout.addSpacing(10)
 
-        # Save map button
+        # Save map button (under preview on the right)
         self.save_map_btn = QPushButton('Сохранить карту')
         self.save_map_btn.setStyleSheet('QPushButton { font-weight: bold; }')
-
         self.save_map_btn.setToolTip('Сохранить карту в файл')
-        self.save_map_btn.setEnabled(False)  # Disabled until image is loaded
+        self.save_map_btn.setEnabled(False)
+        from PySide6.QtWidgets import QSizePolicy
 
-        main_layout.addWidget(preview_frame)
-        main_layout.addWidget(self.save_map_btn)
+        self.save_map_btn.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+        right_container.addWidget(self.save_map_btn)
+
+        self._set_sliders_enabled(False)
 
         # BusyDialog (QProgressDialog) will be created lazily on first use to avoid
         # any chance of it appearing during application startup.
         self._busy_dialog = None
         # Ensure sliders disabled at startup
         self._set_sliders_enabled(False)
+
+        # Finally, add left and right widgets to the main layout
+        # Give left side more stretch to fit forms, right side for preview
+        main_layout.addWidget(left_widget, 1)
+        main_layout.addWidget(right_widget, 1)
 
     def _create_menu(self) -> None:
         """Create application menu."""
