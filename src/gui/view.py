@@ -590,6 +590,7 @@ class MainWindow(QMainWindow):
             QSizePolicy.Policy.Expanding,
         )
         self._preview_area.setMinimumHeight(220)
+        self._preview_area.setMinimumWidth(300)
         preview_layout.addWidget(self._preview_area, 1)
 
         right_container.addWidget(preview_frame, 1)
@@ -618,9 +619,12 @@ class MainWindow(QMainWindow):
         splitter.addWidget(right_widget)
         splitter.setChildrenCollapsible(False)
         splitter.setHandleWidth(6)
+        # Prevent left panel from collapsing too small
+        left_min = max(300, left_widget.sizeHint().width())
+        left_scroll.setMinimumWidth(left_min)
         splitter.setStretchFactor(0, 0)  # левая колонка — фиксированнее
         splitter.setStretchFactor(1, 1)  # правая колонка (превью) растягивается
-        splitter.setSizes([600, 600])  # стартовые пропорции
+        splitter.setSizes([left_min + 100, 600])
 
         # Добавляем splitter вместо двух виджетов
         main_layout.addWidget(splitter, 1)
