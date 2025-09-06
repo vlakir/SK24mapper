@@ -63,7 +63,9 @@ class Observable:
             logger.debug(f'Removed observer: {observer.__class__.__name__}')
 
     def notify_observers(
-        self, event: ModelEvent, data: dict[str, Any] | None = None
+        self,
+        event: ModelEvent,
+        data: dict[str, Any] | None = None,
     ) -> None:
         """Notify all observers of an event."""
         event_data = EventData(event=event, data=data or {})
@@ -74,7 +76,7 @@ class Observable:
                 observer.update(event_data)
             except Exception as e:
                 logger.exception(
-                    f'Error notifying observer {observer.__class__.__name__}: {e}'
+                    f'Error notifying observer {observer.__class__.__name__}: {e}',
                 )
 
 
@@ -139,7 +141,8 @@ class MilMapperModel(Observable):
 
             self._settings = new_settings
             self.notify_observers(
-                ModelEvent.SETTINGS_CHANGED, {'settings': new_settings}
+                ModelEvent.SETTINGS_CHANGED,
+                {'settings': new_settings},
             )
             logger.debug(f'Settings updated: {list(kwargs.keys())}')
 
@@ -203,7 +206,8 @@ class MilMapperModel(Observable):
         self._state.download_label = label
 
         self.notify_observers(
-            ModelEvent.DOWNLOAD_PROGRESS, {'done': done, 'total': total, 'label': label}
+            ModelEvent.DOWNLOAD_PROGRESS,
+            {'done': done, 'total': total, 'label': label},
         )
 
     def complete_download(self, success: bool, error_msg: str | None = None) -> None:
@@ -213,12 +217,14 @@ class MilMapperModel(Observable):
 
         if success:
             self.notify_observers(
-                ModelEvent.DOWNLOAD_COMPLETED, {'settings': self._settings}
+                ModelEvent.DOWNLOAD_COMPLETED,
+                {'settings': self._settings},
             )
             logger.info('Download completed successfully')
         else:
             self.notify_observers(
-                ModelEvent.DOWNLOAD_FAILED, {'error': error_msg or 'Неизвестная ошибка'}
+                ModelEvent.DOWNLOAD_FAILED,
+                {'error': error_msg or 'Неизвестная ошибка'},
             )
             logger.error(f'Download failed: {error_msg}')
 

@@ -159,7 +159,6 @@ WORLD_LAT_MAX_DEG = 90.0
 XY_EPSILON = 1e-9
 
 # --- Параметры сетевых запросов по умолчанию
-# Таймаут (секунды)
 HTTP_TIMEOUT_DEFAULT = 20.0
 HTTP_RETRIES_DEFAULT = 4
 HTTP_BACKOFF_FACTOR = 1.6

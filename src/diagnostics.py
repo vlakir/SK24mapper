@@ -101,11 +101,11 @@ def get_sqlite_info() -> dict[str, Any]:
                             'file': str(sqlite_file),
                             'size_mb': round(stat.st_size / 1024 / 1024, 2),
                             'modified': time.ctime(stat.st_mtime),
-                        }
+                        },
                     )
                 except Exception as e:
                     logger.debug(
-                        f'Failed to get info for SQLite file {sqlite_file}: {e}'
+                        f'Failed to get info for SQLite file {sqlite_file}: {e}',
                     )
 
         return {
@@ -142,7 +142,8 @@ def get_system_load() -> dict[str, Any]:
 
 
 def log_comprehensive_diagnostics(
-    operation: str = 'general', level: int = logging.INFO
+    operation: str = 'general',
+    level: int = logging.INFO,
 ) -> None:
     """Log comprehensive diagnostic information."""
     logger.log(level, f'=== DIAGNOSTIC INFO: {operation.upper()} ===')
@@ -200,7 +201,7 @@ def log_memory_usage(context: str = '') -> None:
     logger.info(
         f'Memory usage{" (" + context + ")" if context else ""}: '
         f'RSS={memory_info.get("process_rss_mb", "N/A")}MB, '
-        f'Available={memory_info.get("system_available_mb", "N/A")}MB'
+        f'Available={memory_info.get("system_available_mb", "N/A")}MB',
     )
 
 
@@ -210,7 +211,7 @@ def log_thread_status(context: str = '') -> None:
     logger.info(
         f'Thread status{" (" + context + ")" if context else ""}: '
         f'Active={thread_info.get("active_count", "N/A")}, '
-        f'System={thread_info.get("system_threads", "N/A")}'
+        f'System={thread_info.get("system_threads", "N/A")}',
     )
 
 
@@ -249,7 +250,7 @@ def monitor_resource_changes(
 class ResourceMonitor:
     """Context manager for monitoring resource usage during operations."""
 
-    def __init__(self, operation_name: str):
+    def __init__(self, operation_name: str) -> None:
         self.operation_name = operation_name
         self.start_time = None
         self.start_resources = None
@@ -269,7 +270,7 @@ class ResourceMonitor:
         assert self.start_time is not None
         duration = time.time() - self.start_time
         logger.info(
-            f"Operation '{self.operation_name}' completed in {duration:.2f} seconds"
+            f"Operation '{self.operation_name}' completed in {duration:.2f} seconds",
         )
 
         # Log final resources and changes
@@ -279,12 +280,12 @@ class ResourceMonitor:
         if exc_type:
             logger.error(
                 f"Operation '{self.operation_name}' failed with "
-                f'{exc_type.__name__}: {exc_val}'
+                f'{exc_type.__name__}: {exc_val}',
             )
 
 
 # Check if psutil is available and log warning if not
 if not _PSUTIL_AVAILABLE:
     logger.warning(
-        'psutil library not available - memory and system monitoring will be limited'
+        'psutil library not available - memory and system monitoring will be limited',
     )

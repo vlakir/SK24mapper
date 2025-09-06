@@ -338,13 +338,15 @@ async def download_satellite_rectangle(  # noqa: PLR0913
             if hasattr(session_ctx, '_cache') and session_ctx._cache:
                 # Close SQLite cache backend if it exists
                 if hasattr(session_ctx._cache, '_cache') and hasattr(
-                    session_ctx._cache._cache, 'close'
+                    session_ctx._cache._cache,
+                    'close',
                 ):
                     await session_ctx._cache._cache.close()
         except Exception:
             # Ignore cleanup errors but log them
             logging.getLogger(__name__).debug(
-                'Error during HTTP session cleanup', exc_info=True
+                'Error during HTTP session cleanup',
+                exc_info=True,
             )
 
         # Force cleanup of SQLite connections in cache directory

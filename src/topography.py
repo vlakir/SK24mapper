@@ -53,7 +53,7 @@ def build_transformers_sk42(
     """
     zone = int(
         math.floor((zone_from_lon + GK_ZONE_CM_OFFSET_DEG) / float(GK_ZONE_WIDTH_DEG))
-        + 1
+        + 1,
     )
     zone = max(1, min(60, zone))
     try:
@@ -394,11 +394,11 @@ async def async_fetch_xyz_tile(  # noqa: PLR0913
             )
             if is_rate_or_5xx:
                 last_exc = RuntimeError(
-                    f'HTTP {sc} при загрузке тайла z/x/y={z}/{x}/{y} path={path}'
+                    f'HTTP {sc} при загрузке тайла z/x/y={z}/{x}/{y} path={path}',
                 )
             else:
                 last_exc = RuntimeError(
-                    f'Неожиданный ответ HTTP {sc} для z/x/y={z}/{x}/{y} path={path}'
+                    f'Неожиданный ответ HTTP {sc} для z/x/y={z}/{x}/{y} path={path}',
                 )
         except Exception as e:
             last_exc = e
