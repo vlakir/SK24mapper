@@ -23,9 +23,11 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressDialog,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QSlider,
     QSpinBox,
+    QSplitter,
     QStatusBar,
     QVBoxLayout,
     QWidget,
@@ -91,7 +93,8 @@ class DownloadWorker(QThread):
             # Setup progress system with thread-safe callbacks
 
             set_spinner_callbacks(
-                lambda label: self.progress_update.emit(0, 0, label), lambda label: None
+                lambda label: self.progress_update.emit(0, 0, label),
+                lambda label: None,
             )
             set_preview_image_callback(preview_callback)
 
@@ -239,7 +242,7 @@ class OutputSettingsWidget(QWidget):
 
         self.quality_label = QLabel('95')
         self.quality_slider.valueChanged.connect(
-            lambda v: self.quality_label.setText(f'{v}')
+            lambda v: self.quality_label.setText(f'{v}'),
         )
         layout.addWidget(self.quality_label, 0, 2)
 
@@ -247,7 +250,7 @@ class OutputSettingsWidget(QWidget):
         self.size_estimate_title = QLabel('Оценка размера:')
         self.size_estimate_value = QLabel('—')
         self.size_estimate_value.setToolTip(
-            'Приблизительный размер итогового JPEG при текущем качестве'
+            'Приблизительный размер итогового JPEG при текущем качестве',
         )
         layout.addWidget(self.size_estimate_title, 1, 0)
         layout.addWidget(self.size_estimate_value, 1, 1)
@@ -407,10 +410,12 @@ class MainWindow(QMainWindow):
 
         # Connect internal signals to GUI-only slots (Queued)
         self._sig_schedule_adjust.connect(
-            self._schedule_adjust_gui, Qt.ConnectionType.QueuedConnection
+            self._schedule_adjust_gui,
+            Qt.ConnectionType.QueuedConnection,
         )
         self._sig_run_adjust_now.connect(
-            self._run_adjust_now_gui, Qt.ConnectionType.QueuedConnection
+            self._run_adjust_now_gui,
+            Qt.ConnectionType.QueuedConnection,
         )
 
         self._load_initial_data()
@@ -419,41 +424,39 @@ class MainWindow(QMainWindow):
     def _setup_ui(self) -> None:
         """Setup the main window UI."""
         self.setWindowTitle('SK42mapper')
-        # Use a responsive window: set a reasonable minimum size and allow resizing
+        # Используем минимальный размер и возможность свободно менять размер окна
         self.setMinimumSize(900, 500)
-        # Set a preferred starting size without fixing it, so users on smaller screens can resize
+        # Предпочитаемый стартовый размер (не фиксированный)
         self.resize(1200, 700)
 
-        # Create central widget
+        # Центральный виджет
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
 
-        # Main layout: split left controls and right preview
+        # Главный горизонтальный лейаут
         main_layout = QHBoxLayout()
         central_widget.setLayout(main_layout)
 
-        # Left side vertical container
+        # Левая колонка (контролы)
         left_container = QVBoxLayout()
-        # Ensure all left-side elements are aligned to the top except we will use stretches for alignment where needed
-        # left_container.setAlignment(Qt.AlignmentFlag.AlignTop)
         left_widget = QWidget()
         left_widget.setLayout(left_container)
 
-        # Right side preview container
+        # Правая колонка (превью)
         right_container = QVBoxLayout()
         right_widget = QWidget()
         right_widget.setLayout(right_container)
 
-        # Create menu
+        # Меню
         self._create_menu()
 
-        # Create status bar
+        # Статус-бар
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
         self._status_proxy = StatusBarProxy(self.status_bar)
         self._status_proxy.show_message('Готов к работе')
 
-        # Profile selection
+        # Блок профилей
         profile_layout = QHBoxLayout()
         profile_layout.addWidget(QLabel('Профиль:'))
 
@@ -471,14 +474,14 @@ class MainWindow(QMainWindow):
 
         self.save_profile_as_btn = QPushButton('Сохранить как...')
         self.save_profile_as_btn.setToolTip(
-            'Сохранить текущие настройки в новый профиль'
+            'Сохранить текущие настройки в новый профиль',
         )
         profile_layout.addWidget(self.save_profile_as_btn)
 
         profile_layout.addStretch()
         left_container.addLayout(profile_layout)
 
-        # Coordinates section
+        # Координаты
         coords_frame = QFrame()
         coords_frame.setFrameStyle(QFrame.Shape.StyledPanel)
         coords_layout = QVBoxLayout()
@@ -491,10 +494,8 @@ class MainWindow(QMainWindow):
         self.to_x_widget = CoordinateInputWidget('X (вертикаль):', 54, 23)
         self.to_y_widget = CoordinateInputWidget('Y (горизонталь):', 74, 49)
 
-        # Create panels for coordinate groups
         panels_layout = QHBoxLayout()
 
-        # "From" coordinates panel
         from_group = QFrame()
         from_group.setFrameStyle(QFrame.Shape.StyledPanel)
         from_layout = QVBoxLayout()
@@ -506,7 +507,6 @@ class MainWindow(QMainWindow):
         from_group.setLayout(from_layout)
         panels_layout.addWidget(from_group)
 
-        # "To" coordinates panel
         to_group = QFrame()
         to_group.setFrameStyle(QFrame.Shape.StyledPanel)
         to_layout = QVBoxLayout()
@@ -519,42 +519,31 @@ class MainWindow(QMainWindow):
         panels_layout.addWidget(to_group)
 
         coords_layout.addLayout(panels_layout)
-
         left_container.addWidget(coords_frame)
 
-        # Settings sections arranged vertically with header above panels
+        # Настройки
         settings_container = QFrame()
         settings_container.setFrameStyle(QFrame.Shape.StyledPanel)
         settings_vertical_layout = QVBoxLayout()
 
-        # Add settings header above the panels
         settings_vertical_layout.addWidget(QLabel('Настройки'))
-
-        # Create horizontal layout for the panels
         settings_horizontal_layout = QHBoxLayout()
 
-        # Grid settings section
         grid_frame = QFrame()
         grid_frame.setFrameStyle(QFrame.Shape.StyledPanel)
         grid_layout = QVBoxLayout()
         grid_frame.setLayout(grid_layout)
-
-        # grid_layout.addWidget(QLabel("Сетка:"))
         self.grid_widget = GridSettingsWidget()
         grid_layout.addWidget(self.grid_widget)
-
         settings_horizontal_layout.addWidget(grid_frame)
 
-        # Output settings section
         output_frame = QFrame()
         output_frame.setFrameStyle(QFrame.Shape.StyledPanel)
         output_layout = QVBoxLayout()
         output_frame.setLayout(output_layout)
-
-        # output_layout.addWidget(QLabel("Файл:"))
         self.output_widget = OutputSettingsWidget()
         output_layout.addWidget(self.output_widget)
-        # Alias sliders/labels from output settings to main window for event wiring
+        # Алиасы слайдеров/лейблов для связки сигналов
         self.quality_slider = self.output_widget.quality_slider
         self.brightness_slider = self.output_widget.brightness_slider
         self.contrast_slider = self.output_widget.contrast_slider
@@ -564,29 +553,30 @@ class MainWindow(QMainWindow):
         self.saturation_label = self.output_widget.saturation_label
 
         settings_horizontal_layout.addWidget(output_frame)
-
-        # Add the horizontal panels layout to the vertical layout
         settings_vertical_layout.addLayout(settings_horizontal_layout)
-
         settings_container.setLayout(settings_vertical_layout)
-
         left_container.addWidget(settings_container)
 
-        # Add a stretch so that the create button can align vertically with the right save button
+        # Растяжка перед кнопкой создания карты
         left_container.addStretch()
 
-        # Create map button - positioned below settings panels; make it fill full width of left column
+        # Кнопка "Создать карту"
         self.download_btn = QPushButton('Создать карту')
         self.download_btn.setToolTip('Начать создание карты')
         self.download_btn.setStyleSheet('QPushButton { font-weight: bold; }')
-        # Make the button expand to full available width like the save button on the right
-
         self.download_btn.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Fixed,
         )
         left_container.addWidget(self.download_btn)
 
-        # Preview area section
+        # Оборачиваем левую колонку в QScrollArea для предотвращения обрезания контента
+        left_scroll = QScrollArea()
+        left_scroll.setWidgetResizable(True)
+        left_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        left_scroll.setWidget(left_widget)
+
+        # Превью справа
         preview_frame = QFrame()
         preview_frame.setFrameStyle(QFrame.Shape.StyledPanel)
         preview_layout = QVBoxLayout()
@@ -595,41 +585,45 @@ class MainWindow(QMainWindow):
         preview_layout.addWidget(QLabel('Предпросмотр карты:'))
 
         self._preview_area = OptimizedImageView()
-        # Let preview take all available vertical space
-
         self._preview_area.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
         )
         self._preview_area.setMinimumHeight(220)
         preview_layout.addWidget(self._preview_area, 1)
 
-        # Put preview frame into right container with stretch so it occupies all remaining space above the save button
         right_container.addWidget(preview_frame, 1)
 
-        # Add spacing before the save button inside preview layout (visual separation)
         preview_layout.addSpacing(10)
 
-        # Save map button (under preview on the right)
+        # Кнопка "Сохранить карту"
         self.save_map_btn = QPushButton('Сохранить карту')
         self.save_map_btn.setStyleSheet('QPushButton { font-weight: bold; }')
         self.save_map_btn.setToolTip('Сохранить карту в файл')
         self.save_map_btn.setEnabled(False)
-
         self.save_map_btn.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Fixed,
         )
         right_container.addWidget(self.save_map_btn)
 
         self._set_sliders_enabled(False)
 
-        # BusyDialog (QProgressDialog) will be created lazily on first use to avoid
-        # any chance of it appearing during application startup.
+        # Отложенное создание BusyDialog
         self._busy_dialog = None
 
-        # Finally, add left and right widgets to the main layout
-        # Give left side more stretch to fit forms, right side for preview
-        main_layout.addWidget(left_widget, 1)
-        main_layout.addWidget(right_widget, 1)
+        # Разделитель колонок для настраиваемых ширин
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.addWidget(left_scroll)
+        splitter.addWidget(right_widget)
+        splitter.setChildrenCollapsible(False)
+        splitter.setHandleWidth(6)
+        splitter.setStretchFactor(0, 0)  # левая колонка — фиксированнее
+        splitter.setStretchFactor(1, 1)  # правая колонка (превью) растягивается
+        splitter.setSizes([600, 600])  # стартовые пропорции
+
+        # Добавляем splitter вместо двух виджетов
+        main_layout.addWidget(splitter, 1)
 
     def _create_menu(self) -> None:
         """Create application menu."""
@@ -703,13 +697,13 @@ class MainWindow(QMainWindow):
         self.saturation_slider.valueChanged.connect(self._on_adj_slider_changed)
         # Immediate update on release
         self.brightness_slider.sliderReleased.connect(
-            self._start_fullres_adjustment_immediate
+            self._start_fullres_adjustment_immediate,
         )
         self.contrast_slider.sliderReleased.connect(
-            self._start_fullres_adjustment_immediate
+            self._start_fullres_adjustment_immediate,
         )
         self.saturation_slider.sliderReleased.connect(
-            self._start_fullres_adjustment_immediate
+            self._start_fullres_adjustment_immediate,
         )
         # Debounce timer
         self._preview_update_timer.timeout.connect(self._start_fullres_adjustment)
@@ -740,11 +734,11 @@ class MainWindow(QMainWindow):
 
         # Output settings
         self.output_widget.quality_slider.valueChanged.connect(
-            self._on_settings_changed
+            self._on_settings_changed,
         )
         # Also schedule size estimate on quality changes
         self.output_widget.quality_slider.valueChanged.connect(
-            self._schedule_size_estimate
+            self._schedule_size_estimate,
         )
 
     def _load_initial_data(self) -> None:
@@ -854,7 +848,8 @@ class MainWindow(QMainWindow):
                         self.profile_combo.setCurrentIndex(index)
 
                 self._status_proxy.show_message(
-                    f'Профиль сохранён как: {saved_profile_name}', 3000
+                    f'Профиль сохранён как: {saved_profile_name}',
+                    3000,
                 )
 
     @Slot()
@@ -894,7 +889,9 @@ class MainWindow(QMainWindow):
         else:
             self._status_proxy.show_message('Ошибка при создании карты', 5000)
             QMessageBox.critical(
-                self, 'Ошибка', f'Не удалось создать карту:\n{error_msg}'
+                self,
+                'Ошибка',
+                f'Не удалось создать карту:\n{error_msg}',
             )
 
     def _handle_model_event(self, event_data: EventData) -> None:
@@ -927,11 +924,14 @@ class MainWindow(QMainWindow):
             # Update the rest of the UI from profile settings
             self._update_ui_from_settings(data.get('settings'))
             self._status_proxy.show_message(
-                f'Профиль загружен: {data.get("profile_name")}', 3000
+                f'Профиль загружен: {data.get("profile_name")}',
+                3000,
             )
         elif event == ModelEvent.DOWNLOAD_PROGRESS:
             self._update_progress(
-                data.get('done', 0), data.get('total', 0), data.get('label', '')
+                data.get('done', 0),
+                data.get('total', 0),
+                data.get('label', ''),
             )
         elif event == ModelEvent.PREVIEW_UPDATED:
             self._show_preview_in_main_window(data.get('image'))
@@ -1063,7 +1063,9 @@ class MainWindow(QMainWindow):
         """Save the current map image to file."""
         if self._current_image is None:
             QMessageBox.warning(
-                self, 'Предупреждение', 'Нет изображения для сохранения'
+                self,
+                'Предупреждение',
+                'Нет изображения для сохранения',
             )
             return
 
@@ -1096,8 +1098,12 @@ class MainWindow(QMainWindow):
                 finished = Signal(bool, str)  # success, error_message
 
                 def __init__(
-                    self, image, path: Path, quality: int, adj: dict[str, float]
-                ):
+                    self,
+                    image,
+                    path: Path,
+                    quality: int,
+                    adj: dict[str, float],
+                ) -> None:
                     super().__init__()
                     self.image = image
                     self.path = path
@@ -1176,7 +1182,8 @@ class MainWindow(QMainWindow):
                 if success:
                     logger.info(f'Image saved to: {out_path}')
                     self._status_proxy.show_message(
-                        f'Карта сохранена: {out_path.name}', 5000
+                        f'Карта сохранена: {out_path.name}',
+                        5000,
                     )
                     # Clear preview area after successful save
                     self._preview_area.clear()
@@ -1210,7 +1217,8 @@ class MainWindow(QMainWindow):
                 self._cleanup_save_resources()
 
             worker.finished.connect(
-                _on_save_complete, Qt.ConnectionType.QueuedConnection
+                _on_save_complete,
+                Qt.ConnectionType.QueuedConnection,
             )
             th.start()
 
@@ -1232,7 +1240,7 @@ class MainWindow(QMainWindow):
         self.brightness_label.setText(f'Яркость: {self.brightness_slider.value()}%')
         self.contrast_label.setText(f'Контрастность: {self.contrast_slider.value()}%')
         self.saturation_label.setText(
-            f'Насыщенность: {self.saturation_slider.value()}%'
+            f'Насыщенность: {self.saturation_slider.value()}%',
         )
 
     def _on_adj_slider_changed(self, *args) -> None:
@@ -1257,7 +1265,7 @@ class MainWindow(QMainWindow):
     def _schedule_adjust_gui(self) -> None:
         try:
             logger.debug(
-                f'[ADJ] schedule_adjust_gui on_gui={QThread.currentThread() is self.thread()}'
+                f'[ADJ] schedule_adjust_gui on_gui={QThread.currentThread() is self.thread()}',
             )
             self._preview_update_timer.start()
         except Exception as e:
@@ -1267,7 +1275,7 @@ class MainWindow(QMainWindow):
     def _run_adjust_now_gui(self) -> None:
         try:
             logger.debug(
-                f'[ADJ] run_adjust_now_gui on_gui={QThread.currentThread() is self.thread()}'
+                f'[ADJ] run_adjust_now_gui on_gui={QThread.currentThread() is self.thread()}',
             )
             self._preview_update_timer.stop()
         except Exception as e:
@@ -1292,7 +1300,10 @@ class MainWindow(QMainWindow):
             finished = Signal(int, object, str)  # generation, image or None, error
 
             def __init__(
-                self, image: Image.Image, adj: dict[str, float], gen: int
+                self,
+                image: Image.Image,
+                adj: dict[str, float],
+                gen: int,
             ) -> None:
                 super().__init__()
                 self.image = image
@@ -1361,7 +1372,7 @@ class MainWindow(QMainWindow):
                 return
             if isinstance(img_obj, Image.Image):
                 logger.debug(
-                    f'[ADJ] Applying adjusted image gen={gen} matches current gen; size={getattr(img_obj, "size", None)}'
+                    f'[ADJ] Applying adjusted image gen={gen} matches current gen; size={getattr(img_obj, "size", None)}',
                 )
                 self._current_image = img_obj
                 try:
@@ -1371,7 +1382,8 @@ class MainWindow(QMainWindow):
 
         # Deliver result back to UI via class slot to guarantee GUI thread
         worker.finished.connect(
-            self._on_adjust_done_slot, Qt.ConnectionType.QueuedConnection
+            self._on_adjust_done_slot,
+            Qt.ConnectionType.QueuedConnection,
         )
         # Stop the worker thread event loop when work is finished
         worker.finished.connect(th.quit, Qt.ConnectionType.QueuedConnection)
@@ -1380,7 +1392,8 @@ class MainWindow(QMainWindow):
         self._adjust_map[th] = worker
         # Cleanup in GUI slot when thread finishes
         th.finished.connect(
-            self._on_adjust_thread_finished_slot, Qt.ConnectionType.QueuedConnection
+            self._on_adjust_thread_finished_slot,
+            Qt.ConnectionType.QueuedConnection,
         )
         th.start()
         # After adjustment result, also schedule size estimate (image content changed)
@@ -1554,7 +1567,10 @@ class MainWindow(QMainWindow):
                 finished = Signal(int, str)  # estimate_bytes, error
 
                 def __init__(
-                    self, img: Image.Image, adj: dict[str, float], quality: int
+                    self,
+                    img: Image.Image,
+                    adj: dict[str, float],
+                    quality: int,
                 ) -> None:
                     super().__init__()
                     self.image = img
@@ -1603,7 +1619,8 @@ class MainWindow(QMainWindow):
                             new_w = max(1, round(w * scale))
                             new_h = max(1, round(h * scale))
                             img_small = img.resize(
-                                (new_w, new_h), Image.Resampling.LANCZOS
+                                (new_w, new_h),
+                                Image.Resampling.LANCZOS,
                             )
                         else:
                             img_small = img
@@ -1641,12 +1658,13 @@ class MainWindow(QMainWindow):
                     self.output_widget.size_estimate_value.setText('—')
                 else:
                     self.output_widget.size_estimate_value.setText(
-                        f'≈ {self._format_bytes(estimate)}'
+                        f'≈ {self._format_bytes(estimate)}',
                     )
 
             th.started.connect(worker.run)
             worker.finished.connect(
-                _on_estimate_done, Qt.ConnectionType.QueuedConnection
+                _on_estimate_done,
+                Qt.ConnectionType.QueuedConnection,
             )
             worker.finished.connect(th.quit, Qt.ConnectionType.QueuedConnection)
 
@@ -1697,7 +1715,7 @@ class MainWindow(QMainWindow):
             self._download_worker.quit()
             if not self._download_worker.wait(5000):  # 5 second timeout
                 logger.warning(
-                    'Download worker did not terminate gracefully, forcing termination'
+                    'Download worker did not terminate gracefully, forcing termination',
                 )
                 self._download_worker.terminate()
                 self._download_worker.wait()
@@ -1731,7 +1749,10 @@ class MainWindow(QMainWindow):
 
 
 def create_application() -> tuple[
-    QApplication, MainWindow, MilMapperModel, MilMapperController
+    QApplication,
+    MainWindow,
+    MilMapperModel,
+    MilMapperController,
 ]:
     """Create and configure the PySide6 application."""
     app = QApplication([])

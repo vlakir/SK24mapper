@@ -58,7 +58,7 @@ class MilMapperController:
                     cwd / '.env',
                     repo_root / '.secrets.env',
                     repo_root / '.env',
-                ]
+                ],
             )
 
             for p in candidates:
@@ -76,7 +76,8 @@ class MilMapperController:
                 error_msg = 'API-ключ не найден в переменных окружения'
                 logger.error(error_msg)
                 self._model.notify_observers(
-                    ModelEvent.ERROR_OCCURRED, {'error': error_msg}
+                    ModelEvent.ERROR_OCCURRED,
+                    {'error': error_msg},
                 )
             else:
                 logger.info('API-ключ успешно загружен')
@@ -85,7 +86,8 @@ class MilMapperController:
             error_msg = f'Не удалось загрузить API-ключ: {e}'
             logger.exception(error_msg)
             self._model.notify_observers(
-                ModelEvent.ERROR_OCCURRED, {'error': error_msg}
+                ModelEvent.ERROR_OCCURRED,
+                {'error': error_msg},
             )
 
     def update_setting(self, field_name: str, value: Any) -> None:
@@ -107,7 +109,8 @@ class MilMapperController:
             error_msg = f'Не удалось загрузить профиль {profile_name}: {e}'
             logger.exception(error_msg)
             self._model.notify_observers(
-                ModelEvent.ERROR_OCCURRED, {'error': error_msg}
+                ModelEvent.ERROR_OCCURRED,
+                {'error': error_msg},
             )
 
     def load_profile_from_path(self, file_path: str) -> None:
@@ -121,7 +124,8 @@ class MilMapperController:
             error_msg = f'Не удалось открыть профиль {file_path}: {e}'
             logger.exception(error_msg)
             self._model.notify_observers(
-                ModelEvent.ERROR_OCCURRED, {'error': error_msg}
+                ModelEvent.ERROR_OCCURRED,
+                {'error': error_msg},
             )
 
     def save_current_profile(self, profile_name: str) -> None:
@@ -134,7 +138,8 @@ class MilMapperController:
             error_msg = f'Не удалось сохранить профиль {profile_name}: {e}'
             logger.exception(error_msg)
             self._model.notify_observers(
-                ModelEvent.ERROR_OCCURRED, {'error': error_msg}
+                ModelEvent.ERROR_OCCURRED,
+                {'error': error_msg},
             )
 
     def save_current_profile_as(self, file_path: str) -> str | None:
@@ -165,7 +170,8 @@ class MilMapperController:
             error_msg = f'Не удалось сохранить профиль как {file_path}: {e}'
             logger.exception(error_msg)
             self._model.notify_observers(
-                ModelEvent.ERROR_OCCURRED, {'error': error_msg}
+                ModelEvent.ERROR_OCCURRED,
+                {'error': error_msg},
             )
             return None
 
@@ -179,7 +185,8 @@ class MilMapperController:
             error_msg = 'API-ключ недоступен для загрузки'
             logger.error(error_msg)
             self._model.notify_observers(
-                ModelEvent.ERROR_OCCURRED, {'error': error_msg}
+                ModelEvent.ERROR_OCCURRED,
+                {'error': error_msg},
             )
             return
 
@@ -198,7 +205,7 @@ class MilMapperController:
                 height_m = settings.top_right_y_sk42_gk - settings.bottom_left_y_sk42_gk
 
                 logger.info(
-                    f'Starting download: center=({center_x}, {center_y}), size=({width_m}x{height_m})'
+                    f'Starting download: center=({center_x}, {center_y}), size=({width_m}x{height_m})',
                 )
                 log_memory_usage('before download start')
 
@@ -262,7 +269,8 @@ class MilMapperController:
             error_msg = f'Не удалось обновить координаты: {e}'
             logger.exception(error_msg)
             self._model.notify_observers(
-                ModelEvent.ERROR_OCCURRED, {'error': error_msg}
+                ModelEvent.ERROR_OCCURRED,
+                {'error': error_msg},
             )
 
     def update_grid_settings(self, grid_settings: dict[str, Any]) -> None:
@@ -285,7 +293,8 @@ class MilMapperController:
             error_msg = f'Не удалось обновить настройки сетки: {e}'
             logger.exception(error_msg)
             self._model.notify_observers(
-                ModelEvent.ERROR_OCCURRED, {'error': error_msg}
+                ModelEvent.ERROR_OCCURRED,
+                {'error': error_msg},
             )
 
     def update_output_settings(self, output_settings: dict[str, Any]) -> None:
@@ -310,5 +319,6 @@ class MilMapperController:
             error_msg = f'Не удалось обновить настройки вывода: {e}'
             logger.exception(error_msg)
             self._model.notify_observers(
-                ModelEvent.ERROR_OCCURRED, {'error': error_msg}
+                ModelEvent.ERROR_OCCURRED,
+                {'error': error_msg},
             )

@@ -82,7 +82,7 @@ def main() -> int:
     log_comprehensive_diagnostics('APPLICATION_STARTUP')
 
     parser = argparse.ArgumentParser(
-        description='Mil Mapper 2.0 - создание топографических карт'
+        description='Mil Mapper 2.0 - создание топографических карт',
     )
     parser.add_argument(
         '--mode',

@@ -25,7 +25,8 @@ class StatusBarProxy(QObject):
         self._status_bar = status_bar
         # Ensure delivery as queued to GUI thread
         self.show_message_requested.connect(
-            self._on_show_message, Qt.ConnectionType.QueuedConnection
+            self._on_show_message,
+            Qt.ConnectionType.QueuedConnection,
         )
 
     @Slot(str, int)

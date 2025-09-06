@@ -41,23 +41,15 @@ class OptimizedImageView(QGraphicsView):
         # Zoom to cursor: anchor transformations under the mouse pointer
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
 
-        # Solution 1: Enable antialiasing for all elements
         self.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         self.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
         self.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
 
-        # Solution 5: Additional render hints for improved thin line rendering
         self.setRenderHint(QPainter.RenderHint.LosslessImageRendering, True)
 
-        # Solution 2: Remove DontAdjustForAntialiasing flag to allow proper thin line rendering
-        # self.setOptimizationFlag(QGraphicsView.OptimizationFlag.DontAdjustForAntialiasing, True)
-
-        # Solution 5: Note - DontClipPainter flag not available in current PySide6 version
-        # self.setOptimizationFlag(QGraphicsView.OptimizationFlag.DontClipPainter, True)
-
-        # Keep performance optimizations that don't affect thin line rendering
         self.setOptimizationFlag(
-            QGraphicsView.OptimizationFlag.DontSavePainterState, True
+            QGraphicsView.OptimizationFlag.DontSavePainterState,
+            True,
         )
 
         # Solution 5: Use FullViewportUpdate for critical thin line rendering
@@ -99,7 +91,11 @@ class OptimizedImageView(QGraphicsView):
         width, height = pil_image.size
         image_data = pil_image.tobytes()
         qimage = QImage(
-            image_data, width, height, width * 3, QImage.Format.Format_RGB888
+            image_data,
+            width,
+            height,
+            width * 3,
+            QImage.Format.Format_RGB888,
         )
 
         # Create QPixmap from QImage
@@ -182,7 +178,7 @@ class OptimizedImageView(QGraphicsView):
                 round(transform.m22() * 100) / 100,
                 round(transform.dx()),  # Round translation
                 round(transform.dy()),
-            )
+            ),
         )
 
     def wheelEvent(self, event: QWheelEvent) -> None:
