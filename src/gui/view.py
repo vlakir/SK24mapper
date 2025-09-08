@@ -464,10 +464,6 @@ class MainWindow(QMainWindow):
         self.profile_combo.setToolTip('Выберите профиль настроек')
         profile_layout.addWidget(self.profile_combo)
 
-        self.load_profile_btn = QPushButton('Загрузить')
-        self.load_profile_btn.setToolTip('Загрузить выбранный профиль')
-        profile_layout.addWidget(self.load_profile_btn)
-
         self.save_profile_btn = QPushButton('Сохранить')
         self.save_profile_btn.setToolTip('Сохранить текущие настройки в профиль')
         profile_layout.addWidget(self.save_profile_btn)
@@ -685,7 +681,8 @@ class MainWindow(QMainWindow):
     def _setup_connections(self) -> None:
         """Setup signal connections."""
         # Profile management
-        self.load_profile_btn.clicked.connect(self._load_selected_profile)
+        # Автозагрузка профиля при выборе из списка
+        self.profile_combo.currentIndexChanged.connect(self._load_selected_profile)
         self.save_profile_btn.clicked.connect(self._save_current_profile)
         self.save_profile_as_btn.clicked.connect(self._save_profile_as)
 
@@ -754,7 +751,6 @@ class MainWindow(QMainWindow):
         # Load default profile
         if 'default' in profiles:
             self.profile_combo.setCurrentText('default')
-            self._controller.load_profile_by_name('default')
 
     @Slot()
     def _on_settings_changed(self) -> None:
@@ -787,9 +783,10 @@ class MainWindow(QMainWindow):
             'to_y_low': to_y_low,
         }
 
-    @Slot()
-    def _load_selected_profile(self) -> None:
-        """Load the selected profile."""
+    @Slot(int)
+    def _load_selected_profile(self, index: int) -> None:
+        """Load the selected profile when selection changes."""
+        # Ignore index value; use currentText for robustness
         profile_name = self.profile_combo.currentText()
         if profile_name:
             self._controller.load_profile_by_name(profile_name)
@@ -1518,12 +1515,17 @@ class MainWindow(QMainWindow):
             self._controller.load_profile_from_path(file_path)
             # Update combo selection if this profile is in the list
             idx = self.profile_combo.findText(profile_name)
-            if idx >= 0:
-                self.profile_combo.setCurrentIndex(idx)
-            else:
-                # If it’s not in list, add it temporarily
-                self.profile_combo.addItem(profile_name)
-                self.profile_combo.setCurrentText(profile_name)
+            # Обновляем выпадающий список без вызова автозагрузки второй раз
+            self.profile_combo.blockSignals(True)
+            try:
+                if idx >= 0:
+                    self.profile_combo.setCurrentIndex(idx)
+                else:
+                    # If it’s not in list, add it temporarily
+                    self.profile_combo.addItem(profile_name)
+                    self.profile_combo.setCurrentText(profile_name)
+            finally:
+                self.profile_combo.blockSignals(False)
             self._status_proxy.show_message(f'Профиль загружен: {profile_name}', 3000)
         except Exception as e:
             QMessageBox.critical(self, 'Ошибка', f'Не удалось открыть профиль:\n{e}')

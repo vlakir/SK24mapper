@@ -91,7 +91,7 @@ class OptimizedImageView(QGraphicsView):
         width, height = pil_image.size
         image_data = pil_image.tobytes()
         # Keep a reference to the backing bytes to prevent premature GC
-        self._qimage_bytes = image_data
+        self._qimage_bytes: bytes | None = image_data
         qimage = QImage(
             self._qimage_bytes,
             width,
@@ -136,7 +136,7 @@ class OptimizedImageView(QGraphicsView):
         self._image_item = None
         self._original_image = None
         # Allow GC of previous image bytes when clearing
-        if hasattr(self, "_qimage_bytes"):
+        if hasattr(self, '_qimage_bytes'):
             self._qimage_bytes = None
 
     def fit_to_window(self) -> None:
