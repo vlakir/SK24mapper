@@ -16,3 +16,5 @@ jpeg_quality = 95
 brightness = 1.0
 contrast = 1.0
 saturation = 1.0
+
+map_type = "SATELLITE"

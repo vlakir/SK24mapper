@@ -37,7 +37,9 @@ from constants import (
     BYTES_CONVERSION_FACTOR,
     BYTES_TO_KB_THRESHOLD,
     FLOAT_COMPARISON_TOLERANCE,
+    MAP_TYPE_LABELS_RU,
     PROFILES_DIR,
+    MapType,
 )
 from diagnostics import (
     log_comprehensive_diagnostics,
@@ -523,6 +525,28 @@ class MainWindow(QMainWindow):
         settings_vertical_layout = QVBoxLayout()
 
         settings_vertical_layout.addWidget(QLabel('Настройки'))
+
+        # Тип карты
+        maptype_row = QHBoxLayout()
+        maptype_label = QLabel('Тип карты:')
+        self.map_type_combo = QComboBox()
+        # Заполняем все 7 пунктов в заданном порядке
+        self._maptype_order = [
+            MapType.SATELLITE,
+            MapType.HYBRID,
+            MapType.STREETS,
+            MapType.OUTDOORS,
+            # MapType.ELEVATION_COLOR,
+            # MapType.ELEVATION_CONTOURS,
+            # MapType.ELEVATION_HILLSHADE,
+        ]
+        for mt in self._maptype_order:
+            self.map_type_combo.addItem(MAP_TYPE_LABELS_RU[mt], userData=mt.value)
+        # По умолчанию «Спутник»
+        self.map_type_combo.setCurrentIndex(0)
+        maptype_row.addWidget(maptype_label)
+        maptype_row.addWidget(self.map_type_combo, 1)
+        settings_vertical_layout.addLayout(maptype_row)
         settings_horizontal_layout = QHBoxLayout()
 
         grid_frame = QFrame()
@@ -713,6 +737,8 @@ class MainWindow(QMainWindow):
 
         # Settings change tracking
         self._connect_setting_changes()
+        # Map type change triggers settings update and potential preview rerender
+        self.map_type_combo.currentIndexChanged.connect(self._on_settings_changed)
 
     def _set_profile_selection_safely(
         self, *, name: str | None = None, index: int | None = None
@@ -786,10 +812,18 @@ class MainWindow(QMainWindow):
         grid_settings = self.grid_widget.get_settings()
         output_settings = self.output_widget.get_settings()
 
+        # Map type from combo (stored as enum value string)
+        try:
+            idx = max(0, self.map_type_combo.currentIndex())
+            map_type_value = self.map_type_combo.itemData(idx)
+        except Exception:
+            map_type_value = MapType.SATELLITE.value
+
         # Update model through controller
         self._controller.update_coordinates(coords)
         self._controller.update_grid_settings(grid_settings)
         self._controller.update_output_settings(output_settings)
+        self._controller.update_setting('map_type', map_type_value)
 
     def _get_current_coordinates(self) -> dict[str, int]:
         """Get current coordinate values from UI."""
@@ -1020,6 +1054,22 @@ class MainWindow(QMainWindow):
             'saturation': getattr(settings, 'saturation', 1.0),
         }
         self.output_widget.set_settings(output_settings)
+
+        # Update map type combobox
+        try:
+            current_mt = getattr(settings, 'map_type', MapType.SATELLITE)
+            if not isinstance(current_mt, MapType):
+                current_mt = MapType(str(current_mt))
+        except Exception:
+            current_mt = MapType.SATELLITE
+        # find index by userData
+        target_index = 0
+        for i in range(self.map_type_combo.count()):
+            if self.map_type_combo.itemData(i) == current_mt.value:
+                target_index = i
+                break
+        with QSignalBlocker(self.map_type_combo):
+            self.map_type_combo.setCurrentIndex(target_index)
 
     def _ensure_busy_dialog(self) -> QProgressDialog:
         """Create BusyDialog lazily to prevent it from showing at startup."""

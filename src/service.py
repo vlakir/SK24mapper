@@ -31,7 +31,6 @@ from constants import (
     HTTP_OK,
     HTTP_UNAUTHORIZED,
     MAPBOX_STATIC_BASE,
-    MAPBOX_STYLE_ID,
     MAX_GK_ZONE,
     MAX_OUTPUT_PIXELS,
     MAX_ZOOM,
@@ -44,6 +43,8 @@ from constants import (
     SK42_VALID_LON_MIN,
     XYZ_TILE_SIZE,
     XYZ_USE_RETINA,
+    default_map_type,
+    map_type_to_style_id,
 )
 from diagnostics import log_memory_usage, log_thread_status
 from domen import MapSettings
@@ -180,16 +181,15 @@ def _build_save_kwargs(out_path: Path, settings_obj: object) -> dict[str, object
     }
 
 
-async def _validate_api_and_connectivity(api_key: str) -> None:
+async def _validate_api_and_connectivity(api_key: str, style_id: str) -> None:
     """
     Проверяет доступность интернета и валидность API-ключа перед началом тяжёлой обработки.
 
     Делает быстрый запрос к одному тайлу (z=0/x=0/y=0). В случае проблем бросает RuntimeError
     с понятным для пользователя сообщением.
     """
-    test_url = (
-        f'{MAPBOX_STATIC_BASE}/{MAPBOX_STYLE_ID}/tiles/256/0/0/0?access_token={api_key}'
-    )
+    test_path = f'{MAPBOX_STATIC_BASE}/{style_id}/tiles/256/0/0/0'
+    test_url = f'{test_path}?access_token={api_key}'
     timeout = aiohttp.ClientTimeout(total=5)
     try:
         async with aiohttp.ClientSession() as client:  # noqa: SIM117
@@ -225,9 +225,6 @@ async def download_satellite_rectangle(  # noqa: PLR0913
     settings: MapSettings | None = None,
 ) -> str:
     """Полный конвейер."""
-    # Ранняя проверка ключа и соединения, чтобы не выполнять лишние расчёты
-    await _validate_api_and_connectivity(api_key)
-
     # Handle default settings if not provided
     if settings is None:
         settings = MapSettings(
@@ -246,6 +243,26 @@ async def download_satellite_rectangle(  # noqa: PLR0913
             grid_label_bg_padding=6,
             mask_opacity=0.35,
         )
+
+    # Определяем style_id по типу карты (этап 1)
+    mt = getattr(settings, 'map_type', default_map_type())
+    style_id = map_type_to_style_id(mt)
+    if not style_id:
+        # На этапах 2–4 будут реализованы режимы высот; пока — откат к Спутнику
+        logger.warning(
+            'Выбран режим высот (%s), пока не реализовано. Используется Спутник.', mt
+        )
+        style_id = map_type_to_style_id(default_map_type())
+    logger.info(
+        'Тип карты: %s; style_id=%s; tile_size=%s; retina=%s',
+        mt,
+        style_id,
+        XYZ_TILE_SIZE,
+        XYZ_USE_RETINA,
+    )
+
+    # Ранняя проверка ключа и соединения с выбранным стилем
+    await _validate_api_and_connectivity(api_key, style_id)
 
     # Переопределяем параметры из профиля
     eff_scale = effective_scale_for_xyz(XYZ_TILE_SIZE, use_retina=XYZ_USE_RETINA)
@@ -348,7 +365,7 @@ async def download_satellite_rectangle(  # noqa: PLR0913
                     img = await async_fetch_xyz_tile(
                         client=client,
                         api_key=api_key,
-                        style_id=MAPBOX_STYLE_ID,
+                        style_id=style_id,
                         tile_size=XYZ_TILE_SIZE,
                         z=zoom,
                         x=tx,

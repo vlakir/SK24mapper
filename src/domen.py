@@ -1,6 +1,6 @@
 from pydantic import BaseModel, field_validator
 
-from constants import ADDITIVE_RATIO
+from constants import ADDITIVE_RATIO, MapType, default_map_type
 
 
 class MapSettings(BaseModel):
@@ -26,6 +26,9 @@ class MapSettings(BaseModel):
 
     # Путь к итоговому файлу
     output_path: str
+
+    # Тип карты (этап 1 — стилевые карты Mapbox)
+    map_type: MapType = default_map_type()
 
     # Толщина линий сетки (px)
     grid_width_px: int
