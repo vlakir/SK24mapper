@@ -98,6 +98,10 @@ class MilMapperController:
         except Exception as e:
             error_msg = f'Не удалось обновить настройку {field_name}: {e}'
             logger.exception(error_msg)
+            self._model.notify_observers(
+                ModelEvent.WARNING_OCCURRED,
+                {'warning': error_msg},
+            )
 
     def load_profile_by_name(self, profile_name: str) -> None:
         """Загрузка профиля по имени из файла."""
@@ -226,17 +230,13 @@ class MilMapperController:
 
             except Exception as e:
                 error_msg = f'Не удалось выполнить загрузку: {e}'
-                logger.error(error_msg, exc_info=True)
+                logger.exception(error_msg)
                 self._model.complete_download(success=False, error_msg=error_msg)
+                raise
 
     def start_map_download_sync(self) -> None:
         """Запуск загрузки карты в синхронном контексте (обёртка над async)."""
-        try:
-            asyncio.run(self.start_map_download())
-        except Exception as e:
-            error_msg = f'Не удалось запустить загрузку: {e}'
-            logger.exception(error_msg)
-            self._model.complete_download(success=False, error_msg=error_msg)
+        asyncio.run(self.start_map_download())
 
     def get_available_profiles(self) -> list[str]:
         """Получение списка доступных профилей (по именам файлов TOML)."""
@@ -244,7 +244,12 @@ class MilMapperController:
             names = list_profiles()
             return names if names else ['default']
         except Exception as e:
-            logger.exception(f'Не удалось получить список профилей: {e}')
+            msg = f'Не удалось получить список профилей: {e}'
+            logger.exception(msg)
+            self._model.notify_observers(
+                ModelEvent.WARNING_OCCURRED,
+                {'warning': msg},
+            )
             return ['default']
 
     def update_coordinates(self, coords: dict[str, int]) -> None:

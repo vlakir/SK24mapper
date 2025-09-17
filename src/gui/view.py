@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from PIL import Image
-from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal, Slot
+from PySide6.QtCore import QObject, QSignalBlocker, Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QAction, QPixmapCache
 from PySide6.QtWidgets import (
     QApplication,
@@ -464,10 +464,6 @@ class MainWindow(QMainWindow):
         self.profile_combo.setToolTip('Выберите профиль настроек')
         profile_layout.addWidget(self.profile_combo)
 
-        self.load_profile_btn = QPushButton('Загрузить')
-        self.load_profile_btn.setToolTip('Загрузить выбранный профиль')
-        profile_layout.addWidget(self.load_profile_btn)
-
         self.save_profile_btn = QPushButton('Сохранить')
         self.save_profile_btn.setToolTip('Сохранить текущие настройки в профиль')
         profile_layout.addWidget(self.save_profile_btn)
@@ -685,7 +681,7 @@ class MainWindow(QMainWindow):
     def _setup_connections(self) -> None:
         """Setup signal connections."""
         # Profile management
-        self.load_profile_btn.clicked.connect(self._load_selected_profile)
+        # Подключение сигнала выбора профиля произойдет после первичной инициализации
         self.save_profile_btn.clicked.connect(self._save_current_profile)
         self.save_profile_as_btn.clicked.connect(self._save_profile_as)
 
@@ -718,6 +714,19 @@ class MainWindow(QMainWindow):
         # Settings change tracking
         self._connect_setting_changes()
 
+    def _set_profile_selection_safely(
+        self, *, name: str | None = None, index: int | None = None
+    ) -> None:
+        """Set profile combo selection with signals blocked to avoid recursion."""
+        blocker = QSignalBlocker(self.profile_combo)
+        try:
+            if name is not None:
+                self.profile_combo.setCurrentText(name)
+            elif index is not None:
+                self.profile_combo.setCurrentIndex(index)
+        finally:
+            del blocker
+
     def _connect_setting_changes(self) -> None:
         """Connect all setting change signals."""
         # Coordinates
@@ -749,12 +758,25 @@ class MainWindow(QMainWindow):
         """Load initial application data."""
         # Load available profiles
         profiles = self._controller.get_available_profiles()
-        self.profile_combo.addItems(profiles)
 
-        # Load default profile
-        if 'default' in profiles:
-            self.profile_combo.setCurrentText('default')
-            self._controller.load_profile_by_name('default')
+        # Блокируем сигналы на время программных изменений
+        self.profile_combo.blockSignals(True)
+        try:
+            self.profile_combo.clear()
+            self.profile_combo.addItems(profiles)
+            if 'default' in profiles:
+                self.profile_combo.setCurrentText('default')
+            elif profiles:
+                self.profile_combo.setCurrentIndex(0)
+        finally:
+            self.profile_combo.blockSignals(False)
+
+        # Явно загружаем профиль ровно один раз
+        if profiles:
+            self._load_selected_profile(-1)
+
+        # Теперь подключаем обработчик изменения выбора
+        self.profile_combo.currentIndexChanged.connect(self._load_selected_profile)
 
     @Slot()
     def _on_settings_changed(self) -> None:
@@ -787,12 +809,26 @@ class MainWindow(QMainWindow):
             'to_y_low': to_y_low,
         }
 
-    @Slot()
-    def _load_selected_profile(self) -> None:
-        """Load the selected profile."""
-        profile_name = self.profile_combo.currentText()
-        if profile_name:
+    @Slot(int)
+    def _load_selected_profile(self, index: int) -> None:
+        """Load the selected profile when selection changes (guarded, non-reentrant)."""
+        # Guard against re-entrant calls
+        if getattr(self, '_profile_loading', False):
+            logger.debug('Profile load skipped due to guard re-entry')
+            return
+        if not hasattr(self, '_profile_loading'):
+            self._profile_loading = False
+
+        self._profile_loading = True
+        try:
+            # Ignore index value; use currentText for robustness
+            profile_name = self.profile_combo.currentText()
+            if not profile_name:
+                return
+            logger.debug(f'Loading profile: {profile_name}')
             self._controller.load_profile_by_name(profile_name)
+        finally:
+            self._profile_loading = False
 
     @Slot()
     def _save_current_profile(self) -> None:
@@ -846,10 +882,10 @@ class MainWindow(QMainWindow):
                 if Path(file_path).parent == default_dir:
                     # Refresh profile list
                     self._load_initial_data()
-                    # Select the newly saved profile
+                    # Select the newly saved profile safely (no extra load)
                     index = self.profile_combo.findText(saved_profile_name)
                     if index >= 0:
-                        self.profile_combo.setCurrentIndex(index)
+                        self._set_profile_selection_safely(index=index)
 
                 self._status_proxy.show_message(
                     f'Профиль сохранён как: {saved_profile_name}',
@@ -891,6 +927,8 @@ class MainWindow(QMainWindow):
         if success:
             self._status_proxy.show_message('Карта успешно создана', 5000)
         else:
+            # Clear preview and related UI on failure as per requirement
+            self._clear_preview_ui()
             self._status_proxy.show_message('Ошибка при создании карты', 5000)
             QMessageBox.critical(
                 self,
@@ -942,7 +980,16 @@ class MainWindow(QMainWindow):
         elif event == ModelEvent.ERROR_OCCURRED:
             error_msg = data.get('error', 'Неизвестная ошибка')
             self._status_proxy.show_message(f'Ошибка: {error_msg}', 5000)
-            QMessageBox.warning(self, 'Предупреждение', error_msg)
+            QMessageBox.critical(self, 'Ошибка', error_msg)
+        elif event == ModelEvent.WARNING_OCCURRED:
+            warn_msg = (
+                data.get('warning')
+                or data.get('message')
+                or data.get('error')
+                or 'Предупреждение'
+            )
+            self._status_proxy.show_message(f'Предупреждение: {warn_msg}', 5000)
+            QMessageBox.warning(self, 'Предупреждение', warn_msg)
 
     def _update_ui_from_settings(self, settings: Any) -> None:
         """Update UI controls from settings object."""
@@ -1061,6 +1108,29 @@ class MainWindow(QMainWindow):
             error_msg = f'Ошибка при отображении предпросмотра: {e}'
             logger.exception(error_msg)
             QMessageBox.warning(self, 'Ошибка предпросмотра', error_msg)
+
+    def _clear_preview_ui(self) -> None:
+        """Clear preview image and disable related controls after a failure."""
+        try:
+            with contextlib.suppress(Exception):
+                self._preview_area.clear()
+            # Reset images
+            self._current_image = None
+            self._base_image = None
+            # Reset adjustments to defaults and sync labels
+            self._adj = {'brightness': 1.0, 'contrast': 1.0, 'saturation': 1.0}
+            self._sync_adj_ui_from_state()
+            # Disable save controls
+            with contextlib.suppress(Exception):
+                self.save_map_btn.setEnabled(False)
+                self.save_map_action.setEnabled(False)
+            # Disable sliders
+            self._set_sliders_enabled(False)
+            # Reset size estimate label if present
+            with contextlib.suppress(Exception):
+                self.output_widget.size_estimate_value.setText('—')
+        except Exception as e:
+            logger.debug(f'Failed to clear preview UI: {e}')
 
     @Slot()
     def _save_map(self) -> None:
@@ -1518,12 +1588,17 @@ class MainWindow(QMainWindow):
             self._controller.load_profile_from_path(file_path)
             # Update combo selection if this profile is in the list
             idx = self.profile_combo.findText(profile_name)
+            # Обновляем выпадающий список без вызова автозагрузки второй раз
             if idx >= 0:
-                self.profile_combo.setCurrentIndex(idx)
+                self._set_profile_selection_safely(index=idx)
             else:
-                # If it’s not in list, add it temporarily
-                self.profile_combo.addItem(profile_name)
-                self.profile_combo.setCurrentText(profile_name)
+                blocker = QSignalBlocker(self.profile_combo)
+                try:
+                    # If it’s not in list, add it temporarily
+                    self.profile_combo.addItem(profile_name)
+                    self.profile_combo.setCurrentText(profile_name)
+                finally:
+                    del blocker
             self._status_proxy.show_message(f'Профиль загружен: {profile_name}', 3000)
         except Exception as e:
             QMessageBox.critical(self, 'Ошибка', f'Не удалось открыть профиль:\n{e}')
