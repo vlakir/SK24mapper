@@ -1,3 +1,5 @@
+from enum import Enum
+
 # Базовый URL Mapbox Static Images API
 MAPBOX_STATIC_BASE = 'https://api.mapbox.com/styles/v1'
 
@@ -86,8 +88,53 @@ HTTP_5XX_MAX = 600
 # В default.toml были помечены как '# -'
 # Желаемый уровень масштаба (при превышении лимитов будет уменьшен автоматически)
 DESIRED_ZOOM = 22
-# Идентификатор стиля Mapbox
-MAPBOX_STYLE_ID = 'mapbox/satellite-v9'
+
+# Тип карты и резолвер стилей Mapbox (Этап 1)
+
+
+class MapType(str, Enum):
+    SATELLITE = 'SATELLITE'
+    HYBRID = 'HYBRID'
+    STREETS = 'STREETS'
+    OUTDOORS = 'OUTDOORS'
+    ELEVATION_COLOR = 'ELEVATION_COLOR'
+    ELEVATION_CONTOURS = 'ELEVATION_CONTOURS'
+    ELEVATION_HILLSHADE = 'ELEVATION_HILLSHADE'
+
+
+# Человекочитаемые названия для GUI
+MAP_TYPE_LABELS_RU: dict[MapType, str] = {
+    MapType.SATELLITE: 'Спутник',
+    MapType.HYBRID: 'Гибрид',
+    MapType.STREETS: 'Улицы',
+    MapType.OUTDOORS: 'Топографический',
+    MapType.ELEVATION_COLOR: 'Карта высот (цветовая шкала)',
+    MapType.ELEVATION_CONTOURS: 'Карта высот (контуры)',
+    MapType.ELEVATION_HILLSHADE: 'Карта высот (hillshade)',
+}
+
+# Резолвер для стилевых карт (этап 1)
+MAPBOX_STYLE_BY_TYPE: dict[MapType, str] = {
+    MapType.SATELLITE: 'mapbox/satellite-v9',
+    MapType.HYBRID: 'mapbox/satellite-streets-v12',
+    MapType.STREETS: 'mapbox/streets-v12',
+    MapType.OUTDOORS: 'mapbox/outdoors-v12',
+}
+
+
+def default_map_type() -> MapType:
+    return MapType.SATELLITE
+
+
+def map_type_to_style_id(map_type: MapType | str) -> str | None:
+    """Возвращает style_id для стилевых карт. Для режимов высот возвращает None."""
+    try:
+        mt = MapType(map_type) if not isinstance(map_type, MapType) else map_type
+    except Exception:
+        mt = MapType.SATELLITE
+    return MAPBOX_STYLE_BY_TYPE.get(mt)
+
+
 # Предпочтительный размер тайла XYZ (256 или 512)
 XYZ_TILE_SIZE = 512
 # Использовать ретина-тайлы @2x
