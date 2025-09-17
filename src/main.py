@@ -130,7 +130,7 @@ def main() -> int:
         return result
 
     except Exception as e:
-        logger.error(f'Failed to start application: {e}', exc_info=True)
+        logger.exception(f'Failed to start application: {e}')
         log_comprehensive_diagnostics('APPLICATION_ERROR')
         return 1
 

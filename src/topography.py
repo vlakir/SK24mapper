@@ -375,31 +375,48 @@ async def async_fetch_xyz_tile(  # noqa: PLR0913
         try:
             timeout = aiohttp.ClientTimeout(total=async_timeout)
             resp = await client.get(url, timeout=timeout)
-            sc = resp.status
-            if sc == HTTPStatus.OK:
-                data = await resp.read()
-                # Контент может быть png/jpg/webp — PIL откроет всё; конвертируем в RGB
-                return Image.open(BytesIO(data)).convert('RGB')
-            if sc in (HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN):
-                msg = (
-                    f'Доступ запрещён (HTTP {sc}). Проверьте токен и права. '
-                    f'z/x/y={z}/{x}/{y} path={path}'
+            try:
+                sc = resp.status
+                if sc == HTTPStatus.OK:
+                    data = await resp.read()
+                    # Контент может быть png/jpg/webp — PIL откроет всё; конвертируем в RGB
+                    return Image.open(BytesIO(data)).convert('RGB')
+                if sc in (HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN):
+                    msg = (
+                        f'Доступ запрещён (HTTP {sc}). Проверьте токен и права. '
+                        f'z/x/y={z}/{x}/{y} path={path}'
+                    )
+                    _fail(msg)
+                if sc == HTTPStatus.NOT_FOUND:
+                    msg = f'Ресурс не найден (404) для тайла z/x/y={z}/{x}/{y} path={path}'
+                    _fail(msg)
+                is_rate_or_5xx = (sc == HTTPStatus.TOO_MANY_REQUESTS) or (
+                    HTTP_5XX_MIN <= sc < HTTP_5XX_MAX
                 )
-                _fail(msg)
-            if sc == HTTPStatus.NOT_FOUND:
-                msg = f'Ресурс не найден (404) для тайла z/x/y={z}/{x}/{y} path={path}'
-                _fail(msg)
-            is_rate_or_5xx = (sc == HTTPStatus.TOO_MANY_REQUESTS) or (
-                HTTP_5XX_MIN <= sc < HTTP_5XX_MAX
-            )
-            if is_rate_or_5xx:
-                last_exc = RuntimeError(
-                    f'HTTP {sc} при загрузке тайла z/x/y={z}/{x}/{y} path={path}',
-                )
-            else:
-                last_exc = RuntimeError(
-                    f'Неожиданный ответ HTTP {sc} для z/x/y={z}/{x}/{y} path={path}',
-                )
+                if is_rate_or_5xx:
+                    last_exc = RuntimeError(
+                        f'HTTP {sc} при загрузке тайла z/x/y={z}/{x}/{y} path={path}',
+                    )
+                else:
+                    last_exc = RuntimeError(
+                        f'Неожиданный ответ HTTP {sc} для z/x/y={z}/{x}/{y} path={path}',
+                    )
+            finally:
+                # Освобождение ресурсов ответа для обоих типов (aiohttp и CachedResponse)
+                try:
+                    close = getattr(resp, 'close', None)
+                    if callable(close):
+                        close()
+                    release = getattr(resp, 'release', None)
+                    if callable(release):
+                        release()
+                except Exception as e:
+                    # Log and move on; we don't want cleanup issues to mask the real HTTP error
+                    import logging
+
+                    logging.getLogger(__name__).debug(
+                        'Failed to cleanup HTTP response: %s', e, exc_info=True
+                    )
         except Exception as e:
             last_exc = e
         await asyncio.sleep(backoff**attempt)

@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from PIL import Image
-from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal, Slot, QSignalBlocker
+from PySide6.QtCore import QObject, QSignalBlocker, Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QAction, QPixmapCache
 from PySide6.QtWidgets import (
     QApplication,
@@ -714,7 +714,9 @@ class MainWindow(QMainWindow):
         # Settings change tracking
         self._connect_setting_changes()
 
-    def _set_profile_selection_safely(self, *, name: str | None = None, index: int | None = None) -> None:
+    def _set_profile_selection_safely(
+        self, *, name: str | None = None, index: int | None = None
+    ) -> None:
         """Set profile combo selection with signals blocked to avoid recursion."""
         blocker = QSignalBlocker(self.profile_combo)
         try:
@@ -925,6 +927,8 @@ class MainWindow(QMainWindow):
         if success:
             self._status_proxy.show_message('Карта успешно создана', 5000)
         else:
+            # Clear preview and related UI on failure as per requirement
+            self._clear_preview_ui()
             self._status_proxy.show_message('Ошибка при создании карты', 5000)
             QMessageBox.critical(
                 self,
@@ -976,7 +980,16 @@ class MainWindow(QMainWindow):
         elif event == ModelEvent.ERROR_OCCURRED:
             error_msg = data.get('error', 'Неизвестная ошибка')
             self._status_proxy.show_message(f'Ошибка: {error_msg}', 5000)
-            QMessageBox.warning(self, 'Предупреждение', error_msg)
+            QMessageBox.critical(self, 'Ошибка', error_msg)
+        elif event == ModelEvent.WARNING_OCCURRED:
+            warn_msg = (
+                data.get('warning')
+                or data.get('message')
+                or data.get('error')
+                or 'Предупреждение'
+            )
+            self._status_proxy.show_message(f'Предупреждение: {warn_msg}', 5000)
+            QMessageBox.warning(self, 'Предупреждение', warn_msg)
 
     def _update_ui_from_settings(self, settings: Any) -> None:
         """Update UI controls from settings object."""
@@ -1095,6 +1108,29 @@ class MainWindow(QMainWindow):
             error_msg = f'Ошибка при отображении предпросмотра: {e}'
             logger.exception(error_msg)
             QMessageBox.warning(self, 'Ошибка предпросмотра', error_msg)
+
+    def _clear_preview_ui(self) -> None:
+        """Clear preview image and disable related controls after a failure."""
+        try:
+            with contextlib.suppress(Exception):
+                self._preview_area.clear()
+            # Reset images
+            self._current_image = None
+            self._base_image = None
+            # Reset adjustments to defaults and sync labels
+            self._adj = {'brightness': 1.0, 'contrast': 1.0, 'saturation': 1.0}
+            self._sync_adj_ui_from_state()
+            # Disable save controls
+            with contextlib.suppress(Exception):
+                self.save_map_btn.setEnabled(False)
+                self.save_map_action.setEnabled(False)
+            # Disable sliders
+            self._set_sliders_enabled(False)
+            # Reset size estimate label if present
+            with contextlib.suppress(Exception):
+                self.output_widget.size_estimate_value.setText('—')
+        except Exception as e:
+            logger.debug(f'Failed to clear preview UI: {e}')
 
     @Slot()
     def _save_map(self) -> None:

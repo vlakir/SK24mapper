@@ -24,6 +24,7 @@ class ModelEvent(str, Enum):
     DOWNLOAD_COMPLETED = 'download_completed'
     DOWNLOAD_FAILED = 'download_failed'
     PREVIEW_UPDATED = 'preview_updated'
+    WARNING_OCCURRED = 'warning_occurred'
     ERROR_OCCURRED = 'error_occurred'
 
 

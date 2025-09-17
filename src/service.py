@@ -27,6 +27,10 @@ from constants import (
     HTTP_CACHE_EXPIRE_HOURS,
     HTTP_CACHE_RESPECT_HEADERS,
     HTTP_CACHE_STALE_IF_ERROR_HOURS,
+    HTTP_FORBIDDEN,
+    HTTP_OK,
+    HTTP_UNAUTHORIZED,
+    MAPBOX_STATIC_BASE,
     MAPBOX_STYLE_ID,
     MAX_GK_ZONE,
     MAX_OUTPUT_PIXELS,
@@ -176,6 +180,40 @@ def _build_save_kwargs(out_path: Path, settings_obj: object) -> dict[str, object
     }
 
 
+async def _validate_api_and_connectivity(api_key: str) -> None:
+    """
+    Проверяет доступность интернета и валидность API-ключа перед началом тяжёлой обработки.
+
+    Делает быстрый запрос к одному тайлу (z=0/x=0/y=0). В случае проблем бросает RuntimeError
+    с понятным для пользователя сообщением.
+    """
+    test_url = (
+        f'{MAPBOX_STATIC_BASE}/{MAPBOX_STYLE_ID}/tiles/256/0/0/0?access_token={api_key}'
+    )
+    timeout = aiohttp.ClientTimeout(total=5)
+    try:
+        async with aiohttp.ClientSession() as client:  # noqa: SIM117
+            async with client.get(test_url, timeout=timeout) as resp:
+                sc = resp.status
+                if sc == HTTP_OK:
+                    # прочитать тело, чтобы гарантированно освободить соединение в пул
+                    with contextlib.suppress(Exception):
+                        await resp.read()
+                    return
+                if sc in (HTTP_UNAUTHORIZED, HTTP_FORBIDDEN):
+                    msg = 'Неверный или недействительный API-ключ. Проверьте ключ и попробуйте снова.'
+                    raise RuntimeError(
+                        msg,
+                    )
+                msg = f'Ошибка доступа к серверу карт (HTTP {sc}). Повторите попытку позже.'
+                raise RuntimeError(
+                    msg,
+                )
+    except (TimeoutError, aiohttp.ClientConnectorError, aiohttp.ClientOSError):
+        msg = 'Нет соединения с интернетом или сервер недоступен. Проверьте подключение к сети.'
+        raise RuntimeError(msg) from None
+
+
 async def download_satellite_rectangle(  # noqa: PLR0913
     center_x_sk42_gk: float,
     center_y_sk42_gk: float,
@@ -187,6 +225,9 @@ async def download_satellite_rectangle(  # noqa: PLR0913
     settings: MapSettings | None = None,
 ) -> str:
     """Полный конвейер."""
+    # Ранняя проверка ключа и соединения, чтобы не выполнять лишние расчёты
+    await _validate_api_and_connectivity(api_key)
+
     # Handle default settings if not provided
     if settings is None:
         settings = MapSettings(
@@ -344,10 +385,7 @@ async def download_satellite_rectangle(  # noqa: PLR0913
                     await session_ctx._cache._cache.close()
         except Exception:
             # Ignore cleanup errors but log them
-            logging.getLogger(__name__).debug(
-                'Error during HTTP session cleanup',
-                exc_info=True,
-            )
+            logging.getLogger(__name__).debug('Error during HTTP session cleanup')
 
         # Force cleanup of SQLite connections in cache directory
         if cache_dir_resolved:
