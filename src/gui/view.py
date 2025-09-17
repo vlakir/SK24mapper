@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from PIL import Image
-from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal, Slot
+from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal, Slot, QSignalBlocker
 from PySide6.QtGui import QAction, QPixmapCache
 from PySide6.QtWidgets import (
     QApplication,
@@ -681,8 +681,7 @@ class MainWindow(QMainWindow):
     def _setup_connections(self) -> None:
         """Setup signal connections."""
         # Profile management
-        # Автозагрузка профиля при выборе из списка
-        self.profile_combo.currentIndexChanged.connect(self._load_selected_profile)
+        # Подключение сигнала выбора профиля произойдет после первичной инициализации
         self.save_profile_btn.clicked.connect(self._save_current_profile)
         self.save_profile_as_btn.clicked.connect(self._save_profile_as)
 
@@ -715,6 +714,17 @@ class MainWindow(QMainWindow):
         # Settings change tracking
         self._connect_setting_changes()
 
+    def _set_profile_selection_safely(self, *, name: str | None = None, index: int | None = None) -> None:
+        """Set profile combo selection with signals blocked to avoid recursion."""
+        blocker = QSignalBlocker(self.profile_combo)
+        try:
+            if name is not None:
+                self.profile_combo.setCurrentText(name)
+            elif index is not None:
+                self.profile_combo.setCurrentIndex(index)
+        finally:
+            del blocker
+
     def _connect_setting_changes(self) -> None:
         """Connect all setting change signals."""
         # Coordinates
@@ -746,11 +756,25 @@ class MainWindow(QMainWindow):
         """Load initial application data."""
         # Load available profiles
         profiles = self._controller.get_available_profiles()
-        self.profile_combo.addItems(profiles)
 
-        # Load default profile
-        if 'default' in profiles:
-            self.profile_combo.setCurrentText('default')
+        # Блокируем сигналы на время программных изменений
+        self.profile_combo.blockSignals(True)
+        try:
+            self.profile_combo.clear()
+            self.profile_combo.addItems(profiles)
+            if 'default' in profiles:
+                self.profile_combo.setCurrentText('default')
+            elif profiles:
+                self.profile_combo.setCurrentIndex(0)
+        finally:
+            self.profile_combo.blockSignals(False)
+
+        # Явно загружаем профиль ровно один раз
+        if profiles:
+            self._load_selected_profile(-1)
+
+        # Теперь подключаем обработчик изменения выбора
+        self.profile_combo.currentIndexChanged.connect(self._load_selected_profile)
 
     @Slot()
     def _on_settings_changed(self) -> None:
@@ -785,11 +809,24 @@ class MainWindow(QMainWindow):
 
     @Slot(int)
     def _load_selected_profile(self, index: int) -> None:
-        """Load the selected profile when selection changes."""
-        # Ignore index value; use currentText for robustness
-        profile_name = self.profile_combo.currentText()
-        if profile_name:
+        """Load the selected profile when selection changes (guarded, non-reentrant)."""
+        # Guard against re-entrant calls
+        if getattr(self, '_profile_loading', False):
+            logger.debug('Profile load skipped due to guard re-entry')
+            return
+        if not hasattr(self, '_profile_loading'):
+            self._profile_loading = False
+
+        self._profile_loading = True
+        try:
+            # Ignore index value; use currentText for robustness
+            profile_name = self.profile_combo.currentText()
+            if not profile_name:
+                return
+            logger.debug(f'Loading profile: {profile_name}')
             self._controller.load_profile_by_name(profile_name)
+        finally:
+            self._profile_loading = False
 
     @Slot()
     def _save_current_profile(self) -> None:
@@ -843,10 +880,10 @@ class MainWindow(QMainWindow):
                 if Path(file_path).parent == default_dir:
                     # Refresh profile list
                     self._load_initial_data()
-                    # Select the newly saved profile
+                    # Select the newly saved profile safely (no extra load)
                     index = self.profile_combo.findText(saved_profile_name)
                     if index >= 0:
-                        self.profile_combo.setCurrentIndex(index)
+                        self._set_profile_selection_safely(index=index)
 
                 self._status_proxy.show_message(
                     f'Профиль сохранён как: {saved_profile_name}',
@@ -1516,16 +1553,16 @@ class MainWindow(QMainWindow):
             # Update combo selection if this profile is in the list
             idx = self.profile_combo.findText(profile_name)
             # Обновляем выпадающий список без вызова автозагрузки второй раз
-            self.profile_combo.blockSignals(True)
-            try:
-                if idx >= 0:
-                    self.profile_combo.setCurrentIndex(idx)
-                else:
+            if idx >= 0:
+                self._set_profile_selection_safely(index=idx)
+            else:
+                blocker = QSignalBlocker(self.profile_combo)
+                try:
                     # If it’s not in list, add it temporarily
                     self.profile_combo.addItem(profile_name)
                     self.profile_combo.setCurrentText(profile_name)
-            finally:
-                self.profile_combo.blockSignals(False)
+                finally:
+                    del blocker
             self._status_proxy.show_message(f'Профиль загружен: {profile_name}', 3000)
         except Exception as e:
             QMessageBox.critical(self, 'Ошибка', f'Не удалось открыть профиль:\n{e}')

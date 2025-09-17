@@ -66,6 +66,8 @@ class OptimizedImageView(QGraphicsView):
         # Enable mouse tracking for smooth interactions
         self.setMouseTracking(True)
 
+        self._qimage_bytes: bytes | None = None
+
     def set_image(self, pil_image: Image.Image) -> None:
         """
         Set the image to display with fixed rotation to improve thin line visibility.
@@ -91,7 +93,7 @@ class OptimizedImageView(QGraphicsView):
         width, height = pil_image.size
         image_data = pil_image.tobytes()
         # Keep a reference to the backing bytes to prevent premature GC
-        self._qimage_bytes: bytes | None = image_data
+        self._qimage_bytes = image_data
         qimage = QImage(
             self._qimage_bytes,
             width,
