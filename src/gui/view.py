@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
     QStatusBar,
     QVBoxLayout,
     QWidget,
+    QCheckBox,
 )
 
 from constants import (
@@ -99,6 +100,10 @@ class DownloadWorker(QThread):
                 lambda label: None,
             )
             set_preview_image_callback(preview_callback)
+            
+            # Import and set progress callback for ConsoleProgress updates
+            from progress import set_progress_callback
+            set_progress_callback(lambda done, total, label: self.progress_update.emit(done, total, label))
 
             # Run the actual download
             log_memory_usage('before download sync call')
@@ -526,26 +531,40 @@ class MainWindow(QMainWindow):
 
         settings_vertical_layout.addWidget(QLabel('Настройки'))
 
-        # Тип карты
+        # Тип карты и чекбокс изолиний
         maptype_row = QHBoxLayout()
         maptype_label = QLabel('Тип карты:')
         self.map_type_combo = QComboBox()
-        # Заполняем все 7 пунктов в заданном порядке
+        # Заполняем пункты (исключаем «Карта высот (контуры)», теперь это опция-оверлей)
         self._maptype_order = [
             MapType.SATELLITE,
             MapType.HYBRID,
             MapType.STREETS,
             MapType.OUTDOORS,
             MapType.ELEVATION_COLOR,
-            MapType.ELEVATION_CONTOURS,
             MapType.ELEVATION_HILLSHADE,
         ]
         for mt in self._maptype_order:
             self.map_type_combo.addItem(MAP_TYPE_LABELS_RU[mt], userData=mt.value)
         # По умолчанию «Спутник»
         self.map_type_combo.setCurrentIndex(0)
+        # Чекбокс "Изолинии"
+        self.contours_checkbox = QCheckBox('Изолинии')
+        self.contours_checkbox.setToolTip('Наложить изолинии поверх выбранного типа карты')
+        # Гарантируем кликабельность: резервируем место и фиксируем размер ползунка
+        try:
+            self.contours_checkbox.setEnabled(True)
+            self.contours_checkbox.setMinimumWidth(110)
+            self.contours_checkbox.setSizePolicy(
+                QSizePolicy.Policy.Fixed,
+                QSizePolicy.Policy.Fixed,
+            )
+        except Exception:
+            pass
         maptype_row.addWidget(maptype_label)
         maptype_row.addWidget(self.map_type_combo, 1)
+        maptype_row.addSpacing(8)
+        maptype_row.addWidget(self.contours_checkbox)
         settings_vertical_layout.addLayout(maptype_row)
         settings_horizontal_layout = QHBoxLayout()
 
@@ -739,6 +758,8 @@ class MainWindow(QMainWindow):
         self._connect_setting_changes()
         # Map type change triggers settings update and clears preview immediately
         self.map_type_combo.currentIndexChanged.connect(self._on_map_type_changed)
+        # Overlay contours toggle
+        self.contours_checkbox.toggled.connect(self._on_settings_changed)
 
     def _set_profile_selection_safely(
         self, *, name: str | None = None, index: int | None = None
@@ -806,8 +827,11 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _on_settings_changed(self) -> None:
-        """Handle settings change from UI."""
-        # Collect all current settings
+        """Handle settings change from UI (bulk update without intermediate events)."""
+        # Clear any existing preview to avoid showing outdated imagery when coordinates or contours change
+        self._clear_preview_ui()
+        
+        # Collect all current settings first to avoid races
         coords = self._get_current_coordinates()
         grid_settings = self.grid_widget.get_settings()
         output_settings = self.output_widget.get_settings()
@@ -819,11 +843,17 @@ class MainWindow(QMainWindow):
         except Exception:
             map_type_value = MapType.SATELLITE.value
 
-        # Update model through controller
-        self._controller.update_coordinates(coords)
-        self._controller.update_grid_settings(grid_settings)
-        self._controller.update_output_settings(output_settings)
-        self._controller.update_setting('map_type', map_type_value)
+        # Capture checkbox state before any model notifications
+        overlay_checked = bool(self.contours_checkbox.isChecked())
+
+        # Perform one bulk update to the model to emit a single SETTINGS_CHANGED
+        payload: dict[str, Any] = {}
+        payload.update(coords)
+        payload.update(grid_settings)
+        payload.update(output_settings)
+        payload['map_type'] = map_type_value
+        payload['overlay_contours'] = overlay_checked
+        self._controller.update_settings_bulk(**payload)
 
     @Slot()
     def _on_map_type_changed(self) -> None:
@@ -1063,13 +1093,20 @@ class MainWindow(QMainWindow):
         }
         self.output_widget.set_settings(output_settings)
 
-        # Update map type combobox
+        # Update map type combobox and overlay checkbox
         try:
             current_mt = getattr(settings, 'map_type', MapType.SATELLITE)
             if not isinstance(current_mt, MapType):
                 current_mt = MapType(str(current_mt))
         except Exception:
             current_mt = MapType.SATELLITE
+
+        # Legacy handling: if profile had ELEVATION_CONTOURS, map to OUTDOORS + overlay enabled
+        overlay_flag = bool(getattr(settings, 'overlay_contours', False))
+        if current_mt == MapType.ELEVATION_CONTOURS:
+            current_mt = MapType.OUTDOORS
+            overlay_flag = True
+
         # find index by userData
         target_index = 0
         for i in range(self.map_type_combo.count()):
@@ -1078,6 +1115,8 @@ class MainWindow(QMainWindow):
                 break
         with QSignalBlocker(self.map_type_combo):
             self.map_type_combo.setCurrentIndex(target_index)
+        with QSignalBlocker(self.contours_checkbox):
+            self.contours_checkbox.setChecked(overlay_flag)
 
     def _ensure_busy_dialog(self) -> QProgressDialog:
         """Create BusyDialog lazily to prevent it from showing at startup."""

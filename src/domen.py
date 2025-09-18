@@ -30,6 +30,9 @@ class MapSettings(BaseModel):
     # Тип карты (этап 1 — стилевые карты Mapbox)
     map_type: MapType = default_map_type()
 
+    # Наложение изолиний поверх выбранного типа карты
+    overlay_contours: bool = False
+
     # Толщина линий сетки (px)
     grid_width_px: int
     # Размер шрифта подписей (px)

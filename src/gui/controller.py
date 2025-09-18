@@ -29,6 +29,24 @@ class MilMapperController:
         self._load_api_key()
         logger.info('MilMapperController initialized')
 
+    def update_settings_bulk(self, **kwargs: Any) -> None:
+        """Пакетное обновление нескольких настроек за один вызов модели.
+
+        Обновляет модель одним вызовом update_settings, чтобы сгенерировать
+        только одно событие SETTINGS_CHANGED и избежать гонок между View и Model.
+        """
+        try:
+            if kwargs:
+                self._model.update_settings(**kwargs)
+                logger.debug(f"Обновлены настройки (bulk): {list(kwargs.keys())}")
+        except Exception as e:
+            error_msg = f"Не удалось обновить настройки (bulk): {e}"
+            logger.exception(error_msg)
+            self._model.notify_observers(
+                ModelEvent.WARNING_OCCURRED,
+                {"warning": error_msg},
+            )
+
     def _load_api_key(self) -> None:
         """Загрузка API-ключа из переменных окружения (.env/.secrets.env) для разных сценариев запуска."""
         try:
