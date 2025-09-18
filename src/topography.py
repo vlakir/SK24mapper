@@ -2,6 +2,7 @@ import asyncio
 import math
 from http import HTTPStatus
 from io import BytesIO
+from typing import Sequence
 
 import aiohttp
 from PIL import Image
@@ -9,6 +10,11 @@ from pyproj import CRS, Transformer
 
 from constants import (
     EARTH_RADIUS_M,
+    ELEV_MIN_RANGE_M,
+    ELEV_PCTL_HI,
+    ELEV_PCTL_LO,
+    ELEVATION_COLOR_RAMP,
+    MAPBOX_TERRAIN_RGB_PATH,
     EAST_VECTOR_SAMPLE_M,
     EPSG_SK42_GK_BASE,
     GK_FALSE_EASTING,
@@ -422,6 +428,198 @@ async def async_fetch_xyz_tile(  # noqa: PLR0913
         await asyncio.sleep(backoff**attempt)
     msg = f'Не удалось загрузить тайл z/x/y={z}/{x}/{y}: {last_exc}'
     raise RuntimeError(msg)
+
+
+async def async_fetch_terrain_rgb_tile(  # noqa: PLR0913
+    client: aiohttp.ClientSession,
+    api_key: str,
+    z: int,
+    x: int,
+    y: int,
+    *,
+    use_retina: bool,
+    async_timeout: float = HTTP_TIMEOUT_DEFAULT,
+    retries: int = HTTP_RETRIES_DEFAULT,
+    backoff: float = HTTP_BACKOFF_FACTOR,
+) -> Image.Image:
+    """
+    Загружает один тайл Terrain-RGB (pngraw) и возвращает PIL.Image in RGB.
+
+    URL: https://api.mapbox.com/v4/mapbox.terrain-rgb/{z}/{x}/{y}{@2x}.pngraw?access_token=...
+    Токен не логируется; в сообщениях используем путь без query.
+    Поведение ошибок/ретраев аналогично async_fetch_xyz_tile.
+    """
+    scale_suffix = '@2x' if use_retina else ''
+    path = f'{MAPBOX_TERRAIN_RGB_PATH}/{z}/{x}/{y}{scale_suffix}.pngraw'
+    url = f'{path}?access_token={api_key}'
+
+    last_exc: Exception | None = None
+    for attempt in range(retries):
+        try:
+            timeout = aiohttp.ClientTimeout(total=async_timeout)
+            resp = await client.get(url, timeout=timeout)
+            try:
+                sc = resp.status
+                if sc == HTTPStatus.OK:
+                    data = await resp.read()
+                    return Image.open(BytesIO(data)).convert('RGB')
+                if sc in (HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN):
+                    raise RuntimeError(
+                        f'Доступ запрещён (HTTP {sc}) для terrain тайла z/x/y={z}/{x}/{y} path={path}',
+                    )
+                if sc == HTTPStatus.NOT_FOUND:
+                    raise RuntimeError(
+                        f'Ресурс не найден (404) для terrain тайла z/x/y={z}/{x}/{y} path={path}',
+                    )
+                is_rate_or_5xx = (sc == HTTPStatus.TOO_MANY_REQUESTS) or (
+                    HTTP_5XX_MIN <= sc < HTTP_5XX_MAX
+                )
+                if is_rate_or_5xx:
+                    last_exc = RuntimeError(
+                        f'HTTP {sc} при загрузке terrain тайла z/x/y={z}/{x}/{y} path={path}',
+                    )
+                else:
+                    last_exc = RuntimeError(
+                        f'Неожиданный ответ HTTP {sc} для terrain z/x/y={z}/{x}/{y} path={path}',
+                    )
+            finally:
+                try:
+                    close = getattr(resp, 'close', None)
+                    if callable(close):
+                        close()
+                    release = getattr(resp, 'release', None)
+                    if callable(release):
+                        release()
+                except Exception:
+                    pass
+        except Exception as e:
+            last_exc = e
+        await asyncio.sleep(backoff**attempt)
+    raise RuntimeError(f'Не удалось загрузить terrain тайл z/x/y={z}/{x}/{y}: {last_exc}')
+
+
+def decode_terrain_rgb_to_elevation_m(img: Image.Image) -> list[list[float]]:
+    """Декодирует Terrain-RGB картинку в двумерный массив высот (метры).
+
+    elevation = -10000 + (R*256*256 + G*256 + B) * 0.1
+
+    Возвращает список строк для экономии зависимостей (без numpy).
+    """
+    w, h = img.size
+    pix = img.load()
+    rows: list[list[float]] = []
+    for y in range(h):
+        row: list[float] = []
+        for x in range(w):
+            r, g, b = pix[x, y][:3]
+            elev = -10000.0 + (r * 256 * 256 + g * 256 + b) * 0.1
+            row.append(elev)
+        rows.append(row)
+    return rows
+
+
+def assemble_dem(  # noqa: PLR0913
+    tiles_data: list[list[list[float]]],
+    tiles_x: int,
+    tiles_y: int,
+    eff_tile_px: int,
+    crop_rect: tuple[int, int, int, int],
+) -> list[list[float]]:
+    """
+    Сшивает список DEM тайлов (в порядке строк) в единый DEM и применяет crop_rect.
+
+    Возвращает 2D список float метров.
+    """
+    full_w = tiles_x * eff_tile_px
+    full_h = tiles_y * eff_tile_px
+    # Инициализация полотна
+    canvas: list[list[float]] = [[0.0] * full_w for _ in range(full_h)]
+
+    # Размещение тайлов
+    idx = 0
+    for ty in range(tiles_y):
+        for tx in range(tiles_x):
+            tile = tiles_data[idx]
+            idx += 1
+            # Копируем по строкам
+            base_y = ty * eff_tile_px
+            base_x = tx * eff_tile_px
+            for y in range(eff_tile_px):
+                row_src = tile[y]
+                row_dst = canvas[base_y + y]
+                row_dst[base_x : base_x + eff_tile_px] = row_src[:eff_tile_px]
+
+    cx, cy, cw, ch = crop_rect
+    # Обрезка
+    cropped: list[list[float]] = [row[cx : cx + cw] for row in canvas[cy : cy + ch]]
+    # Освободить полотно
+    canvas.clear()
+    return cropped
+
+
+def compute_percentiles(values: Sequence[float], p_lo: float, p_hi: float) -> tuple[float, float]:
+    """Простая перцентильная оценка без numpy (O(n log n))."""
+    vals = sorted(values)
+    n = len(vals)
+    if n == 0:
+        return 0.0, 1.0
+    def idx_of(p: float) -> int:
+        p = max(0.0, min(100.0, p))
+        k = int(round((p / 100.0) * (n - 1)))
+        return max(0, min(n - 1, k))
+    return vals[idx_of(p_lo)], vals[idx_of(p_hi)]
+
+
+def colorize_dem_to_image(
+    dem: list[list[float]],
+    p_lo: float = ELEV_PCTL_LO,
+    p_hi: float = ELEV_PCTL_HI,
+    min_range_m: float = ELEV_MIN_RANGE_M,
+) -> Image.Image:
+    """Преобразует DEM в цветное изображение по заданной палитре с перцентильной нормализацией."""
+    h = len(dem)
+    w = len(dem[0]) if h else 0
+    # Выборка для перцентилей: используем равномерную подвыборку, чтобы не хранить всё
+    samples: list[float] = []
+    if h and w:
+        step_y = max(1, h // 200)
+        step_x = max(1, w // 200)
+        for y in range(0, h, step_y):
+            row = dem[y]
+            for x in range(0, w, step_x):
+                samples.append(row[x])
+    lo, hi = compute_percentiles(samples or [v for row in dem for v in row][:10000], p_lo, p_hi)
+    if hi - lo < min_range_m:
+        mid = (lo + hi) / 2.0
+        lo = mid - min_range_m / 2.0
+        hi = mid + min_range_m / 2.0
+    inv = 1.0 / (hi - lo) if hi > lo else 0.0
+
+    def lerp(a: float, b: float, t: float) -> float:
+        return a + (b - a) * t
+
+    def color_at(t: float) -> tuple[int, int, int]:
+        t = 0.0 if t < 0 else 1.0 if t > 1 else t
+        ramp = ELEVATION_COLOR_RAMP
+        for i in range(1, len(ramp)):
+            t0, c0 = ramp[i - 1]
+            t1, c1 = ramp[i]
+            if t <= t1:
+                local = 0.0 if t1 == t0 else (t - t0) / (t1 - t0)
+                r = int(round(lerp(c0[0], c1[0], local)))
+                g = int(round(lerp(c0[1], c1[1], local)))
+                b = int(round(lerp(c0[2], c1[2], local)))
+                return r, g, b
+        return ramp[-1][1]
+
+    out = Image.new('RGB', (w, h))
+    put = out.load()
+    for y in range(h):
+        row = dem[y]
+        for x in range(w):
+            t = (row[x] - lo) * inv
+            put[x, y] = color_at(t)
+    return out
 
 
 def latlng_to_final_pixel(

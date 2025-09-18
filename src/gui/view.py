@@ -536,9 +536,9 @@ class MainWindow(QMainWindow):
             MapType.HYBRID,
             MapType.STREETS,
             MapType.OUTDOORS,
-            # MapType.ELEVATION_COLOR,
-            # MapType.ELEVATION_CONTOURS,
-            # MapType.ELEVATION_HILLSHADE,
+            MapType.ELEVATION_COLOR,
+            MapType.ELEVATION_CONTOURS,
+            MapType.ELEVATION_HILLSHADE,
         ]
         for mt in self._maptype_order:
             self.map_type_combo.addItem(MAP_TYPE_LABELS_RU[mt], userData=mt.value)

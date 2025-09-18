@@ -210,6 +210,25 @@ HTTP_TIMEOUT_DEFAULT = 20.0
 HTTP_RETRIES_DEFAULT = 4
 HTTP_BACKOFF_FACTOR = 1.6
 
+# --- Terrain-RGB (Этапы 2–4)
+MAPBOX_TERRAIN_RGB_PATH = 'https://api.mapbox.com/v4/mapbox.terrain-rgb'
+# Нормализация по перцентилям (в процентах)
+ELEV_PCTL_LO = 2.0
+ELEV_PCTL_HI = 98.0
+# Запас для защиты от плоских регионов (минимальная дельта высот в метрах)
+ELEV_MIN_RANGE_M = 10.0
+# Палитра: список контрольных точек (t in [0,1], (R,G,B))
+ELEVATION_COLOR_RAMP = [
+    (0.00, (0, 0, 130)),     # deep blue
+    (0.15, (0, 100, 200)),   # blue
+    (0.30, (0, 160, 100)),   # green
+    (0.45, (180, 200, 0)),   # yellowish
+    (0.60, (200, 140, 0)),   # orange
+    (0.75, (160, 80, 30)),   # brown
+    (0.90, (220, 220, 220)), # light gray
+    (1.00, (255, 255, 255)), # white
+]
+
 # --- Оценка поворота
 # Отсчёт вдоль восточной оси для оценки угла (метры)
 EAST_VECTOR_SAMPLE_M = 200.0

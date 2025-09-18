@@ -45,6 +45,7 @@ from constants import (
     XYZ_USE_RETINA,
     default_map_type,
     map_type_to_style_id,
+    MapType,
 )
 from diagnostics import log_memory_usage, log_thread_status
 from domen import MapSettings
@@ -57,11 +58,15 @@ from image import (
 from progress import ConsoleProgress, LiveSpinner, publish_preview_image
 from topography import (
     async_fetch_xyz_tile,
+    async_fetch_terrain_rgb_tile,
+    assemble_dem,
     build_transformers_sk42,
     choose_zoom_with_limit,
+    colorize_dem_to_image,
     compute_rotation_deg_for_east_axis,
     compute_xyz_coverage,
     crs_sk42_geog,
+    decode_terrain_rgb_to_elevation_m,
     effective_scale_for_xyz,
     estimate_crop_size_px,
 )
@@ -183,6 +188,9 @@ def _build_save_kwargs(out_path: Path, settings_obj: object) -> dict[str, object
 
 async def _validate_api_and_connectivity(api_key: str, style_id: str) -> None:
     """
+    Проверяет доступность стилей Mapbox (Styles API tiles endpoint).
+    """
+    """
     Проверяет доступность интернета и валидность API-ключа перед началом тяжёлой обработки.
 
     Делает быстрый запрос к одному тайлу (z=0/x=0/y=0). В случае проблем бросает RuntimeError
@@ -212,6 +220,28 @@ async def _validate_api_and_connectivity(api_key: str, style_id: str) -> None:
     except (TimeoutError, aiohttp.ClientConnectorError, aiohttp.ClientOSError):
         msg = 'Нет соединения с интернетом или сервер недоступен. Проверьте подключение к сети.'
         raise RuntimeError(msg) from None
+
+
+async def _validate_terrain_api(api_key: str) -> None:
+    """Быстрая проверка доступности Terrain-RGB источника."""
+    from constants import MAPBOX_TERRAIN_RGB_PATH
+
+    test_path = f'{MAPBOX_TERRAIN_RGB_PATH}/0/0/0.pngraw'
+    test_url = f'{test_path}?access_token={api_key}'
+    timeout = aiohttp.ClientTimeout(total=5)
+    try:
+        async with aiohttp.ClientSession() as client:
+            async with client.get(test_url, timeout=timeout) as resp:
+                sc = resp.status
+                if sc == HTTP_OK:
+                    with contextlib.suppress(Exception):
+                        await resp.read()
+                    return
+                if sc in (HTTP_UNAUTHORIZED, HTTP_FORBIDDEN):
+                    raise RuntimeError('Неверный или недействительный API-ключ. Проверьте ключ и попробуйте снова.')
+                raise RuntimeError(f'Ошибка доступа к серверу карт (HTTP {sc}). Повторите попытку позже.')
+    except (TimeoutError, aiohttp.ClientConnectorError, aiohttp.ClientOSError):
+        raise RuntimeError('Нет соединения с интернетом или сервер недоступен. Проверьте подключение к сети.') from None
 
 
 async def download_satellite_rectangle(  # noqa: PLR0913
@@ -244,28 +274,41 @@ async def download_satellite_rectangle(  # noqa: PLR0913
             mask_opacity=0.35,
         )
 
-    # Определяем style_id по типу карты (этап 1)
+    # Определяем тип карты и стратегию
     mt = getattr(settings, 'map_type', default_map_type())
-    style_id = map_type_to_style_id(mt)
-    if not style_id:
-        # На этапах 2–4 будут реализованы режимы высот; пока — откат к Спутнику
-        logger.warning(
-            'Выбран режим высот (%s), пока не реализовано. Используется Спутник.', mt
-        )
+    try:
+        mt_enum = MapType(mt) if not isinstance(mt, MapType) else mt
+    except Exception:
+        mt_enum = default_map_type()
+
+    style_id: str | None = None
+    if mt_enum in (MapType.SATELLITE, MapType.HYBRID, MapType.STREETS, MapType.OUTDOORS):
+        style_id = map_type_to_style_id(mt_enum)
+        logger.info('Тип карты: %s; style_id=%s; tile_size=%s; retina=%s', mt_enum, style_id, XYZ_TILE_SIZE, XYZ_USE_RETINA)
+        await _validate_api_and_connectivity(api_key, style_id)
+    elif mt_enum == MapType.ELEVATION_COLOR:
+        logger.info('Тип карты: %s (Terrain-RGB, цветовая шкала); retina=%s', mt_enum, False)
+    else:
+        # Нереализованные режимы пока откатываются к Спутнику
+        logger.warning('Выбран режим высот (%s), пока не реализовано. Используется Спутник.', mt_enum)
         style_id = map_type_to_style_id(default_map_type())
-    logger.info(
-        'Тип карты: %s; style_id=%s; tile_size=%s; retina=%s',
-        mt,
-        style_id,
-        XYZ_TILE_SIZE,
-        XYZ_USE_RETINA,
-    )
+        await _validate_api_and_connectivity(api_key, style_id)
 
-    # Ранняя проверка ключа и соединения с выбранным стилем
-    await _validate_api_and_connectivity(api_key, style_id)
+    # Выбор масштаба под тип карты
+    is_elev_color = False
+    try:
+        is_elev_color = MapType(mt) == MapType.ELEVATION_COLOR if not isinstance(mt, MapType) else mt == MapType.ELEVATION_COLOR
+    except Exception:
+        is_elev_color = False
 
-    # Переопределяем параметры из профиля
-    eff_scale = effective_scale_for_xyz(XYZ_TILE_SIZE, use_retina=XYZ_USE_RETINA)
+    if is_elev_color:
+        # Для Terrain-RGB базовый тайл 256px; @2x даёт 512
+        eff_scale = effective_scale_for_xyz(256, use_retina=False)
+        # Ранняя проверка доступности Terrain-RGB
+        await _validate_terrain_api(api_key)
+    else:
+        eff_scale = effective_scale_for_xyz(XYZ_TILE_SIZE, use_retina=XYZ_USE_RETINA)
+
     # Подготовка — конвертация из Гаусса-Крюгера в географические координаты СК-42
     sp = LiveSpinner('Подготовка: определение зоны')
     sp.start()
@@ -343,7 +386,8 @@ async def download_satellite_rectangle(  # noqa: PLR0913
     )
     sp.stop('Подготовка: покрытие рассчитано')
 
-    tile_progress = ConsoleProgress(total=len(tiles), label='Загрузка XYZ-тайлов')
+    tile_label = 'Загрузка Terrain-RGB тайлов' if is_elev_color else 'Загрузка XYZ-тайлов'
+    tile_progress = ConsoleProgress(total=len(tiles), label=tile_label)
     semaphore = asyncio.Semaphore(DOWNLOAD_CONCURRENCY or ASYNC_MAX_CONCURRENCY)
 
     cache_dir_resolved = _resolve_cache_dir()
@@ -356,40 +400,195 @@ async def download_satellite_rectangle(  # noqa: PLR0913
         async with session_ctx as client:
             tile_count = 0
 
-            async def bound_fetch(
-                idx_xy: tuple[int, tuple[int, int]],
-            ) -> tuple[int, Image.Image]:
-                nonlocal tile_count
-                idx, (tx, ty) = idx_xy
-                async with semaphore:
-                    img = await async_fetch_xyz_tile(
-                        client=client,
-                        api_key=api_key,
-                        style_id=style_id,
-                        tile_size=XYZ_TILE_SIZE,
-                        z=zoom,
-                        x=tx,
-                        y=ty,
-                        use_retina=XYZ_USE_RETINA,
-                    )
-                    await tile_progress.step(1)
+            if is_elev_color:
+                # Two-pass streaming without storing full DEM
+                from topography import compute_percentiles, ELEV_PCTL_LO, ELEV_PCTL_HI, ELEV_MIN_RANGE_M, ELEVATION_COLOR_RAMP
+                # Helper: color interpolation
+                def _lerp(a: float, b: float, t: float) -> float:
+                    return a + (b - a) * t
+                def _color_at(t: float) -> tuple[int, int, int]:
+                    t = 0.0 if t < 0 else 1.0 if t > 1 else t
+                    ramp = ELEVATION_COLOR_RAMP
+                    for i in range(1, len(ramp)):
+                        t0, c0 = ramp[i - 1]
+                        t1, c1 = ramp[i]
+                        if t <= t1:
+                            local = 0.0 if t1 == t0 else (t - t0) / (t1 - t0)
+                            r = int(round(_lerp(c0[0], c1[0], local)))
+                            g = int(round(_lerp(c0[1], c1[1], local)))
+                            b = int(round(_lerp(c0[2], c1[2], local)))
+                            return r, g, b
+                    return ramp[-1][1]
 
-                    # Log memory usage every 50 tiles
-                    tile_count += 1
-                    if tile_count % 50 == 0:
-                        log_memory_usage(f'after {tile_count} tiles')
+                full_eff_tile_px = 256  # retina disabled for elevation
 
-                    return idx, img
+                # Fast overlap check to skip tiles outside crop
+                def _tile_overlap_rect(tx: int, ty: int) -> tuple[int,int,int,int] | None:
+                    base_x = tx * full_eff_tile_px
+                    base_y = ty * full_eff_tile_px
+                    cx, cy, cw, ch = crop_rect
+                    x0 = max(base_x, cx)
+                    y0 = max(base_y, cy)
+                    x1 = min(base_x + full_eff_tile_px, cx + cw)
+                    y1 = min(base_y + full_eff_tile_px, cy + ch)
+                    if x1 <= x0 or y1 <= y0:
+                        return None
+                    return x0, y0, x1, y1
 
-            tasks = [bound_fetch(pair) for pair in enumerate(tiles)]
-            results = await asyncio.gather(*tasks)
-            tile_progress.close()
+                # Map tiles list index -> (tile grid coords)
+                # tiles list is ordered row-major corresponding to tx in [0..tiles_x), ty in [0..tiles_y)
+                # We reconstruct tx,ty from enumerate index
+                def _tx_ty_from_index(idx: int) -> tuple[int,int]:
+                    ty = idx // tiles_x
+                    tx = idx % tiles_x
+                    return tx, ty
 
-            log_memory_usage('after all tiles downloaded')
-            log_thread_status('after all tiles downloaded')
+                # Pass A: sample elevations for percentiles (reservoir sampling)
+                MAX_SAMPLES = 50000
+                samples: list[float] = []  # reservoir
+                seen_count = 0
+                import random
+                rng = random.Random(42)  # deterministic for reproducibility
+                tile_progress.label = 'Проверка диапазона высот (проход 1/2)'
 
-            results.sort(key=lambda t: t[0])
-            images: list[Image.Image] = [img for _, img in results]
+                async def fetch_and_sample(idx_xy: tuple[int, tuple[int, int]]) -> None:
+                    nonlocal tile_count, samples, seen_count
+                    idx, (tile_x_world, tile_y_world) = idx_xy
+                    tx, ty = _tx_ty_from_index(idx)
+                    if _tile_overlap_rect(tx, ty) is None:
+                        await tile_progress.step(1)
+                        return
+                    async with semaphore:
+                        img = await async_fetch_terrain_rgb_tile(
+                            client=client,
+                            api_key=api_key,
+                            z=zoom,
+                            x=tile_x_world,
+                            y=tile_y_world,
+                            use_retina=False,
+                        )
+                        dem_tile = decode_terrain_rgb_to_elevation_m(img)
+                        # Iterate coarse grid within tile to limit CPU, but feed values into reservoir
+                        h = len(dem_tile)
+                        w = len(dem_tile[0]) if h else 0
+                        if h and w:
+                            step_y = max(1, h // 32)
+                            step_x = max(1, w // 32)
+                            # jitter to avoid regular sampling artifacts
+                            off_y = rng.randrange(0, min(step_y, h)) if step_y > 1 else 0
+                            off_x = rng.randrange(0, min(step_x, w)) if step_x > 1 else 0
+                            for ry in range(off_y, h, step_y):
+                                row = dem_tile[ry]
+                                for rx in range(off_x, w, step_x):
+                                    v = row[rx]
+                                    seen_count += 1
+                                    if len(samples) < MAX_SAMPLES:
+                                        samples.append(v)
+                                    else:
+                                        j = rng.randrange(0, seen_count)
+                                        if j < MAX_SAMPLES:
+                                            samples[j] = v
+                        await tile_progress.step(1)
+                        tile_count += 1
+                        if tile_count % 50 == 0:
+                            log_memory_usage(f'pass1 after {tile_count} tiles')
+                # launch tasks
+                await asyncio.gather(*[fetch_and_sample(pair) for pair in enumerate(tiles)])
+                tile_progress.close()
+                # Compute percentiles from reservoir
+                logger.info('DEM sampling reservoir: kept=%s seen~=%s', len(samples), seen_count)
+                lo, hi = compute_percentiles(samples, ELEV_PCTL_LO, ELEV_PCTL_HI)
+                if hi - lo < ELEV_MIN_RANGE_M:
+                    mid = (lo + hi) / 2.0
+                    lo = mid - ELEV_MIN_RANGE_M / 2.0
+                    hi = mid + ELEV_MIN_RANGE_M / 2.0
+                inv = 1.0 / (hi - lo) if hi > lo else 0.0
+
+                # Pass B: render directly to output image
+                result = Image.new('RGB', (crop_rect[2], crop_rect[3]))
+                put = result.load()
+                tile_progress = ConsoleProgress(total=len(tiles), label='Окрашивание DEM (проход 2/2)')
+                tile_count = 0
+
+                async def fetch_and_paint(idx_xy: tuple[int, tuple[int, int]]) -> None:
+                    nonlocal tile_count
+                    idx, (tile_x_world, tile_y_world) = idx_xy
+                    tx, ty = _tx_ty_from_index(idx)
+                    ov = _tile_overlap_rect(tx, ty)
+                    if ov is None:
+                        await tile_progress.step(1)
+                        return
+                    x0, y0, x1, y1 = ov
+                    # destination rect in cropped image coords
+                    cx, cy, _, _ = crop_rect
+                    dx0 = x0 - cx
+                    dy0 = y0 - cy
+                    async with semaphore:
+                        img = await async_fetch_terrain_rgb_tile(
+                            client=client,
+                            api_key=api_key,
+                            z=zoom,
+                            x=tile_x_world,
+                            y=tile_y_world,
+                            use_retina=False,
+                        )
+                        dem_tile = decode_terrain_rgb_to_elevation_m(img)
+                        # iterate overlap and set pixels
+                        # compute offsets inside tile
+                        base_x = tx * full_eff_tile_px
+                        base_y = ty * full_eff_tile_px
+                        for yy in range(y0, y1):
+                            src_row = dem_tile[yy - base_y]
+                            dest_y = dy0 + (yy - y0)
+                            for xx in range(x0, x1):
+                                val = src_row[xx - base_x]
+                                t = (val - lo) * inv
+                                put[dx0 + (xx - x0), dest_y] = _color_at(t)
+                        await tile_progress.step(1)
+                        tile_count += 1
+                        if tile_count % 50 == 0:
+                            log_memory_usage(f'pass2 after {tile_count} tiles')
+
+                await asyncio.gather(*[fetch_and_paint(pair) for pair in enumerate(tiles)])
+                tile_progress.close()
+            else:
+                async def bound_fetch(idx_xy: tuple[int, tuple[int, int]]) -> tuple[int, Image.Image]:
+                    nonlocal tile_count
+                    idx, (tx, ty) = idx_xy
+                    async with semaphore:
+                        img = await async_fetch_xyz_tile(
+                            client=client,
+                            api_key=api_key,
+                            style_id=style_id,  # type: ignore[arg-type]
+                            tile_size=XYZ_TILE_SIZE,
+                            z=zoom,
+                            x=tx,
+                            y=ty,
+                            use_retina=XYZ_USE_RETINA,
+                        )
+                        await tile_progress.step(1)
+                        tile_count += 1
+                        if tile_count % 50 == 0:
+                            log_memory_usage(f'after {tile_count} tiles')
+                        return idx, img
+
+                tasks = [bound_fetch(pair) for pair in enumerate(tiles)]
+                results = await asyncio.gather(*tasks)
+                tile_progress.close()
+                log_memory_usage('after all tiles downloaded')
+                log_thread_status('after all tiles downloaded')
+                results.sort(key=lambda t: t[0])
+                images: list[Image.Image] = [img for _, img in results]
+                eff_tile_px = XYZ_TILE_SIZE * (2 if XYZ_USE_RETINA else 1)
+                result = assemble_and_crop(
+                    images=images,
+                    tiles_x=tiles_x,
+                    tiles_y=tiles_y,
+                    eff_tile_px=eff_tile_px,
+                    crop_rect=crop_rect,
+                )
+                with contextlib.suppress(Exception):
+                    images.clear()
     finally:
         # Explicit cleanup of HTTP session resources
         try:
@@ -401,24 +600,10 @@ async def download_satellite_rectangle(  # noqa: PLR0913
                 ):
                     await session_ctx._cache._cache.close()
         except Exception:
-            # Ignore cleanup errors but log them
             logging.getLogger(__name__).debug('Error during HTTP session cleanup')
 
-        # Force cleanup of SQLite connections in cache directory
         if cache_dir_resolved:
             _cleanup_sqlite_cache(cache_dir_resolved)
-
-    eff_tile_px = XYZ_TILE_SIZE * (2 if XYZ_USE_RETINA else 1)
-    result = assemble_and_crop(
-        images=images,
-        tiles_x=tiles_x,
-        tiles_y=tiles_y,
-        eff_tile_px=eff_tile_px,
-        crop_rect=crop_rect,
-    )
-    # The assemble function already clears tile images; ensure local refs are dropped
-    with contextlib.suppress(Exception):
-        images.clear()
 
     angle_deg = compute_rotation_deg_for_east_axis(
         center_lat_sk42=center_lat_sk42,
