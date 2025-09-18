@@ -598,28 +598,44 @@ def colorize_dem_to_image(
     def lerp(a: float, b: float, t: float) -> float:
         return a + (b - a) * t
 
-    def color_at(t: float) -> tuple[int, int, int]:
-        t = 0.0 if t < 0 else 1.0 if t > 1 else t
-        ramp = ELEVATION_COLOR_RAMP
-        for i in range(1, len(ramp)):
-            t0, c0 = ramp[i - 1]
-            t1, c1 = ramp[i]
-            if t <= t1:
-                local = 0.0 if t1 == t0 else (t - t0) / (t1 - t0)
+    # Build LUT once per image for fast palette mapping
+    LUT_SIZE = 2048
+    _LUT: list[tuple[int, int, int]] = []
+    ramp = ELEVATION_COLOR_RAMP
+    for i in range(LUT_SIZE):
+        tt = i / (LUT_SIZE - 1)
+        for j in range(1, len(ramp)):
+            t0, c0 = ramp[j - 1]
+            t1, c1 = ramp[j]
+            if tt <= t1 or j == len(ramp) - 1:
+                local = 0.0 if t1 == t0 else (tt - t0) / (t1 - t0)
                 r = int(round(lerp(c0[0], c1[0], local)))
                 g = int(round(lerp(c0[1], c1[1], local)))
                 b = int(round(lerp(c0[2], c1[2], local)))
-                return r, g, b
-        return ramp[-1][1]
+                _LUT.append((r, g, b))
+                break
 
-    out = Image.new('RGB', (w, h))
-    put = out.load()
+    def color_at(t: float) -> tuple[int, int, int]:
+        if t <= 0.0:
+            return _LUT[0]
+        if t >= 1.0:
+            return _LUT[-1]
+        idx = int(t * (LUT_SIZE - 1))
+        return _LUT[idx]
+
+    # Build entire image buffer as bytes (scanlines) and create Image from bytes
+    buf = bytearray(w * h * 3)
+    k = 0
     for y in range(h):
         row = dem[y]
         for x in range(w):
             t = (row[x] - lo) * inv
-            put[x, y] = color_at(t)
-    return out
+            r, g, b = color_at(t)
+            buf[k] = r
+            buf[k + 1] = g
+            buf[k + 2] = b
+            k += 3
+    return Image.frombytes('RGB', (w, h), bytes(buf))
 
 
 def latlng_to_final_pixel(

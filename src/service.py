@@ -403,22 +403,34 @@ async def download_satellite_rectangle(  # noqa: PLR0913
             if is_elev_color:
                 # Two-pass streaming without storing full DEM
                 from topography import compute_percentiles, ELEV_PCTL_LO, ELEV_PCTL_HI, ELEV_MIN_RANGE_M, ELEVATION_COLOR_RAMP
-                # Helper: color interpolation
+                # Helper: build LUT from color ramp for fast palette lookup
                 def _lerp(a: float, b: float, t: float) -> float:
                     return a + (b - a) * t
-                def _color_at(t: float) -> tuple[int, int, int]:
-                    t = 0.0 if t < 0 else 1.0 if t > 1 else t
-                    ramp = ELEVATION_COLOR_RAMP
-                    for i in range(1, len(ramp)):
-                        t0, c0 = ramp[i - 1]
-                        t1, c1 = ramp[i]
-                        if t <= t1:
+                LUT_SIZE = 2048
+                _LUT: list[tuple[int, int, int]] = []
+                ramp = ELEVATION_COLOR_RAMP
+                # Precompute cumulative ramp into fixed-size LUT
+                for i in range(LUT_SIZE):
+                    t = i / (LUT_SIZE - 1)
+                    # find segment
+                    for j in range(1, len(ramp)):
+                        t0, c0 = ramp[j - 1]
+                        t1, c1 = ramp[j]
+                        if t <= t1 or j == len(ramp) - 1:
                             local = 0.0 if t1 == t0 else (t - t0) / (t1 - t0)
                             r = int(round(_lerp(c0[0], c1[0], local)))
                             g = int(round(_lerp(c0[1], c1[1], local)))
                             b = int(round(_lerp(c0[2], c1[2], local)))
-                            return r, g, b
-                    return ramp[-1][1]
+                            _LUT.append((r, g, b))
+                            break
+                def _color_at(t: float) -> tuple[int, int, int]:
+                    # Clamp and map to LUT index
+                    if t <= 0.0:
+                        return _LUT[0]
+                    if t >= 1.0:
+                        return _LUT[-1]
+                    idx = int(t * (LUT_SIZE - 1))
+                    return _LUT[idx]
 
                 full_eff_tile_px = 256  # retina disabled for elevation
 
@@ -504,13 +516,15 @@ async def download_satellite_rectangle(  # noqa: PLR0913
                     hi = mid + ELEV_MIN_RANGE_M / 2.0
                 inv = 1.0 / (hi - lo) if hi > lo else 0.0
 
-                # Pass B: render directly to output image
+                # Pass B: render directly to output image using producer–consumer (I/O vs CPU)
                 result = Image.new('RGB', (crop_rect[2], crop_rect[3]))
-                put = result.load()
                 tile_progress = ConsoleProgress(total=len(tiles), label='Окрашивание DEM (проход 2/2)')
                 tile_count = 0
 
-                async def fetch_and_paint(idx_xy: tuple[int, tuple[int, int]]) -> None:
+                queue: asyncio.Queue[tuple[int,int,int,int,int,int,Image.Image]] = asyncio.Queue(maxsize=4)
+                paste_lock = asyncio.Lock()
+
+                async def producer(idx_xy: tuple[int, tuple[int, int]]) -> None:
                     nonlocal tile_count
                     idx, (tile_x_world, tile_y_world) = idx_xy
                     tx, ty = _tx_ty_from_index(idx)
@@ -518,11 +532,6 @@ async def download_satellite_rectangle(  # noqa: PLR0913
                     if ov is None:
                         await tile_progress.step(1)
                         return
-                    x0, y0, x1, y1 = ov
-                    # destination rect in cropped image coords
-                    cx, cy, _, _ = crop_rect
-                    dx0 = x0 - cx
-                    dy0 = y0 - cy
                     async with semaphore:
                         img = await async_fetch_terrain_rgb_tile(
                             client=client,
@@ -532,24 +541,69 @@ async def download_satellite_rectangle(  # noqa: PLR0913
                             y=tile_y_world,
                             use_retina=False,
                         )
-                        dem_tile = decode_terrain_rgb_to_elevation_m(img)
-                        # iterate overlap and set pixels
-                        # compute offsets inside tile
-                        base_x = tx * full_eff_tile_px
-                        base_y = ty * full_eff_tile_px
-                        for yy in range(y0, y1):
-                            src_row = dem_tile[yy - base_y]
-                            dest_y = dy0 + (yy - y0)
-                            for xx in range(x0, x1):
-                                val = src_row[xx - base_x]
-                                t = (val - lo) * inv
-                                put[dx0 + (xx - x0), dest_y] = _color_at(t)
-                        await tile_progress.step(1)
-                        tile_count += 1
-                        if tile_count % 50 == 0:
-                            log_memory_usage(f'pass2 after {tile_count} tiles')
+                    # Enqueue with metadata for consumers
+                    x0, y0, x1, y1 = ov
+                    await queue.put((tx, ty, x0, y0, x1, y1, img))
+                    # Progress is stepped when consumer finishes to reflect actual painting
 
-                await asyncio.gather(*[fetch_and_paint(pair) for pair in enumerate(tiles)])
+                # Precompute normalization coeffs for consumers (used with DEM values)
+                async def consumer() -> None:
+                    nonlocal tile_count
+                    while True:
+                        item = await queue.get()
+                        if item is None:  # type: ignore[comparison-overlap]
+                            queue.task_done()
+                            break
+                        tx, ty, x0, y0, x1, y1, img = item
+                        try:
+                            dem_tile = decode_terrain_rgb_to_elevation_m(img)
+                            cx, cy, _, _ = crop_rect
+                            dx0 = x0 - cx
+                            dy0 = y0 - cy
+                            base_x = tx * full_eff_tile_px
+                            base_y = ty * full_eff_tile_px
+                            # Build raw RGB buffer for the overlap block (scanline writing)
+                            block_w = x1 - x0
+                            block_h = y1 - y0
+                            buf = bytearray(block_w * block_h * 3)
+                            out_idx = 0
+                            for yy in range(y0, y1):
+                                src_row = dem_tile[yy - base_y]
+                                for xx in range(x0, x1):
+                                    val = src_row[xx - base_x]
+                                    t = (val - lo) * inv
+                                    r, g, b = _color_at(t)
+                                    buf[out_idx] = r
+                                    buf[out_idx + 1] = g
+                                    buf[out_idx + 2] = b
+                                    out_idx += 3
+                            # Create image from bytes and paste under lock (PIL isn't thread-safe)
+                            block_img = Image.frombytes('RGB', (block_w, block_h), bytes(buf))
+                            async with paste_lock:
+                                result.paste(block_img, (dx0, dy0))
+                        finally:
+                            with contextlib.suppress(Exception):
+                                img.close()
+                            queue.task_done()
+                            tile_count += 1
+                            if tile_count % 50 == 0:
+                                log_memory_usage(f'pass2 after {tile_count} tiles')
+                            await tile_progress.step(1)
+
+                # Launch producers
+                producers = [asyncio.create_task(producer(pair)) for pair in enumerate(tiles)]
+                # Launch a few consumers (CPU workers)
+                cpu_workers = max(1, min(os.cpu_count() or 2, 4))
+                consumers = [asyncio.create_task(consumer()) for _ in range(cpu_workers)]
+
+                # Wait for all producers to finish, then send sentinels
+                await asyncio.gather(*producers)
+                for _ in consumers:
+                    await queue.put(None)  # type: ignore[arg-type]
+                await queue.join()
+                # Wait consumers to exit
+                await asyncio.gather(*consumers)
+
                 tile_progress.close()
             else:
                 async def bound_fetch(idx_xy: tuple[int, tuple[int, int]]) -> tuple[int, Image.Image]:
