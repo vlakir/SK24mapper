@@ -232,6 +232,47 @@ ELEVATION_COLOR_RAMP = [
     (0.90, (220, 220, 220)),  # light gray
     (1.00, (255, 255, 255)),  # white
 ]
+# --- Контуры (Этап 3)
+# Интервал между изогипсами (метры)
+CONTOUR_INTERVAL_M = 10.0
+# Downsample factor for global low-res DEM seed (integer >= 2)
+CONTOUR_SEED_DOWNSAMPLE = 4
+# Optional spline smoothing for seed polylines (not mandatory for MVP)
+CONTOUR_SEED_SMOOTHING = False
+# Цвет обычных изогипс (RGB)
+CONTOUR_COLOR = (60, 60, 60)
+# Толщина обычных изогипс в пикселях (задаётся здесь)
+CONTOUR_WIDTH = 2
+# Каждая N‑я изогипса считается «индексной» (выделенной)
+CONTOUR_INDEX_EVERY = 5
+# Цвет индексных изогипс (RGB)
+CONTOUR_INDEX_COLOR = (30, 30, 30)
+# Толщина индексных изогипс в пикселях (задаётся здесь)
+CONTOUR_INDEX_WIDTH = 4
+# --- Подписи изогипс
+CONTOUR_LABELS_ENABLED = True
+CONTOUR_LABEL_INDEX_ONLY = False
+CONTOUR_LABEL_SPACING_PX = 300
+CONTOUR_LABEL_MIN_SEG_LEN_PX = 40
+CONTOUR_LABEL_EDGE_MARGIN_PX = 8
+CONTOUR_LABEL_TEXT_COLOR = (30, 30, 30)
+CONTOUR_LABEL_OUTLINE_COLOR = (255, 255, 255)
+CONTOUR_LABEL_OUTLINE_WIDTH = 2
+CONTOUR_LABEL_BG_RGBA = (255, 255, 255, 200)
+CONTOUR_LABEL_BG_PADDING = 3
+# Старый фиксированный размер (для бэкапа/совместимости)
+CONTOUR_LABEL_FONT_SIZE = 18
+# Новый масштабируемый размер шрифта в долях километра
+# По умолчанию 0.03 км (30 м) даёт хороший размер.
+CONTOUR_LABEL_FONT_KM = 0.03
+# Отдельный коэффициент для индексных изогипс (чуть крупнее)
+CONTOUR_LABEL_FONT_KM_INDEX = 0.06
+# Диапазон клампа в пикселях, чтобы подписи оставались читаемыми
+CONTOUR_LABEL_FONT_MIN_PX = 12
+CONTOUR_LABEL_FONT_MAX_PX = 48
+CONTOUR_LABEL_FONT_PATH = None
+CONTOUR_LABEL_FONT_BOLD = True
+CONTOUR_LABEL_FORMAT = '{:.0f}'
 
 # --- Оценка поворота
 # Отсчёт вдоль восточной оси для оценки угла (метры)

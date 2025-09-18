@@ -372,8 +372,8 @@ async def run_deep_verification(*, api_key: str, settings: Any) -> None:
         except Exception as e:
             msg = 'Не удалось выполнить сетевую проверку. Проверьте подключение к интернету.'
             raise RuntimeError(msg) from e
-    elif mt_enum == MapType.ELEVATION_COLOR:
-        logger.info('Глубокая проверка: Terrain-RGB (цветовая шкала)')
+    elif mt_enum in (MapType.ELEVATION_COLOR, MapType.ELEVATION_CONTOURS):
+        logger.info('Глубокая проверка: Terrain-RGB (%s)', mt_enum)
         try:
             await _check_terrain_small()
             # Дополнительно: глубокая проверка кэширования Terrain-RGB
