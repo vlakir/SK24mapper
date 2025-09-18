@@ -1,8 +1,9 @@
 import asyncio
 import math
+from collections.abc import Sequence
 from http import HTTPStatus
 from io import BytesIO
-from typing import Sequence
+from typing import cast
 
 import aiohttp
 from PIL import Image
@@ -10,12 +11,11 @@ from pyproj import CRS, Transformer
 
 from constants import (
     EARTH_RADIUS_M,
+    EAST_VECTOR_SAMPLE_M,
     ELEV_MIN_RANGE_M,
     ELEV_PCTL_HI,
     ELEV_PCTL_LO,
     ELEVATION_COLOR_RAMP,
-    MAPBOX_TERRAIN_RGB_PATH,
-    EAST_VECTOR_SAMPLE_M,
     EPSG_SK42_GK_BASE,
     GK_FALSE_EASTING,
     GK_ZONE_CM_OFFSET_DEG,
@@ -26,6 +26,7 @@ from constants import (
     HTTP_RETRIES_DEFAULT,
     HTTP_TIMEOUT_DEFAULT,
     MAPBOX_STATIC_BASE,
+    MAPBOX_TERRAIN_RGB_PATH,
     MERCATOR_MAX_SIN,
     RETINA_FACTOR,
     SK42_CODE,
@@ -464,12 +465,14 @@ async def async_fetch_terrain_rgb_tile(  # noqa: PLR0913
                     data = await resp.read()
                     return Image.open(BytesIO(data)).convert('RGB')
                 if sc in (HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN):
+                    msg = f'Доступ запрещён (HTTP {sc}) для terrain тайла z/x/y={z}/{x}/{y} path={path}'
                     raise RuntimeError(
-                        f'Доступ запрещён (HTTP {sc}) для terrain тайла z/x/y={z}/{x}/{y} path={path}',
+                        msg,
                     )
                 if sc == HTTPStatus.NOT_FOUND:
+                    msg = f'Ресурс не найден (404) для terrain тайла z/x/y={z}/{x}/{y} path={path}'
                     raise RuntimeError(
-                        f'Ресурс не найден (404) для terrain тайла z/x/y={z}/{x}/{y} path={path}',
+                        msg,
                     )
                 is_rate_or_5xx = (sc == HTTPStatus.TOO_MANY_REQUESTS) or (
                     HTTP_5XX_MIN <= sc < HTTP_5XX_MAX
@@ -483,23 +486,25 @@ async def async_fetch_terrain_rgb_tile(  # noqa: PLR0913
                         f'Неожиданный ответ HTTP {sc} для terrain z/x/y={z}/{x}/{y} path={path}',
                     )
             finally:
-                try:
+                from contextlib import suppress
+
+                with suppress(Exception):
                     close = getattr(resp, 'close', None)
                     if callable(close):
                         close()
                     release = getattr(resp, 'release', None)
                     if callable(release):
                         release()
-                except Exception:
-                    pass
         except Exception as e:
             last_exc = e
         await asyncio.sleep(backoff**attempt)
-    raise RuntimeError(f'Не удалось загрузить terrain тайл z/x/y={z}/{x}/{y}: {last_exc}')
+    msg = f'Не удалось загрузить terrain тайл z/x/y={z}/{x}/{y}: {last_exc}'
+    raise RuntimeError(msg)
 
 
 def decode_terrain_rgb_to_elevation_m(img: Image.Image) -> list[list[float]]:
-    """Декодирует Terrain-RGB картинку в двумерный массив высот (метры).
+    """
+    Декодирует Terrain-RGB картинку в двумерный массив высот (метры).
 
     elevation = -10000 + (R*256*256 + G*256 + B) * 0.1
 
@@ -507,18 +512,19 @@ def decode_terrain_rgb_to_elevation_m(img: Image.Image) -> list[list[float]]:
     """
     w, h = img.size
     pix = img.load()
+    assert pix is not None
     rows: list[list[float]] = []
     for y in range(h):
         row: list[float] = []
         for x in range(w):
-            r, g, b = pix[x, y][:3]
+            r, g, b = cast('tuple[int, int, int]', pix[x, y])[:3]
             elev = -10000.0 + (r * 256 * 256 + g * 256 + b) * 0.1
             row.append(elev)
         rows.append(row)
     return rows
 
 
-def assemble_dem(  # noqa: PLR0913
+def assemble_dem(
     tiles_data: list[list[list[float]]],
     tiles_x: int,
     tiles_y: int,
@@ -557,16 +563,20 @@ def assemble_dem(  # noqa: PLR0913
     return cropped
 
 
-def compute_percentiles(values: Sequence[float], p_lo: float, p_hi: float) -> tuple[float, float]:
+def compute_percentiles(
+    values: Sequence[float], p_lo: float, p_hi: float
+) -> tuple[float, float]:
     """Простая перцентильная оценка без numpy (O(n log n))."""
     vals = sorted(values)
     n = len(vals)
     if n == 0:
         return 0.0, 1.0
+
     def idx_of(p: float) -> int:
         p = max(0.0, min(100.0, p))
-        k = int(round((p / 100.0) * (n - 1)))
+        k = round((p / 100.0) * (n - 1))
         return max(0, min(n - 1, k))
+
     return vals[idx_of(p_lo)], vals[idx_of(p_hi)]
 
 
@@ -588,7 +598,9 @@ def colorize_dem_to_image(
             row = dem[y]
             for x in range(0, w, step_x):
                 samples.append(row[x])
-    lo, hi = compute_percentiles(samples or [v for row in dem for v in row][:10000], p_lo, p_hi)
+    lo, hi = compute_percentiles(
+        samples or [v for row in dem for v in row][:10000], p_lo, p_hi
+    )
     if hi - lo < min_range_m:
         mid = (lo + hi) / 2.0
         lo = mid - min_range_m / 2.0
@@ -599,29 +611,29 @@ def colorize_dem_to_image(
         return a + (b - a) * t
 
     # Build LUT once per image for fast palette mapping
-    LUT_SIZE = 2048
-    _LUT: list[tuple[int, int, int]] = []
+    lut_size = 2048
+    _lut: list[tuple[int, int, int]] = []
     ramp = ELEVATION_COLOR_RAMP
-    for i in range(LUT_SIZE):
-        tt = i / (LUT_SIZE - 1)
+    for i in range(lut_size):
+        tt = i / (lut_size - 1)
         for j in range(1, len(ramp)):
             t0, c0 = ramp[j - 1]
             t1, c1 = ramp[j]
             if tt <= t1 or j == len(ramp) - 1:
                 local = 0.0 if t1 == t0 else (tt - t0) / (t1 - t0)
-                r = int(round(lerp(c0[0], c1[0], local)))
-                g = int(round(lerp(c0[1], c1[1], local)))
-                b = int(round(lerp(c0[2], c1[2], local)))
-                _LUT.append((r, g, b))
+                r = round(lerp(c0[0], c1[0], local))
+                g = round(lerp(c0[1], c1[1], local))
+                b = round(lerp(c0[2], c1[2], local))
+                _lut.append((r, g, b))
                 break
 
     def color_at(t: float) -> tuple[int, int, int]:
         if t <= 0.0:
-            return _LUT[0]
+            return _lut[0]
         if t >= 1.0:
-            return _LUT[-1]
-        idx = int(t * (LUT_SIZE - 1))
-        return _LUT[idx]
+            return _lut[-1]
+        idx = int(t * (lut_size - 1))
+        return _lut[idx]
 
     # Build entire image buffer as bytes (scanlines) and create Image from bytes
     buf = bytearray(w * h * 3)

@@ -198,12 +198,17 @@ class MilMapperController:
             try:
                 # Глубокая проверка перед стартом
                 from diagnostics import run_deep_verification
+
                 try:
-                    await run_deep_verification(api_key=self._api_key or '', settings=self._model.settings)
+                    await run_deep_verification(
+                        api_key=self._api_key or '', settings=self._model.settings
+                    )
                 except Exception as e:
                     error_msg = f'Проверка перед запуском не пройдена: {e}'
                     logger.exception(error_msg)
-                    self._model.notify_observers(ModelEvent.ERROR_OCCURRED, {'error': error_msg})
+                    self._model.notify_observers(
+                        ModelEvent.ERROR_OCCURRED, {'error': error_msg}
+                    )
                     return
 
                 self._model.start_download()

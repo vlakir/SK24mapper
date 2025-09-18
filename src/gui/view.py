@@ -737,8 +737,8 @@ class MainWindow(QMainWindow):
 
         # Settings change tracking
         self._connect_setting_changes()
-        # Map type change triggers settings update and potential preview rerender
-        self.map_type_combo.currentIndexChanged.connect(self._on_settings_changed)
+        # Map type change triggers settings update and clears preview immediately
+        self.map_type_combo.currentIndexChanged.connect(self._on_map_type_changed)
 
     def _set_profile_selection_safely(
         self, *, name: str | None = None, index: int | None = None
@@ -824,6 +824,14 @@ class MainWindow(QMainWindow):
         self._controller.update_grid_settings(grid_settings)
         self._controller.update_output_settings(output_settings)
         self._controller.update_setting('map_type', map_type_value)
+
+    @Slot()
+    def _on_map_type_changed(self) -> None:
+        """Clear preview immediately when map type changes and propagate setting."""
+        # Clear any existing preview to avoid showing outdated imagery for another map type
+        self._clear_preview_ui()
+        # Delegate to the common settings handler to store the new map type in the model
+        self._on_settings_changed()
 
     def _get_current_coordinates(self) -> dict[str, int]:
         """Get current coordinate values from UI."""

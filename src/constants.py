@@ -139,6 +139,8 @@ def map_type_to_style_id(map_type: MapType | str) -> str | None:
 XYZ_TILE_SIZE = 512
 # Использовать ретина-тайлы @2x
 XYZ_USE_RETINA = True
+# Использовать ретину для карт высот (Terrain-RGB)
+ELEVATION_USE_RETINA = True
 # Параллелизм загрузки HTTP
 DOWNLOAD_CONCURRENCY = 20
 # Значения совместимости для «статичного» источника
@@ -217,16 +219,18 @@ ELEV_PCTL_LO = 2.0
 ELEV_PCTL_HI = 98.0
 # Запас для защиты от плоских регионов (минимальная дельта высот в метрах)
 ELEV_MIN_RANGE_M = 10.0
+# Опциональный быстрый путь на NumPy (если установлен)
+USE_NUMPY_FASTPATH = True
 # Палитра: список контрольных точек (t in [0,1], (R,G,B))
 ELEVATION_COLOR_RAMP = [
-    (0.00, (0, 0, 130)),     # deep blue
-    (0.15, (0, 100, 200)),   # blue
-    (0.30, (0, 160, 100)),   # green
-    (0.45, (180, 200, 0)),   # yellowish
-    (0.60, (200, 140, 0)),   # orange
-    (0.75, (160, 80, 30)),   # brown
-    (0.90, (220, 220, 220)), # light gray
-    (1.00, (255, 255, 255)), # white
+    (0.00, (0, 0, 130)),  # deep blue
+    (0.15, (0, 100, 200)),  # blue
+    (0.30, (0, 160, 100)),  # green
+    (0.45, (180, 200, 0)),  # yellowish
+    (0.60, (200, 140, 0)),  # orange
+    (0.75, (160, 80, 30)),  # brown
+    (0.90, (220, 220, 220)),  # light gray
+    (1.00, (255, 255, 255)),  # white
 ]
 
 # --- Оценка поворота
@@ -258,3 +262,5 @@ HTTP_OK = 200
 HTTP_BAD_REQUEST = 400
 HTTP_UNAUTHORIZED = 401
 HTTP_FORBIDDEN = 403
+# Availability flags for optional libs
+PSUTIL_AVAILABLE = True

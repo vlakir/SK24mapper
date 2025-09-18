@@ -43,9 +43,9 @@ from constants import (
     SK42_VALID_LON_MIN,
     XYZ_TILE_SIZE,
     XYZ_USE_RETINA,
+    MapType,
     default_map_type,
     map_type_to_style_id,
-    MapType,
 )
 from diagnostics import log_memory_usage, log_thread_status
 from domen import MapSettings
@@ -57,12 +57,10 @@ from image import (
 )
 from progress import ConsoleProgress, LiveSpinner, publish_preview_image
 from topography import (
-    async_fetch_xyz_tile,
     async_fetch_terrain_rgb_tile,
-    assemble_dem,
+    async_fetch_xyz_tile,
     build_transformers_sk42,
     choose_zoom_with_limit,
-    colorize_dem_to_image,
     compute_rotation_deg_for_east_axis,
     compute_xyz_coverage,
     crs_sk42_geog,
@@ -187,9 +185,7 @@ def _build_save_kwargs(out_path: Path, settings_obj: object) -> dict[str, object
 
 
 async def _validate_api_and_connectivity(api_key: str, style_id: str) -> None:
-    """
-    Проверяет доступность стилей Mapbox (Styles API tiles endpoint).
-    """
+    """Проверяет доступность стилей Mapbox (Styles API tiles endpoint)."""
     """
     Проверяет доступность интернета и валидность API-ключа перед началом тяжёлой обработки.
 
@@ -200,23 +196,25 @@ async def _validate_api_and_connectivity(api_key: str, style_id: str) -> None:
     test_url = f'{test_path}?access_token={api_key}'
     timeout = aiohttp.ClientTimeout(total=5)
     try:
-        async with aiohttp.ClientSession() as client:  # noqa: SIM117
-            async with client.get(test_url, timeout=timeout) as resp:
-                sc = resp.status
-                if sc == HTTP_OK:
-                    # прочитать тело, чтобы гарантированно освободить соединение в пул
-                    with contextlib.suppress(Exception):
-                        await resp.read()
-                    return
-                if sc in (HTTP_UNAUTHORIZED, HTTP_FORBIDDEN):
-                    msg = 'Неверный или недействительный API-ключ. Проверьте ключ и попробуйте снова.'
-                    raise RuntimeError(
-                        msg,
-                    )
-                msg = f'Ошибка доступа к серверу карт (HTTP {sc}). Повторите попытку позже.'
+        async with (
+            aiohttp.ClientSession() as client,
+            client.get(test_url, timeout=timeout) as resp,
+        ):
+            sc = resp.status
+            if sc == HTTP_OK:
+                # прочитать тело, чтобы гарантированно освободить соединение в пул
+                with contextlib.suppress(Exception):
+                    await resp.read()
+                return
+            if sc in (HTTP_UNAUTHORIZED, HTTP_FORBIDDEN):
+                msg = 'Неверный или недействительный API-ключ. Проверьте ключ и попробуйте снова.'
                 raise RuntimeError(
                     msg,
                 )
+            msg = f'Ошибка доступа к серверу карт (HTTP {sc}). Повторите попытку позже.'
+            raise RuntimeError(
+                msg,
+            )
     except (TimeoutError, aiohttp.ClientConnectorError, aiohttp.ClientOSError):
         msg = 'Нет соединения с интернетом или сервер недоступен. Проверьте подключение к сети.'
         raise RuntimeError(msg) from None
@@ -230,21 +228,26 @@ async def _validate_terrain_api(api_key: str) -> None:
     test_url = f'{test_path}?access_token={api_key}'
     timeout = aiohttp.ClientTimeout(total=5)
     try:
-        async with aiohttp.ClientSession() as client:
-            async with client.get(test_url, timeout=timeout) as resp:
-                sc = resp.status
-                if sc == HTTP_OK:
-                    with contextlib.suppress(Exception):
-                        await resp.read()
-                    return
-                if sc in (HTTP_UNAUTHORIZED, HTTP_FORBIDDEN):
-                    raise RuntimeError('Неверный или недействительный API-ключ. Проверьте ключ и попробуйте снова.')
-                raise RuntimeError(f'Ошибка доступа к серверу карт (HTTP {sc}). Повторите попытку позже.')
+        async with (
+            aiohttp.ClientSession() as client,
+            client.get(test_url, timeout=timeout) as resp,
+        ):
+            sc = resp.status
+            if sc == HTTP_OK:
+                with contextlib.suppress(Exception):
+                    await resp.read()
+                return
+            if sc in (HTTP_UNAUTHORIZED, HTTP_FORBIDDEN):
+                msg = 'Неверный или недействительный API-ключ. Проверьте ключ и попробуйте снова.'
+                raise RuntimeError(msg)
+            msg = f'Ошибка доступа к серверу карт (HTTP {sc}). Повторите попытку позже.'
+            raise RuntimeError(msg)
     except (TimeoutError, aiohttp.ClientConnectorError, aiohttp.ClientOSError):
-        raise RuntimeError('Нет соединения с интернетом или сервер недоступен. Проверьте подключение к сети.') from None
+        msg = 'Нет соединения с интернетом или сервер недоступен. Проверьте подключение к сети.'
+        raise RuntimeError(msg) from None
 
 
-async def download_satellite_rectangle(  # noqa: PLR0913
+async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
     center_x_sk42_gk: float,
     center_y_sk42_gk: float,
     width_m: float,
@@ -282,28 +285,54 @@ async def download_satellite_rectangle(  # noqa: PLR0913
         mt_enum = default_map_type()
 
     style_id: str | None = None
-    if mt_enum in (MapType.SATELLITE, MapType.HYBRID, MapType.STREETS, MapType.OUTDOORS):
+    if mt_enum in (
+        MapType.SATELLITE,
+        MapType.HYBRID,
+        MapType.STREETS,
+        MapType.OUTDOORS,
+    ):
         style_id = map_type_to_style_id(mt_enum)
-        logger.info('Тип карты: %s; style_id=%s; tile_size=%s; retina=%s', mt_enum, style_id, XYZ_TILE_SIZE, XYZ_USE_RETINA)
+        logger.info(
+            'Тип карты: %s; style_id=%s; tile_size=%s; retina=%s',
+            mt_enum,
+            style_id,
+            XYZ_TILE_SIZE,
+            XYZ_USE_RETINA,
+        )
         await _validate_api_and_connectivity(api_key, style_id)
     elif mt_enum == MapType.ELEVATION_COLOR:
-        logger.info('Тип карты: %s (Terrain-RGB, цветовая шкала); retina=%s', mt_enum, False)
+        from constants import ELEVATION_USE_RETINA
+
+        logger.info(
+            'Тип карты: %s (Terrain-RGB, цветовая шкала); retina=%s',
+            mt_enum,
+            ELEVATION_USE_RETINA,
+        )
     else:
         # Нереализованные режимы пока откатываются к Спутнику
-        logger.warning('Выбран режим высот (%s), пока не реализовано. Используется Спутник.', mt_enum)
+        logger.warning(
+            'Выбран режим высот (%s), пока не реализовано. Используется Спутник.',
+            mt_enum,
+        )
         style_id = map_type_to_style_id(default_map_type())
         await _validate_api_and_connectivity(api_key, style_id)
 
     # Выбор масштаба под тип карты
     is_elev_color = False
     try:
-        is_elev_color = MapType(mt) == MapType.ELEVATION_COLOR if not isinstance(mt, MapType) else mt == MapType.ELEVATION_COLOR
+        is_elev_color = (
+            MapType(mt) == MapType.ELEVATION_COLOR
+            if not isinstance(mt, MapType)
+            else mt == MapType.ELEVATION_COLOR
+        )
     except Exception:
         is_elev_color = False
 
     if is_elev_color:
         # Для Terrain-RGB базовый тайл 256px; @2x даёт 512
-        eff_scale = effective_scale_for_xyz(256, use_retina=False)
+        from constants import ELEVATION_USE_RETINA
+
+        eff_scale = effective_scale_for_xyz(256, use_retina=ELEVATION_USE_RETINA)
         # Ранняя проверка доступности Terrain-RGB
         await _validate_terrain_api(api_key)
     else:
@@ -386,7 +415,9 @@ async def download_satellite_rectangle(  # noqa: PLR0913
     )
     sp.stop('Подготовка: покрытие рассчитано')
 
-    tile_label = 'Загрузка Terrain-RGB тайлов' if is_elev_color else 'Загрузка XYZ-тайлов'
+    tile_label = (
+        'Загрузка Terrain-RGB тайлов' if is_elev_color else 'Загрузка XYZ-тайлов'
+    )
     tile_progress = ConsoleProgress(total=len(tiles), label=tile_label)
     semaphore = asyncio.Semaphore(DOWNLOAD_CONCURRENCY or ASYNC_MAX_CONCURRENCY)
 
@@ -402,40 +433,53 @@ async def download_satellite_rectangle(  # noqa: PLR0913
 
             if is_elev_color:
                 # Two-pass streaming without storing full DEM
-                from topography import compute_percentiles, ELEV_PCTL_LO, ELEV_PCTL_HI, ELEV_MIN_RANGE_M, ELEVATION_COLOR_RAMP
+                from topography import (
+                    ELEV_MIN_RANGE_M,
+                    ELEV_PCTL_HI,
+                    ELEV_PCTL_LO,
+                    ELEVATION_COLOR_RAMP,
+                    compute_percentiles,
+                )
+
                 # Helper: build LUT from color ramp for fast palette lookup
                 def _lerp(a: float, b: float, t: float) -> float:
                     return a + (b - a) * t
-                LUT_SIZE = 2048
-                _LUT: list[tuple[int, int, int]] = []
+
+                lut_size = 2048
+                _lut: list[tuple[int, int, int]] = []
                 ramp = ELEVATION_COLOR_RAMP
                 # Precompute cumulative ramp into fixed-size LUT
-                for i in range(LUT_SIZE):
-                    t = i / (LUT_SIZE - 1)
+                for i in range(lut_size):
+                    t = i / (lut_size - 1)
                     # find segment
                     for j in range(1, len(ramp)):
                         t0, c0 = ramp[j - 1]
                         t1, c1 = ramp[j]
                         if t <= t1 or j == len(ramp) - 1:
                             local = 0.0 if t1 == t0 else (t - t0) / (t1 - t0)
-                            r = int(round(_lerp(c0[0], c1[0], local)))
-                            g = int(round(_lerp(c0[1], c1[1], local)))
-                            b = int(round(_lerp(c0[2], c1[2], local)))
-                            _LUT.append((r, g, b))
+                            r = round(_lerp(c0[0], c1[0], local))
+                            g = round(_lerp(c0[1], c1[1], local))
+                            b = round(_lerp(c0[2], c1[2], local))
+                            _lut.append((r, g, b))
                             break
+
                 def _color_at(t: float) -> tuple[int, int, int]:
                     # Clamp and map to LUT index
                     if t <= 0.0:
-                        return _LUT[0]
+                        return _lut[0]
                     if t >= 1.0:
-                        return _LUT[-1]
-                    idx = int(t * (LUT_SIZE - 1))
-                    return _LUT[idx]
+                        return _lut[-1]
+                    idx = int(t * (lut_size - 1))
+                    return _lut[idx]
 
-                full_eff_tile_px = 256  # retina disabled for elevation
+                from constants import ELEVATION_USE_RETINA
+
+                full_eff_tile_px = 256 * (2 if ELEVATION_USE_RETINA else 1)
 
                 # Fast overlap check to skip tiles outside crop
-                def _tile_overlap_rect(tx: int, ty: int) -> tuple[int,int,int,int] | None:
+                def _tile_overlap_rect(
+                    tx: int, ty: int
+                ) -> tuple[int, int, int, int] | None:
                     base_x = tx * full_eff_tile_px
                     base_y = ty * full_eff_tile_px
                     cx, cy, cw, ch = crop_rect
@@ -450,17 +494,18 @@ async def download_satellite_rectangle(  # noqa: PLR0913
                 # Map tiles list index -> (tile grid coords)
                 # tiles list is ordered row-major corresponding to tx in [0..tiles_x), ty in [0..tiles_y)
                 # We reconstruct tx,ty from enumerate index
-                def _tx_ty_from_index(idx: int) -> tuple[int,int]:
+                def _tx_ty_from_index(idx: int) -> tuple[int, int]:
                     ty = idx // tiles_x
                     tx = idx % tiles_x
                     return tx, ty
 
                 # Pass A: sample elevations for percentiles (reservoir sampling)
-                MAX_SAMPLES = 50000
+                max_samples = 50000
                 samples: list[float] = []  # reservoir
                 seen_count = 0
                 import random
-                rng = random.Random(42)  # deterministic for reproducibility
+
+                rng = random.Random(42)  # noqa: S311
                 tile_progress.label = 'Проверка диапазона высот (проход 1/2)'
 
                 async def fetch_and_sample(idx_xy: tuple[int, tuple[int, int]]) -> None:
@@ -471,13 +516,15 @@ async def download_satellite_rectangle(  # noqa: PLR0913
                         await tile_progress.step(1)
                         return
                     async with semaphore:
+                        from constants import ELEVATION_USE_RETINA
+
                         img = await async_fetch_terrain_rgb_tile(
                             client=client,
                             api_key=api_key,
                             z=zoom,
                             x=tile_x_world,
                             y=tile_y_world,
-                            use_retina=False,
+                            use_retina=ELEVATION_USE_RETINA,
                         )
                         dem_tile = decode_terrain_rgb_to_elevation_m(img)
                         # Iterate coarse grid within tile to limit CPU, but feed values into reservoir
@@ -487,28 +534,37 @@ async def download_satellite_rectangle(  # noqa: PLR0913
                             step_y = max(1, h // 32)
                             step_x = max(1, w // 32)
                             # jitter to avoid regular sampling artifacts
-                            off_y = rng.randrange(0, min(step_y, h)) if step_y > 1 else 0
-                            off_x = rng.randrange(0, min(step_x, w)) if step_x > 1 else 0
+                            off_y = (
+                                rng.randrange(0, min(step_y, h)) if step_y > 1 else 0
+                            )
+                            off_x = (
+                                rng.randrange(0, min(step_x, w)) if step_x > 1 else 0
+                            )
                             for ry in range(off_y, h, step_y):
                                 row = dem_tile[ry]
                                 for rx in range(off_x, w, step_x):
                                     v = row[rx]
                                     seen_count += 1
-                                    if len(samples) < MAX_SAMPLES:
+                                    if len(samples) < max_samples:
                                         samples.append(v)
                                     else:
                                         j = rng.randrange(0, seen_count)
-                                        if j < MAX_SAMPLES:
+                                        if j < max_samples:
                                             samples[j] = v
                         await tile_progress.step(1)
                         tile_count += 1
                         if tile_count % 50 == 0:
                             log_memory_usage(f'pass1 after {tile_count} tiles')
+
                 # launch tasks
-                await asyncio.gather(*[fetch_and_sample(pair) for pair in enumerate(tiles)])
+                await asyncio.gather(
+                    *[fetch_and_sample(pair) for pair in enumerate(tiles)]
+                )
                 tile_progress.close()
                 # Compute percentiles from reservoir
-                logger.info('DEM sampling reservoir: kept=%s seen~=%s', len(samples), seen_count)
+                logger.info(
+                    'DEM sampling reservoir: kept=%s seen~=%s', len(samples), seen_count
+                )
                 lo, hi = compute_percentiles(samples, ELEV_PCTL_LO, ELEV_PCTL_HI)
                 if hi - lo < ELEV_MIN_RANGE_M:
                     mid = (lo + hi) / 2.0
@@ -518,10 +574,14 @@ async def download_satellite_rectangle(  # noqa: PLR0913
 
                 # Pass B: render directly to output image using producer–consumer (I/O vs CPU)
                 result = Image.new('RGB', (crop_rect[2], crop_rect[3]))
-                tile_progress = ConsoleProgress(total=len(tiles), label='Окрашивание DEM (проход 2/2)')
+                tile_progress = ConsoleProgress(
+                    total=len(tiles), label='Окрашивание DEM (проход 2/2)'
+                )
                 tile_count = 0
 
-                queue: asyncio.Queue[tuple[int,int,int,int,int,int,Image.Image]] = asyncio.Queue(maxsize=4)
+                queue: asyncio.Queue[
+                    tuple[int, int, int, int, int, int, Image.Image]
+                ] = asyncio.Queue(maxsize=4)
                 paste_lock = asyncio.Lock()
 
                 async def producer(idx_xy: tuple[int, tuple[int, int]]) -> None:
@@ -533,13 +593,15 @@ async def download_satellite_rectangle(  # noqa: PLR0913
                         await tile_progress.step(1)
                         return
                     async with semaphore:
+                        from constants import ELEVATION_USE_RETINA
+
                         img = await async_fetch_terrain_rgb_tile(
                             client=client,
                             api_key=api_key,
                             z=zoom,
                             x=tile_x_world,
                             y=tile_y_world,
-                            use_retina=False,
+                            use_retina=ELEVATION_USE_RETINA,
                         )
                     # Enqueue with metadata for consumers
                     x0, y0, x1, y1 = ov
@@ -549,6 +611,19 @@ async def download_satellite_rectangle(  # noqa: PLR0913
                 # Precompute normalization coeffs for consumers (used with DEM values)
                 async def consumer() -> None:
                     nonlocal tile_count
+                    # Precompute linear coefficients for t = ar*R + ag*G + ab*B + a0
+                    ar = 0.1 * 65536.0 * inv
+                    ag = 0.1 * 256.0 * inv
+                    ab = 0.1 * 1.0 * inv
+                    a0 = (-10000.0 - lo) * inv
+                    from constants import USE_NUMPY_FASTPATH as _NP_FLAG
+
+                    try:
+                        import numpy as np  # optional fast-path
+
+                        _numpy_ok = bool(_NP_FLAG)
+                    except Exception:
+                        _numpy_ok = False
                     while True:
                         item = await queue.get()
                         if item is None:  # type: ignore[comparison-overlap]
@@ -556,7 +631,6 @@ async def download_satellite_rectangle(  # noqa: PLR0913
                             break
                         tx, ty, x0, y0, x1, y1, img = item
                         try:
-                            dem_tile = decode_terrain_rgb_to_elevation_m(img)
                             cx, cy, _, _ = crop_rect
                             dx0 = x0 - cx
                             dy0 = y0 - cy
@@ -565,20 +639,57 @@ async def download_satellite_rectangle(  # noqa: PLR0913
                             # Build raw RGB buffer for the overlap block (scanline writing)
                             block_w = x1 - x0
                             block_h = y1 - y0
-                            buf = bytearray(block_w * block_h * 3)
-                            out_idx = 0
-                            for yy in range(y0, y1):
-                                src_row = dem_tile[yy - base_y]
-                                for xx in range(x0, x1):
-                                    val = src_row[xx - base_x]
-                                    t = (val - lo) * inv
-                                    r, g, b = _color_at(t)
-                                    buf[out_idx] = r
-                                    buf[out_idx + 1] = g
-                                    buf[out_idx + 2] = b
-                                    out_idx += 3
-                            # Create image from bytes and paste under lock (PIL isn't thread-safe)
-                            block_img = Image.frombytes('RGB', (block_w, block_h), bytes(buf))
+                            if _numpy_ok:
+                                # NumPy fast-path: vectorize RGB -> t -> LUT index
+                                import numpy as np
+
+                                arr = np.asarray(img, dtype=np.uint8)  # HxWx3
+                                # Slice overlap
+                                sub = arr[
+                                    y0 - base_y : y1 - base_y,
+                                    x0 - base_x : x1 - base_x,
+                                    :3,
+                                ]
+                                # Compute t linear combination
+                                t = (
+                                    ar * sub[..., 0].astype(np.float32)
+                                    + ag * sub[..., 1].astype(np.float32)
+                                    + ab * sub[..., 2].astype(np.float32)
+                                    + a0
+                                )
+                                # Clamp and map to LUT
+                                _l = np.clip(
+                                    (t * (lut_size - 1)).astype(np.int32),
+                                    0,
+                                    lut_size - 1,
+                                )
+                                lut = np.asarray(_lut, dtype=np.uint8)
+                                rgb = lut[_l]
+                                block_img = Image.fromarray(rgb, mode='RGB')
+                            else:
+                                # Fallback: per-pixel loop without NumPy
+                                buf = bytearray(block_w * block_h * 3)
+                                out_idx = 0
+                                pix = img.load()
+                                assert pix is not None
+                                for yy in range(y0, y1):
+                                    for xx in range(x0, x1):
+                                        from typing import cast
+
+                                        r0, g0, b0 = cast(
+                                            'tuple[int, int, int]',
+                                            pix[xx - base_x, yy - base_y],
+                                        )[:3]
+                                        t = ar * r0 + ag * g0 + ab * b0 + a0
+                                        cr, cg, cb = _color_at(t)
+                                        buf[out_idx] = cr
+                                        buf[out_idx + 1] = cg
+                                        buf[out_idx + 2] = cb
+                                        out_idx += 3
+                                block_img = Image.frombytes(
+                                    'RGB', (block_w, block_h), bytes(buf)
+                                )
+                            # Paste into result under lock (PIL isn't thread-safe)
                             async with paste_lock:
                                 result.paste(block_img, (dx0, dy0))
                         finally:
@@ -591,10 +702,14 @@ async def download_satellite_rectangle(  # noqa: PLR0913
                             await tile_progress.step(1)
 
                 # Launch producers
-                producers = [asyncio.create_task(producer(pair)) for pair in enumerate(tiles)]
+                producers = [
+                    asyncio.create_task(producer(pair)) for pair in enumerate(tiles)
+                ]
                 # Launch a few consumers (CPU workers)
                 cpu_workers = max(1, min(os.cpu_count() or 2, 4))
-                consumers = [asyncio.create_task(consumer()) for _ in range(cpu_workers)]
+                consumers = [
+                    asyncio.create_task(consumer()) for _ in range(cpu_workers)
+                ]
 
                 # Wait for all producers to finish, then send sentinels
                 await asyncio.gather(*producers)
@@ -606,7 +721,10 @@ async def download_satellite_rectangle(  # noqa: PLR0913
 
                 tile_progress.close()
             else:
-                async def bound_fetch(idx_xy: tuple[int, tuple[int, int]]) -> tuple[int, Image.Image]:
+
+                async def bound_fetch(
+                    idx_xy: tuple[int, tuple[int, int]],
+                ) -> tuple[int, Image.Image]:
                     nonlocal tile_count
                     idx, (tx, ty) = idx_xy
                     async with semaphore:

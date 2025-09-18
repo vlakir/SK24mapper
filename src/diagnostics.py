@@ -4,27 +4,40 @@ Diagnostic utilities.
 This module monitors system resources and detects potential hanging issues.
 """
 
+import contextlib
 import logging
 import os
 import threading
 import time
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
 import psutil
-from datetime import timedelta
-import contextlib
 
-_PSUTIL_AVAILABLE = True
+from constants import PSUTIL_AVAILABLE as _PSUTIL_AVAILABLE
 
 logger = logging.getLogger(__name__)
 
 # --- Кэш/HTTP проверка для Terrain-RGB
+CachedSession: Any
+SQLiteBackend: Any
 try:
-    from aiohttp_client_cache import CachedSession, SQLiteBackend
+    from aiohttp_client_cache import (
+        CachedSession as _CachedSession,
+    )
+    from aiohttp_client_cache import (
+        SQLiteBackend as _SQLiteBackend,
+    )
+
+    CachedSession = _CachedSession
+    SQLiteBackend = _SQLiteBackend
+    _AIOHTTP_CACHE_AVAILABLE = True
 except Exception:  # pragma: no cover
-    CachedSession = None  # type: ignore[assignment]
-    SQLiteBackend = None  # type: ignore[assignment]
+    # Библиотека кэширования недоступна
+    CachedSession = None
+    SQLiteBackend = None
+    _AIOHTTP_CACHE_AVAILABLE = False
 
 
 def get_memory_info() -> dict[str, Any]:
@@ -224,8 +237,19 @@ def log_thread_status(context: str = '') -> None:
     )
 
 
+def _ensure_writable_dir(path: Path) -> None:
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        test_file = path / '.write_test.tmp'
+        test_file.write_text('ok', encoding='utf-8')
+        test_file.unlink(missing_ok=True)
+    except Exception as e:
+        raise RuntimeError('Недоступна запись в каталог: ' + str(path)) from e
+
+
 async def run_deep_verification(*, api_key: str, settings: Any) -> None:
-    """Глубокая проверка перед стартом тяжёлой обработки.
+    """
+    Глубокая проверка перед стартом тяжёлой обработки.
 
     Проверяет:
     - Наличие API-ключа.
@@ -237,26 +261,28 @@ async def run_deep_verification(*, api_key: str, settings: Any) -> None:
     Не логирует токен; в логах — только пути без query.
     В случае проблем выбрасывает RuntimeError с понятным сообщением для пользователя.
     """
+    import io
+
+    import aiohttp
+    from PIL import Image
+
     from constants import (
         HTTP_CACHE_DIR,
+        MAPBOX_STATIC_BASE,
+        MAPBOX_TERRAIN_RGB_PATH,
         MapType,
         default_map_type,
         map_type_to_style_id,
-        MAPBOX_STATIC_BASE,
-        MAPBOX_TERRAIN_RGB_PATH,
     )
     from topography import (
         colorize_dem_to_image,
         decode_terrain_rgb_to_elevation_m,
     )
-    import aiohttp
-    import asyncio
-    from PIL import Image
-    import io
 
     # 1) API key presence
     if not api_key:
-        raise RuntimeError('API-ключ не найден. Задайте переменную окружения API_KEY или файл .env/.secrets.env.')
+        msg = 'API-ключ не найден. Задайте переменную окружения API_KEY или файл .env/.secrets.env.'
+        raise RuntimeError(msg)
 
     # 2) Resolve map type
     try:
@@ -266,71 +292,86 @@ async def run_deep_verification(*, api_key: str, settings: Any) -> None:
         mt_enum = default_map_type()
 
     # 3) Cache directory writability
-    try:
-        cache_dir = Path(HTTP_CACHE_DIR)
-        if not cache_dir.is_absolute():
-            # Mirror logic similar to service._resolve_cache_dir()
-            local = os.getenv('LOCALAPPDATA')
-            cache_dir = (Path(local) / 'SK42mapper' / '.cache' / 'tiles').resolve() if local else (Path.home() / '.sk42mapper_cache' / 'tiles').resolve()
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        test_file = cache_dir / '.write_test.tmp'
-        test_file.write_text('ok', encoding='utf-8')
-        test_file.unlink(missing_ok=True)
-    except Exception:
-        raise RuntimeError('Кэш недоступен для записи. Проверьте права на каталог кэша.')
+    # 3) Cache directory writability
+    cache_dir = Path(HTTP_CACHE_DIR)
+    if not cache_dir.is_absolute():
+        # Mirror logic similar to service._resolve_cache_dir()
+        local = os.getenv('LOCALAPPDATA')
+        cache_dir = (
+            (Path(local) / 'SK42mapper' / '.cache' / 'tiles').resolve()
+            if local
+            else (Path.home() / '.sk42mapper_cache' / 'tiles').resolve()
+        )
+    _ensure_writable_dir(cache_dir)
 
     # 4) Output path directory writability
-    try:
-        out_path = Path(getattr(settings, 'output_path', '../maps/map.jpg'))
-        out_dir = out_path.resolve().parent
-        out_dir.mkdir(parents=True, exist_ok=True)
-        test_file = out_dir / '.write_test.tmp'
-        test_file.write_text('ok', encoding='utf-8')
-        test_file.unlink(missing_ok=True)
-    except Exception:
-        raise RuntimeError('Каталог вывода недоступен для записи. Измените путь сохранения в настройках.')
+    out_path = Path(getattr(settings, 'output_path', '../maps/map.jpg'))
+    out_dir = out_path.resolve().parent
+    _ensure_writable_dir(out_dir)
 
     # 5) Network/source checks
     async def _check_styles(style_id: str) -> None:
         path = f'{MAPBOX_STATIC_BASE}/{style_id}/tiles/256/0/0/0'
         url = f'{path}?access_token={api_key}'
         timeout = aiohttp.ClientTimeout(total=5)
-        async with aiohttp.ClientSession() as client:
-            async with client.get(url, timeout=timeout) as resp:
-                if resp.status == 200:
-                    await resp.read()
-                    return
-                if resp.status in (401, 403):
-                    raise RuntimeError('Неверный или недействительный API-ключ. Проверьте ключ и попробуйте снова.')
-                raise RuntimeError(f'Ошибка доступа к серверу карт (HTTP {resp.status}). Повторите попытку позже.')
+        async with (
+            aiohttp.ClientSession() as client,
+            client.get(url, timeout=timeout) as resp,
+        ):
+            from constants import HTTP_FORBIDDEN, HTTP_OK, HTTP_UNAUTHORIZED
+
+            if resp.status == HTTP_OK:
+                await resp.read()
+                return
+            if resp.status in (HTTP_UNAUTHORIZED, HTTP_FORBIDDEN):
+                msg = 'Неверный или недействительный API-ключ. Проверьте ключ и попробуйте снова.'
+                raise RuntimeError(msg)
+            msg = f'Ошибка доступа к серверу карт (HTTP {resp.status}). Повторите попытку позже.'
+            raise RuntimeError(msg)
 
     async def _check_terrain_small() -> None:
         # Try z=0/x=0/y=0
         path = f'{MAPBOX_TERRAIN_RGB_PATH}/0/0/0.pngraw'
         url = f'{path}?access_token={api_key}'
         timeout = aiohttp.ClientTimeout(total=5)
-        async with aiohttp.ClientSession() as client:
-            async with client.get(url, timeout=timeout) as resp:
-                if resp.status == 200:
-                    data = await resp.read()
-                elif resp.status in (401, 403):
-                    raise RuntimeError('Неверный или недействительный API-ключ. Проверьте ключ и попробуйте снова.')
-                else:
-                    raise RuntimeError(f'Ошибка доступа к серверу карт (HTTP {resp.status}). Повторите попытку позже.')
+        async with (
+            aiohttp.ClientSession() as client,
+            client.get(url, timeout=timeout) as resp,
+        ):
+            from constants import HTTP_FORBIDDEN, HTTP_OK, HTTP_UNAUTHORIZED
+
+            if resp.status == HTTP_OK:
+                data = await resp.read()
+            elif resp.status in (HTTP_UNAUTHORIZED, HTTP_FORBIDDEN):
+                msg = 'Неверный или недействительный API-ключ. Проверьте ключ и попробуйте снова.'
+                raise RuntimeError(msg)
+            else:
+                msg = f'Ошибка доступа к серверу карт (HTTP {resp.status}). Повторите попытку позже.'
+                raise RuntimeError(msg)
         # Decode tiny image and colorize to ensure pipeline works
         img = Image.open(io.BytesIO(data)).convert('RGB')
         dem = decode_terrain_rgb_to_elevation_m(img)
         _ = colorize_dem_to_image(dem)
 
-    if mt_enum in (MapType.SATELLITE, MapType.HYBRID, MapType.STREETS, MapType.OUTDOORS):
-        style_id = map_type_to_style_id(mt_enum) or map_type_to_style_id(default_map_type())
-        logger.info('Глубокая проверка: стилевой режим %s, style_id=%s', mt_enum, style_id)
+    if mt_enum in (
+        MapType.SATELLITE,
+        MapType.HYBRID,
+        MapType.STREETS,
+        MapType.OUTDOORS,
+    ):
+        style_id = map_type_to_style_id(mt_enum) or map_type_to_style_id(
+            default_map_type()
+        )
+        logger.info(
+            'Глубокая проверка: стилевой режим %s, style_id=%s', mt_enum, style_id
+        )
         try:
             await _check_styles(style_id)
         except RuntimeError:
             raise
-        except Exception:
-            raise RuntimeError('Не удалось выполнить сетевую проверку. Проверьте подключение к интернету.')
+        except Exception as e:
+            msg = 'Не удалось выполнить сетевую проверку. Проверьте подключение к интернету.'
+            raise RuntimeError(msg) from e
     elif mt_enum == MapType.ELEVATION_COLOR:
         logger.info('Глубокая проверка: Terrain-RGB (цветовая шкала)')
         try:
@@ -342,21 +383,25 @@ async def run_deep_verification(*, api_key: str, settings: Any) -> None:
                 logger.warning('Проверка кэширования не удалась или пропущена: %s', e)
         except RuntimeError:
             raise
-        except Exception:
-            raise RuntimeError('Не удалось выполнить проверку Terrain-RGB. Проверьте интернет и повторите попытку.')
+        except Exception as e:
+            msg = 'Не удалось выполнить проверку Terrain-RGB. Проверьте интернет и повторите попытку.'
+            raise RuntimeError(msg) from e
     else:
         # For unimplemented modes verify base style
         base_style = map_type_to_style_id(default_map_type())
         try:
             await _check_styles(base_style)
-        except Exception:
-            raise RuntimeError('Проверка базового стиля не удалась. Проверьте интернет и токен.')
+        except Exception as e:
+            msg = 'Проверка базового стиля не удалась. Проверьте интернет и токен.'
+            raise RuntimeError(msg) from e
 
     logger.info('Глубокая проверка успешно пройдена')
 
 
 async def _make_cached_session_for_diag() -> Any:
-    """Создаёт CachedSession с теми же параметрами, что в сервисе, для проверки кэша.
+    """
+    Создаёт CachedSession с теми же параметрами, что в сервисе, для проверки кэша.
+
     Возвращает aiohttp.ClientSession, если кэш отключён или библиотека недоступна.
     """
     from constants import (
@@ -366,8 +411,10 @@ async def _make_cached_session_for_diag() -> Any:
         HTTP_CACHE_RESPECT_HEADERS,
         HTTP_CACHE_STALE_IF_ERROR_HOURS,
     )
-    if not HTTP_CACHE_ENABLED or CachedSession is None or SQLiteBackend is None:
+
+    if not HTTP_CACHE_ENABLED or not _AIOHTTP_CACHE_AVAILABLE:
         import aiohttp
+
         return aiohttp.ClientSession()
 
     # Разрешаем каталог кэша аналогично service._resolve_cache_dir
@@ -376,17 +423,22 @@ async def _make_cached_session_for_diag() -> Any:
         cache_dir = raw_dir
     else:
         local = os.getenv('LOCALAPPDATA')
-        cache_dir = (Path(local) / 'SK42mapper' / '.cache' / 'tiles').resolve() if local else (Path.home() / '.sk42mapper_cache' / 'tiles').resolve()
+        cache_dir = (
+            (Path(local) / 'SK42mapper' / '.cache' / 'tiles').resolve()
+            if local
+            else (Path.home() / '.sk42mapper_cache' / 'tiles').resolve()
+        )
     cache_dir.mkdir(parents=True, exist_ok=True)
     cache_path = cache_dir / 'http_cache.sqlite'
     # Инициализация WAL
     try:
         import sqlite3
+
         if not cache_path.exists():
             with sqlite3.connect(cache_path) as _conn:
                 _conn.execute('PRAGMA journal_mode=WAL;')
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug('Failed to init WAL for cache DB at %s: %s', cache_path, e)
 
     expire_td = timedelta(hours=max(0, int(HTTP_CACHE_EXPIRE_HOURS)))
     stale_hours = int(HTTP_CACHE_STALE_IF_ERROR_HOURS)
@@ -402,22 +454,28 @@ async def _make_cached_session_for_diag() -> Any:
 
 
 async def verify_cache_for_terrain(api_key: str) -> None:
-    """Глубокая проверка кэширования Terrain‑RGB: два запроса одного и того же тайла.
+    """
+    Глубокая проверка кэширования Terrain‑RGB: два запроса одного и того же тайла.
+
     Логируются статус, признак from_cache и размер тела. Токен не печатается.
     """
-    from constants import MAPBOX_TERRAIN_RGB_PATH, HTTP_CACHE_ENABLED
     import aiohttp
+
+    from constants import HTTP_CACHE_ENABLED, MAPBOX_TERRAIN_RGB_PATH
 
     if not HTTP_CACHE_ENABLED:
         logger.info('Кэширование HTTP отключено — проверка кэширования пропущена')
         return
 
-    scale_suffix = ''  # retina disabled for elevation
+    from constants import ELEVATION_USE_RETINA
+
+    scale_suffix = '@2x' if ELEVATION_USE_RETINA else ''
     z, x, y = 0, 0, 0
     path = f'{MAPBOX_TERRAIN_RGB_PATH}/{z}/{x}/{y}{scale_suffix}.pngraw'
     url = f'{path}?access_token={api_key}'
 
-    async with await _make_cached_session_for_diag() as client:  # type: ignore[misc]
+    async with await _make_cached_session_for_diag() as client:
+
         async def fetch(iter_no: int) -> tuple[int, int, bool, int]:
             try:
                 resp = await client.get(url, timeout=aiohttp.ClientTimeout(total=10))
@@ -434,16 +492,34 @@ async def verify_cache_for_terrain(api_key: str) -> None:
                         release = getattr(resp, 'release', None)
                         if callable(release):
                             release()
-                logger.info('Cache check iter=%s z/x/y=%s/%s/%s status=%s from_cache=%s size=%s bytes path=%s', iter_no, z, x, y, status, from_cache, size, path)
+                logger.info(
+                    'Cache check iter=%s z/x/y=%s/%s/%s status=%s from_cache=%s size=%s bytes path=%s',
+                    iter_no,
+                    z,
+                    x,
+                    y,
+                    status,
+                    from_cache,
+                    size,
+                    path,
+                )
                 return status, size, from_cache, iter_no
             except Exception as e:
-                logger.warning('Cache check failed (iter=%s) for path=%s: %s', iter_no, path, e)
+                logger.warning(
+                    'Cache check failed (iter=%s) for path=%s: %s', iter_no, path, e
+                )
                 return 0, 0, False, iter_no
 
         s1, b1, c1, _ = await fetch(1)
         s2, b2, c2, _ = await fetch(2)
-        hits = int(c2 or s2 == 304)
-        logger.info('Cache deep verification summary: second-iter hits/revalidated=%s/1; bytes first=%s, second=%s', hits, b1, b2)
+        http_not_modified = 304  # RFC 7232
+        hits = int(c2 or s2 == http_not_modified)
+        logger.info(
+            'Cache deep verification summary: second-iter hits/revalidated=%s/1; bytes first=%s, second=%s',
+            hits,
+            b1,
+            b2,
+        )
 
 
 def monitor_resource_changes(
