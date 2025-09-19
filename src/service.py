@@ -57,7 +57,6 @@ from image import (
 )
 from progress import ConsoleProgress, LiveSpinner, publish_preview_image
 from topography import (
-    async_fetch_terrain_rgb_tile,
     async_fetch_xyz_tile,
     build_transformers_sk42,
     choose_zoom_with_limit,
@@ -68,6 +67,7 @@ from topography import (
     effective_scale_for_xyz,
     estimate_crop_size_px,
 )
+from elevation_provider import ElevationTileProvider
 
 logger = logging.getLogger(__name__)
 
@@ -503,6 +503,8 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
 
                 from constants import ELEVATION_USE_RETINA
 
+                provider_main = ElevationTileProvider(client=client, api_key=api_key, use_retina=ELEVATION_USE_RETINA)
+
                 full_eff_tile_px = 256 * (2 if ELEVATION_USE_RETINA else 1)
 
                 # Fast overlap check to skip tiles outside crop
@@ -545,16 +547,7 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
                         await tile_progress.step(1)
                         return
                     async with semaphore:
-                        from constants import ELEVATION_USE_RETINA
-
-                        img = await async_fetch_terrain_rgb_tile(
-                            client=client,
-                            api_key=api_key,
-                            z=zoom,
-                            x=tile_x_world,
-                            y=tile_y_world,
-                            use_retina=ELEVATION_USE_RETINA,
-                        )
+                        img = await provider_main.get_tile_image(zoom, tile_x_world, tile_y_world)
                         dem_tile = decode_terrain_rgb_to_elevation_m(img)
                         # Iterate coarse grid within tile to limit CPU, but feed values into reservoir
                         h = len(dem_tile)
@@ -624,16 +617,7 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
                         await tile_progress.step(1)
                         return
                     async with semaphore:
-                        from constants import ELEVATION_USE_RETINA
-
-                        img = await async_fetch_terrain_rgb_tile(
-                            client=client,
-                            api_key=api_key,
-                            z=zoom,
-                            x=tile_x_world,
-                            y=tile_y_world,
-                            use_retina=ELEVATION_USE_RETINA,
-                        )
+                        img = await provider_main.get_tile_image(zoom, tile_x_world, tile_y_world)
                     # Enqueue with metadata for consumers
                     x0, y0, x1, y1 = ov
                     await queue.put((tx, ty, x0, y0, x1, y1, img))
@@ -814,14 +798,7 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
                         await tile_progress.step(1)
                         return
                     async with semaphore:
-                        img = await async_fetch_terrain_rgb_tile(
-                            client=client,
-                            api_key=api_key,
-                            z=zoom,
-                            x=tile_x_world,
-                            y=tile_y_world,
-                            use_retina=ELEVATION_USE_RETINA,
-                        )
+                        img = await provider_main.get_tile_image(zoom, tile_x_world, tile_y_world)
                         dem_tile = decode_terrain_rgb_to_elevation_m(img)
                         h = len(dem_tile)
                         w = len(dem_tile[0]) if h else 0
@@ -1439,14 +1416,7 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
                     if _tile_overlap_rect(tx, ty) is None:
                         return
                     async with overlay_semaphore:
-                        img = await async_fetch_terrain_rgb_tile(
-                            client=client2,
-                            api_key=api_key,
-                            z=zoom,
-                            x=tile_x_world,
-                            y=tile_y_world,
-                            use_retina=_ELEV_RETINA,
-                        )
+                        img = await provider2.get_tile_image(zoom, tile_x_world, tile_y_world)
                     dem_tile = decode_terrain_rgb_to_elevation_m(img)
                     h = len(dem_tile)
                     w = len(dem_tile[0]) if h else 0
@@ -1496,6 +1466,7 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
             logger.info('Изолинии: старт прохода 1/2')
             overlay_progress_a = ConsoleProgress(total=len(tiles_c), label='Изолинии: загрузка Terrain-RGB (проход 1/2)')
             async with session_ctx2 as client2:
+                provider2 = ElevationTileProvider(client=client2, api_key=api_key, use_retina=_ELEV_RETINA)
                 await asyncio.gather(
                     *[fetch_and_sample_overlay(pair, client2) for pair in enumerate(tiles_c)],
                     return_exceptions=True,
