@@ -198,49 +198,6 @@ def _build_save_kwargs(out_path: Path, settings_obj: object) -> dict[str, object
     }
 
 
-def _draw_control_point_cross(img, control_x_sk42, control_y_sk42, center_lat_sk42, center_lng_sk42, 
-                             center_lat_wgs, zoom, crs_sk42_gk, t_sk42_to_wgs, scale):
-    """Рисование красного креста в точке контрольной точки."""
-    from PIL import ImageDraw
-    
-    # Получаем размеры изображения
-    img_width, img_height = img.size
-    center_x_px, center_y_px = img_width / 2, img_height / 2
-    
-    # Вычисляем смещение контрольной точки относительно центра изображения в метрах
-    # Создаем трансформер для преобразования из географических СК-42 в Гаусса-Крюгера СК-42
-    t_sk42_geog_to_gk = Transformer.from_crs(crs_sk42_geog, crs_sk42_gk, always_xy=True)
-    center_x_sk42, center_y_sk42 = t_sk42_geog_to_gk.transform(center_lng_sk42, center_lat_sk42)
-    dx_m = control_x_sk42 - center_x_sk42  # Смещение по X (восток) в метрах
-    dy_m = control_y_sk42 - center_y_sk42  # Смещение по Y (север) в метрах
-    
-    # Преобразуем смещение в пиксели
-    dx_px = dx_m / scale
-    dy_px = -dy_m / scale  # Минус, так как Y в пикселях растет вниз
-    
-    # Вычисляем координаты контрольной точки в пикселях
-    control_x_px = center_x_px + dx_px
-    control_y_px = center_y_px + dy_px
-    
-    # Проверяем, попадает ли точка в границы изображения
-    if (0 <= control_x_px <= img_width) and (0 <= control_y_px <= img_height):
-        draw = ImageDraw.Draw(img)
-        
-        # Размер креста (в пикселях)
-        cross_size = 10
-        
-        # Рисуем красный крест (линии толщиной 1 пиксель)
-        # Вертикальная линия
-        draw.line([
-            (control_x_px, control_y_px - cross_size),
-            (control_x_px, control_y_px + cross_size)
-        ], fill=(255, 0, 0), width=1)
-        
-        # Горизонтальная линия
-        draw.line([
-            (control_x_px - cross_size, control_y_px),
-            (control_x_px + cross_size, control_y_px)
-        ], fill=(255, 0, 0), width=1)
 
 
 async def _validate_api_and_connectivity(api_key: str, style_id: str) -> None:
@@ -1957,25 +1914,6 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
     log_memory_usage('after grid drawing')
     log_thread_status('after grid drawing')
 
-    # Control point drawing
-    if settings.control_point_enabled:
-        control_point_start_time = time.monotonic()
-        logger.info('Рисование контрольной точки — старт')
-        _draw_control_point_cross(
-            img=result,
-            control_x_sk42=settings.control_point_x_sk42_gk,
-            control_y_sk42=settings.control_point_y_sk42_gk,
-            center_lat_sk42=center_lat_sk42,
-            center_lng_sk42=center_lng_sk42,
-            center_lat_wgs=center_lat_wgs,
-            zoom=zoom,
-            crs_sk42_gk=crs_sk42_gk,
-            t_sk42_to_wgs=t_sk42_to_wgs,
-            scale=eff_scale,
-        )
-        control_point_elapsed = time.monotonic() - control_point_start_time
-        logger.info('Рисование контрольной точки — завершено (%.2fs)', control_point_elapsed)
-        log_memory_usage('after control point drawing')
 
     # Preview publishing
     preview_start_time = time.monotonic()
