@@ -348,6 +348,20 @@ class MainWindow(QMainWindow):
                 self._preview_area.set_image(img_obj)
             except Exception as ex:
                 logger.exception(f'[ADJ] set_image failed: {ex}')
+        # After handling, proactively disconnect sender's signals and drop heavy refs
+        try:
+            sender_obj = self.sender()
+            if isinstance(sender_obj, QObject):
+                with contextlib.suppress(Exception):
+                    sender_obj.disconnect()
+                # Drop potential heavy attributes captured in the worker
+                with contextlib.suppress(Exception):
+                    if hasattr(sender_obj, 'image'):
+                        setattr(sender_obj, 'image', None)
+                    if hasattr(sender_obj, 'adj'):
+                        setattr(sender_obj, 'adj', None)
+        except Exception as e:
+            logger.debug(f'Adjust slot cleanup failed: {e}')
 
     @Slot()
     def _on_adjust_thread_finished_slot(self) -> None:
@@ -427,6 +441,30 @@ class MainWindow(QMainWindow):
 
         self._load_initial_data()
         logger.info('MainWindow initialized')
+
+    def _cleanup_download_worker(self) -> None:
+        """Disconnect and delete the download worker to break back-references."""
+        try:
+            if self._download_worker is None:
+                return
+            # Disconnect all signals from worker to UI
+            with contextlib.suppress(Exception):
+                self._download_worker.finished.disconnect()
+            with contextlib.suppress(Exception):
+                self._download_worker.progress_update.disconnect()
+            with contextlib.suppress(Exception):
+                self._download_worker.preview_ready.disconnect()
+            # Ensure the thread is stopped
+            if self._download_worker.isRunning():
+                with contextlib.suppress(Exception):
+                    self._download_worker.quit()
+                with contextlib.suppress(Exception):
+                    self._download_worker.wait(1000)
+            # Delete later and drop reference
+            with contextlib.suppress(Exception):
+                self._download_worker.deleteLater()
+        finally:
+            self._download_worker = None
 
     def _setup_ui(self) -> None:
         """Setup the main window UI."""
@@ -971,6 +1009,18 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, 'Информация', 'Загрузка уже выполняется')
             return
 
+        # Clear previous preview and pixmap cache between runs
+        try:
+            self._clear_preview_ui()
+        except Exception:
+            pass
+
+        # Cleanup any stale worker from previous run
+        try:
+            self._cleanup_download_worker()
+        except Exception:
+            pass
+
         self._download_worker = DownloadWorker(self._controller)
         self._download_worker.finished.connect(self._on_download_finished)
         self._download_worker.progress_update.connect(self._update_progress)
@@ -1007,6 +1057,25 @@ class MainWindow(QMainWindow):
                 'Ошибка',
                 f'Не удалось создать карту:\n{error_msg}',
             )
+
+        # Disconnect progress/preview callbacks to avoid holding images between runs
+        try:
+            set_preview_image_callback(None)
+            set_spinner_callbacks(None, None)
+            try:
+                from progress import set_progress_callback as _set_prog
+
+                _set_prog(None)
+            except Exception:
+                pass
+        except Exception as e:
+            logger.debug(f'Failed to reset progress callbacks: {e}')
+
+        # Cleanup and drop references to download worker and its signal connections
+        try:
+            self._cleanup_download_worker()
+        except Exception as e:
+            logger.debug(f'Failed to cleanup download worker: {e}')
 
     def _handle_model_event(self, event_data: EventData) -> None:
         """Handle model events (Observer pattern)."""
@@ -1051,8 +1120,8 @@ class MainWindow(QMainWindow):
             self._show_preview_in_main_window(data.get('image'))
         elif event == ModelEvent.ERROR_OCCURRED:
             error_msg = data.get('error', 'Неизвестная ошибка')
+            # Только статус-бар; модальные диалоги показываются централизованно в _on_download_finished
             self._status_proxy.show_message(f'Ошибка: {error_msg}', 5000)
-            QMessageBox.critical(self, 'Ошибка', error_msg)
         elif event == ModelEvent.WARNING_OCCURRED:
             warn_msg = (
                 data.get('warning')
@@ -1060,8 +1129,8 @@ class MainWindow(QMainWindow):
                 or data.get('error')
                 or 'Предупреждение'
             )
+            # Только статус-бар; без модальных диалогов, чтобы избежать дублей и вызовов не из GUI-потока
             self._status_proxy.show_message(f'Предупреждение: {warn_msg}', 5000)
-            QMessageBox.warning(self, 'Предупреждение', warn_msg)
 
     def _update_ui_from_settings(self, settings: Any) -> None:
         """Update UI controls from settings object."""
@@ -1207,7 +1276,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, 'Ошибка предпросмотра', error_msg)
 
     def _clear_preview_ui(self) -> None:
-        """Clear preview image and disable related controls after a failure."""
+        """Clear preview image, drop pixmap cache, and disable related controls."""
         try:
             with contextlib.suppress(Exception):
                 self._preview_area.clear()
@@ -1226,6 +1295,9 @@ class MainWindow(QMainWindow):
             # Reset size estimate label if present
             with contextlib.suppress(Exception):
                 self.output_widget.size_estimate_value.setText('—')
+            # Aggressively clear global QPixmap cache between runs
+            with contextlib.suppress(Exception):
+                QPixmapCache.clear()
         except Exception as e:
             logger.debug(f'Failed to clear preview UI: {e}')
 
@@ -1391,6 +1463,8 @@ class MainWindow(QMainWindow):
                 _on_save_complete,
                 Qt.ConnectionType.QueuedConnection,
             )
+            # Ensure the worker thread quits immediately after finishing to release resources
+            worker.finished.connect(th.quit, Qt.ConnectionType.QueuedConnection)
             th.start()
 
         except Exception as e:
@@ -1573,6 +1647,15 @@ class MainWindow(QMainWindow):
     def _cleanup_save_resources(self) -> None:
         """Clean up save operation resources."""
         try:
+            # Proactively disconnect worker signals and drop heavy refs
+            if self._save_worker is not None:
+                with contextlib.suppress(Exception):
+                    self._save_worker.disconnect()
+                with contextlib.suppress(Exception):
+                    if hasattr(self._save_worker, 'image'):
+                        self._save_worker.image = None
+                    if hasattr(self._save_worker, 'adj'):
+                        self._save_worker.adj = None
             if self._save_thread is not None:
                 if self._save_thread.isRunning():
                     self._save_thread.quit()
@@ -1842,9 +1925,18 @@ class MainWindow(QMainWindow):
                 _on_estimate_done,
                 Qt.ConnectionType.QueuedConnection,
             )
+            # Ensure prompt thread shutdown on finish
             worker.finished.connect(th.quit, Qt.ConnectionType.QueuedConnection)
 
             def _cleanup() -> None:
+                # Disconnect worker signals and drop heavy refs proactively
+                with contextlib.suppress(Exception):
+                    worker.disconnect()
+                with contextlib.suppress(Exception):
+                    if hasattr(worker, 'image'):
+                        worker.image = None
+                    if hasattr(worker, 'adj'):
+                        worker.adj = None
                 try:
                     if worker in self._estimate_workers:
                         self._estimate_workers.remove(worker)
@@ -1867,6 +1959,14 @@ class MainWindow(QMainWindow):
         """Handle window close event."""
         logger.info('Application closing - cleaning up resources')
         log_comprehensive_diagnostics('CLEANUP_START')
+        # Clear preview and drop pixmap cache to free GPU/Qt memory
+        with contextlib.suppress(Exception):
+            self._clear_preview_ui()
+        with contextlib.suppress(Exception):
+            QPixmapCache.clear()
+        # Also cleanup any lingering download worker connections/callbacks
+        with contextlib.suppress(Exception):
+            self._cleanup_download_worker()
 
         # Cleanup progress system resources first
         log_memory_usage('before progress cleanup')

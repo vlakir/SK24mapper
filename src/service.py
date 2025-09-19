@@ -154,10 +154,24 @@ def _make_http_session(cache_dir: Path | None) -> aiohttp.ClientSession:
         stale_hours = int(HTTP_CACHE_STALE_IF_ERROR_HOURS)
         stale_param: bool | timedelta
         stale_param = timedelta(hours=stale_hours) if stale_hours > 0 else False
-        backend = SQLiteBackend(
-            str(cache_path),
-            expire_after=expire_td,
-        )
+        # Build SQLiteBackend with RAM cache disabled when supported by the library version
+        backend = None
+        last_err = None
+        for kwargs in (
+            {'expire_after': expire_td, 'use_memory_cache': False, 'cache_capacity': 0},
+            {'expire_after': expire_td, 'use_memory_cache': False},
+            {'expire_after': expire_td, 'cache_capacity': 0},
+            {'expire_after': expire_td},
+        ):
+            try:
+                backend = SQLiteBackend(str(cache_path), **kwargs)
+                break
+            except TypeError as e:
+                last_err = e
+                continue
+        if backend is None:
+            # As a last resort, raise the last TypeError
+            raise last_err  # type: ignore[misc]
         return CachedSession(
             cache=backend,
             expire_after=expire_td,
@@ -194,7 +208,7 @@ async def _validate_api_and_connectivity(api_key: str, style_id: str) -> None:
     """
     test_path = f'{MAPBOX_STATIC_BASE}/{style_id}/tiles/256/0/0/0'
     test_url = f'{test_path}?access_token={api_key}'
-    timeout = aiohttp.ClientTimeout(total=5)
+    timeout = aiohttp.ClientTimeout(total=10, connect=10, sock_connect=10, sock_read=10)
     try:
         async with (
             aiohttp.ClientSession() as client,
@@ -215,7 +229,7 @@ async def _validate_api_and_connectivity(api_key: str, style_id: str) -> None:
             raise RuntimeError(
                 msg,
             )
-    except (TimeoutError, aiohttp.ClientConnectorError, aiohttp.ClientOSError):
+    except (asyncio.TimeoutError, aiohttp.ClientConnectorError, aiohttp.ClientOSError):
         msg = 'Нет соединения с интернетом или сервер недоступен. Проверьте подключение к сети.'
         raise RuntimeError(msg) from None
 
@@ -226,7 +240,7 @@ async def _validate_terrain_api(api_key: str) -> None:
 
     test_path = f'{MAPBOX_TERRAIN_RGB_PATH}/0/0/0.pngraw'
     test_url = f'{test_path}?access_token={api_key}'
-    timeout = aiohttp.ClientTimeout(total=5)
+    timeout = aiohttp.ClientTimeout(total=10, connect=10, sock_connect=10, sock_read=10)
     try:
         async with (
             aiohttp.ClientSession() as client,
@@ -242,7 +256,7 @@ async def _validate_terrain_api(api_key: str) -> None:
                 raise RuntimeError(msg)
             msg = f'Ошибка доступа к серверу карт (HTTP {sc}). Повторите попытку позже.'
             raise RuntimeError(msg)
-    except (TimeoutError, aiohttp.ClientConnectorError, aiohttp.ClientOSError):
+    except (asyncio.TimeoutError, aiohttp.ClientConnectorError, aiohttp.ClientOSError):
         msg = 'Нет соединения с интернетом или сервер недоступен. Проверьте подключение к сети.'
         raise RuntimeError(msg) from None
 
@@ -571,11 +585,13 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
                         if tile_count % 50 == 0:
                             log_memory_usage(f'pass1 after {tile_count} tiles')
 
-                # launch tasks
-                await asyncio.gather(
-                    *[fetch_and_sample(pair) for pair in enumerate(tiles)]
-                )
-                tile_progress.close()
+                # launch tasks with automatic sibling cancellation on first error
+                try:
+                    async with asyncio.TaskGroup() as tg:
+                        for pair in enumerate(tiles):
+                            tg.create_task(fetch_and_sample(pair))
+                finally:
+                    tile_progress.close()
                 # Compute percentiles from reservoir
                 logger.info(
                     'DEM sampling reservoir: kept=%s seen~=%s', len(samples), seen_count
@@ -716,25 +732,30 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
                                 log_memory_usage(f'pass2 after {tile_count} tiles')
                             await tile_progress.step(1)
 
-                # Launch producers
+                # Launch producers/consumers with guarded cancellation
                 producers = [
                     asyncio.create_task(producer(pair)) for pair in enumerate(tiles)
                 ]
-                # Launch a few consumers (CPU workers)
                 cpu_workers = max(1, min(os.cpu_count() or 2, 4))
-                consumers = [
-                    asyncio.create_task(consumer()) for _ in range(cpu_workers)
-                ]
-
-                # Wait for all producers to finish, then send sentinels
-                await asyncio.gather(*producers)
-                for _ in consumers:
-                    await queue.put(None)  # type: ignore[arg-type]
-                await queue.join()
-                # Wait consumers to exit
-                await asyncio.gather(*consumers)
-
-                tile_progress.close()
+                consumers = [asyncio.create_task(consumer()) for _ in range(cpu_workers)]
+                try:
+                    await asyncio.gather(*producers)
+                    for _ in consumers:
+                        await queue.put(None)  # type: ignore[arg-type]
+                    await queue.join()
+                    await asyncio.gather(*consumers)
+                except Exception:
+                    for t in producers + consumers:
+                        t.cancel()
+                    # attempt to drain queue and stop consumers
+                    with contextlib.suppress(Exception):
+                        for _ in consumers:
+                            await queue.put(None)  # type: ignore[arg-type]
+                        await queue.join()
+                        await asyncio.gather(*consumers, return_exceptions=True)
+                    raise
+                finally:
+                    tile_progress.close()
             elif is_elev_contours:
                 # Two-pass streaming without storing full DEM (contours)
                 from constants import (
@@ -847,8 +868,12 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
                     if tile_count % 50 == 0:
                         log_memory_usage(f'pass1(contours) after {tile_count} tiles')
 
-                await asyncio.gather(*[fetch_and_sample2(pair) for pair in enumerate(tiles)])
-                tile_progress.close()
+                try:
+                    async with asyncio.TaskGroup() as tg:
+                        for pair in enumerate(tiles):
+                            tg.create_task(fetch_and_sample2(pair))
+                finally:
+                    tile_progress.close()
                 if samples:
                     mn = min(samples)
                     mx = max(samples)
@@ -1084,17 +1109,27 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
                                 log_memory_usage(f'pass2(contours) after {tile_count} tiles')
                             await tile_progress.step(1)
 
-                # Launch producers and consumers
+                # Launch producers and consumers with guarded cancellation
                 producers = [asyncio.create_task(producer2(pair)) for pair in enumerate(tiles)]
                 cpu_workers = max(1, min(os.cpu_count() or 2, 4))
                 consumers = [asyncio.create_task(consumer2()) for _ in range(cpu_workers)]
-                await asyncio.gather(*producers)
-                for _ in consumers:
-                    await queue.put(None)  # type: ignore[arg-type]
-                await queue.join()
-                await asyncio.gather(*consumers)
-
-                tile_progress.close()
+                try:
+                    await asyncio.gather(*producers)
+                    for _ in consumers:
+                        await queue.put(None)  # type: ignore[arg-type]
+                    await queue.join()
+                    await asyncio.gather(*consumers)
+                except Exception:
+                    for t in producers + consumers:
+                        t.cancel()
+                    with contextlib.suppress(Exception):
+                        for _ in consumers:
+                            await queue.put(None)  # type: ignore[arg-type]
+                        await queue.join()
+                        await asyncio.gather(*consumers, return_exceptions=True)
+                    raise
+                finally:
+                    tile_progress.close()
 
                 # Draw contour labels (global pass) before rotation
                 try:
@@ -1784,9 +1819,27 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
             try:
                 if overlay.size != (crop_rect[2], crop_rect[3]):
                     overlay = overlay.resize((crop_rect[2], crop_rect[3]), Image.BICUBIC)
-                base_rgba = result.convert('RGBA')
+                # Convert base to RGBA, composite overlay, then convert back to RGB
+                prev_result = result
+                base_rgba = prev_result.convert('RGBA')
                 base_rgba.alpha_composite(overlay)
                 result = base_rgba.convert('RGB')
+                # Explicitly close large temporary images to free memory
+                try:
+                    overlay.close()
+                except Exception:
+                    pass
+                try:
+                    base_rgba.close()
+                except Exception:
+                    pass
+                try:
+                    prev_result.close()
+                except Exception:
+                    pass
+                overlay = None
+                base_rgba = None
+                prev_result = None
             except Exception as e:
                 logger.warning('Не удалось наложить изолинии: %s', e)
             composite_elapsed = time.monotonic() - composite_start_time
@@ -1805,7 +1858,13 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
         crs_sk42_gk=crs_sk42_gk,
         t_sk42_to_wgs=t_sk42_to_wgs,
     )
-    result = rotate_keep_size(result, angle_deg, fill=(255, 255, 255))
+    prev_result = result
+    result = rotate_keep_size(prev_result, angle_deg, fill=(255, 255, 255))
+    try:
+        prev_result.close()
+    except Exception:
+        pass
+    prev_result = None
     rotation_elapsed = time.monotonic() - rotation_start_time
     logger.info('Поворот изображения — завершён (%.2fs)', rotation_elapsed)
     log_memory_usage('after rotation')
@@ -1813,7 +1872,13 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
     # Cropping
     crop_start_time = time.monotonic()
     logger.info('Обрезка к целевому размеру — старт')
-    result = center_crop(result, target_w_px, target_h_px)
+    prev_result = result
+    result = center_crop(prev_result, target_w_px, target_h_px)
+    try:
+        prev_result.close()
+    except Exception:
+        pass
+    prev_result = None
     crop_elapsed = time.monotonic() - crop_start_time
     logger.info('Обрезка к целевому размеру — завершена (%.2fs)', crop_elapsed)
     log_memory_usage('after cropping')
@@ -1846,8 +1911,19 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
     preview_start_time = time.monotonic()
     logger.info('Публикация предпросмотра — старт')
     did_publish = False
-    with contextlib.suppress(Exception):
-        did_publish = publish_preview_image(result)
+    try:
+        # Send a copy to GUI to avoid holding the processing buffer; GUI will own the copy
+        gui_image = None
+        try:
+            gui_image = result.copy()
+        except Exception:
+            gui_image = None
+        if gui_image is not None:
+            did_publish = publish_preview_image(gui_image)
+        else:
+            did_publish = publish_preview_image(result)
+    except Exception:
+        did_publish = False
     preview_elapsed = time.monotonic() - preview_start_time
     logger.info('Публикация предпросмотра — %s (%.2fs)', 'успех' if did_publish else 'пропущено', preview_elapsed)
 
@@ -1864,8 +1940,16 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
             out_path = out_path.with_suffix('.jpg')
         out_path.resolve().parent.mkdir(parents=True, exist_ok=True)
         save_kwargs = _build_save_kwargs(out_path, settings)
-        result.convert('RGB').save(out_path, **save_kwargs)
-
+        # Use temporary RGB image for saving and close it afterwards
+        tmp_rgb = result.convert('RGB') if result.mode != 'RGB' else result.copy()
+        try:
+            tmp_rgb.save(out_path, **save_kwargs)
+        finally:
+            try:
+                tmp_rgb.close()
+            except Exception:
+                pass
+        # Ensure data is written to disk
         fd = os.open(out_path, os.O_RDONLY)
         os.fsync(fd)
         os.close(fd)
@@ -1874,6 +1958,19 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
         save_elapsed = time.monotonic() - save_start_time
         logger.info('Сохранение файла — завершено (%.2fs)', save_elapsed)
         log_memory_usage('after file save')
+        # Close the main result image after saving to release memory
+        try:
+            result.close()
+        except Exception:
+            pass
+        result = None
+    else:
+        # GUI consumed a copy; close original processing buffer to free memory
+        try:
+            result.close()
+        except Exception:
+            pass
+        result = None
 
     # Garbage collection
     gc_start_time = time.monotonic()

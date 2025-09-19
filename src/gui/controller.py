@@ -206,11 +206,8 @@ class MilMapperController:
         if not self.validate_api_key():
             error_msg = 'API-ключ недоступен для загрузки'
             logger.error(error_msg)
-            self._model.notify_observers(
-                ModelEvent.ERROR_OCCURRED,
-                {'error': error_msg},
-            )
-            return
+            # Передаём ошибку наверх, чтобы центрально обработать в GUI-потоке
+            raise RuntimeError(error_msg)
 
         with ResourceMonitor('MAP_DOWNLOAD'):
             try:
@@ -224,10 +221,8 @@ class MilMapperController:
                 except Exception as e:
                     error_msg = f'Проверка перед запуском не пройдена: {e}'
                     logger.exception(error_msg)
-                    self._model.notify_observers(
-                        ModelEvent.ERROR_OCCURRED, {'error': error_msg}
-                    )
-                    return
+                    # Пробрасываем ошибку, чтобы обработать единообразно в GUI-потоке
+                    raise RuntimeError(error_msg)
 
                 self._model.start_download()
                 settings = self._model.settings
@@ -264,8 +259,10 @@ class MilMapperController:
             except Exception as e:
                 error_msg = f'Не удалось выполнить загрузку: {e}'
                 logger.exception(error_msg)
+                # Акуратный откат состояния модели
                 self._model.complete_download(success=False, error_msg=error_msg)
-                raise
+                # Пробрасываем ошибку для централизованной обработки в GUI-потоке (DownloadWorker.finished)
+                raise RuntimeError(error_msg)
 
     def start_map_download_sync(self) -> None:
         """Запуск загрузки карты в синхронном контексте (обёртка над async)."""

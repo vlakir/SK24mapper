@@ -311,47 +311,76 @@ async def run_deep_verification(*, api_key: str, settings: Any) -> None:
 
     # 5) Network/source checks
     async def _check_styles(style_id: str) -> None:
+        import asyncio
         path = f'{MAPBOX_STATIC_BASE}/{style_id}/tiles/256/0/0/0'
         url = f'{path}?access_token={api_key}'
-        timeout = aiohttp.ClientTimeout(total=5)
-        async with (
-            aiohttp.ClientSession() as client,
-            client.get(url, timeout=timeout) as resp,
-        ):
-            from constants import HTTP_FORBIDDEN, HTTP_OK, HTTP_UNAUTHORIZED
+        timeout = aiohttp.ClientTimeout(total=10, connect=10, sock_connect=10, sock_read=10)
+        attempts = 3
+        for i in range(attempts):
+            try:
+                async with aiohttp.ClientSession() as client:
+                    async with client.get(url, timeout=timeout) as resp:
+                        from constants import HTTP_FORBIDDEN, HTTP_OK, HTTP_UNAUTHORIZED
 
-            if resp.status == HTTP_OK:
-                await resp.read()
-                return
-            if resp.status in (HTTP_UNAUTHORIZED, HTTP_FORBIDDEN):
-                msg = 'Неверный или недействительный API-ключ. Проверьте ключ и попробуйте снова.'
-                raise RuntimeError(msg)
-            msg = f'Ошибка доступа к серверу карт (HTTP {resp.status}). Повторите попытку позже.'
-            raise RuntimeError(msg)
+                        if resp.status == HTTP_OK:
+                            with contextlib.suppress(Exception):
+                                await resp.read()
+                            return
+                        if resp.status in (HTTP_UNAUTHORIZED, HTTP_FORBIDDEN):
+                            msg = 'Неверный или недействительный API-ключ. Проверьте ключ и попробуйте снова.'
+                            raise RuntimeError(msg)
+                        msg = f'Ошибка доступа к серверу карт (HTTP {resp.status}). Повторите попытку позже.'
+                        raise RuntimeError(msg)
+            except asyncio.CancelledError:
+                # важно не маскировать отмену задач
+                raise
+            except (asyncio.TimeoutError, aiohttp.ClientError, OSError) as e:
+                if i < attempts - 1:
+                    backoff = 0.5 * (2 ** i)
+                    logger.warning('Проблема сети при проверке стиля (попытка %s/%s): %s; повтор через %.1fs', i + 1, attempts, e, backoff)
+                    await asyncio.sleep(backoff)
+                    continue
+                msg = 'Не удалось связаться с сервером карт. Проверьте подключение к интернету и попробуйте снова.'
+                raise RuntimeError(msg) from e
 
     async def _check_terrain_small() -> None:
+        import asyncio
         # Try z=0/x=0/y=0
         path = f'{MAPBOX_TERRAIN_RGB_PATH}/0/0/0.pngraw'
         url = f'{path}?access_token={api_key}'
-        timeout = aiohttp.ClientTimeout(total=5)
-        async with (
-            aiohttp.ClientSession() as client,
-            client.get(url, timeout=timeout) as resp,
-        ):
-            from constants import HTTP_FORBIDDEN, HTTP_OK, HTTP_UNAUTHORIZED
+        timeout = aiohttp.ClientTimeout(total=10, connect=10, sock_connect=10, sock_read=10)
+        attempts = 3
+        last_exc: Exception | None = None
+        for i in range(attempts):
+            try:
+                async with aiohttp.ClientSession() as client:
+                    async with client.get(url, timeout=timeout) as resp:
+                        from constants import HTTP_FORBIDDEN, HTTP_OK, HTTP_UNAUTHORIZED
 
-            if resp.status == HTTP_OK:
-                data = await resp.read()
-            elif resp.status in (HTTP_UNAUTHORIZED, HTTP_FORBIDDEN):
-                msg = 'Неверный или недействительный API-ключ. Проверьте ключ и попробуйте снова.'
-                raise RuntimeError(msg)
-            else:
-                msg = f'Ошибка доступа к серверу карт (HTTP {resp.status}). Повторите попытку позже.'
-                raise RuntimeError(msg)
-        # Decode tiny image and colorize to ensure pipeline works
-        img = Image.open(io.BytesIO(data)).convert('RGB')
-        dem = decode_terrain_rgb_to_elevation_m(img)
-        _ = colorize_dem_to_image(dem)
+                        if resp.status == HTTP_OK:
+                            data = await resp.read()
+                        elif resp.status in (HTTP_UNAUTHORIZED, HTTP_FORBIDDEN):
+                            msg = 'Неверный или недействительный API-ключ. Проверьте ключ и попробуйте снова.'
+                            raise RuntimeError(msg)
+                        else:
+                            msg = f'Ошибка доступа к серверу карт (HTTP {resp.status}). Повторите попытку позже.'
+                            raise RuntimeError(msg)
+                        # Decode tiny image and colorize to ensure pipeline works
+                        img = Image.open(io.BytesIO(data)).convert('RGB')
+                        dem = decode_terrain_rgb_to_elevation_m(img)
+                        _ = colorize_dem_to_image(dem)
+                        return
+            except asyncio.CancelledError:
+                raise
+            except (asyncio.TimeoutError, aiohttp.ClientError, OSError) as e:
+                last_exc = e
+                if i < attempts - 1:
+                    backoff = 0.5 * (2 ** i)
+                    logger.warning('Проблема сети при проверке Terrain-RGB (попытка %s/%s): %s; повтор через %.1fs', i + 1, attempts, e, backoff)
+                    await asyncio.sleep(backoff)
+                    continue
+        msg = 'Не удалось выполнить проверку Terrain-RGB: сеть недоступна. Проверьте подключение к интернету.'
+        raise RuntimeError(msg) from last_exc
 
     if mt_enum in (
         MapType.SATELLITE,
@@ -444,7 +473,23 @@ async def _make_cached_session_for_diag() -> Any:
     stale_hours = int(HTTP_CACHE_STALE_IF_ERROR_HOURS)
     stale_param = timedelta(hours=stale_hours) if stale_hours > 0 else False
 
-    backend = SQLiteBackend(str(cache_path), expire_after=expire_td)
+    # Build SQLiteBackend with RAM cache disabled when supported by the library version
+    backend = None
+    last_err = None
+    for kwargs in (
+        {'expire_after': expire_td, 'use_memory_cache': False, 'cache_capacity': 0},
+        {'expire_after': expire_td, 'use_memory_cache': False},
+        {'expire_after': expire_td, 'cache_capacity': 0},
+        {'expire_after': expire_td},
+    ):
+        try:
+            backend = SQLiteBackend(str(cache_path), **kwargs)
+            break
+        except TypeError as e:
+            last_err = e
+            continue
+    if backend is None:
+        raise last_err  # type: ignore[misc]
     return CachedSession(
         cache=backend,
         expire_after=expire_td,
