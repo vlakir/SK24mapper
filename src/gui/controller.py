@@ -240,13 +240,14 @@ class MilMapperController:
                     f'Starting download: center=({center_x}, {center_y}), size=({width_m}x{height_m})',
                 )
                 try:
+                    # Military notation in logs: X=northing (GK Y), Y=easting (GK X)
                     logger.info(
-                        'Starting download with control point: enabled=%s, GK X=%.3f, Y=%.3f; raw X=%s, raw Y=%s',
+                        'Starting download with control point (СК-42 ГК): enabled=%s, X(север)=%.3f, Y(восток)=%.3f; raw Xn=%s, raw Ye=%s',
                         getattr(settings, 'control_point_enabled', False),
-                        getattr(settings, 'control_point_x_sk42_gk', 0.0),
-                        getattr(settings, 'control_point_y_sk42_gk', 0.0),
-                        getattr(settings, 'control_point_x', None),
-                        getattr(settings, 'control_point_y', None),
+                        getattr(settings, 'control_point_y_sk42_gk', 0.0),  # northing
+                        getattr(settings, 'control_point_x_sk42_gk', 0.0),  # easting
+                        getattr(settings, 'control_point_y', None),  # historically stored northing
+                        getattr(settings, 'control_point_x', None),  # historically stored easting
                     )
                 except Exception:
                     logger.debug('Failed to log control point settings at start')

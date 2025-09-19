@@ -405,9 +405,11 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
         control_y = settings.control_point_y_sk42_gk
         
         if not (map_left <= control_x <= map_right and map_bottom <= control_y <= map_top):
+            # Note on naming: map_left/right are along easting (восток), map_bottom/top are along northing (север).
+            # Military printout below uses X=northing, Y=easting for clarity.
             raise ValueError(
-                f"Контрольная точка ({control_x:.0f}, {control_y:.0f}) выходит за пределы карты. "
-                f"Границы карты: X=[{map_left:.0f}, {map_right:.0f}], Y=[{map_bottom:.0f}, {map_top:.0f}]"
+                f"Контрольная точка X(север)={control_y:.0f}, Y(восток)={control_x:.0f} выходит за пределы карты. "
+                f"Границы карты: Y(восток)=[{map_left:.0f}, {map_right:.0f}], X(север)=[{map_bottom:.0f}, {map_top:.0f}]"
             )
 
     sp = LiveSpinner('Подготовка: создание трансформеров')
@@ -439,18 +441,20 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
     )
     sp.stop('Подготовка: центр WGS84 готов')
 
-    # Log control point coordinates in SK-42 GK and WGS84 (if enabled)
+    # Log control point coordinates using military notation: X=northing (север), Y=easting (восток)
+    # Note: Internally and in PROJ/pyproj, the axis order with always_xy=True is (easting, northing).
+    # Here control_x is GK easting, control_y is GK northing. For military notation we print X=control_y, Y=control_x.
     try:
         if getattr(settings, 'control_point_enabled', False):
-            control_x = settings.control_point_x_sk42_gk
-            control_y = settings.control_point_y_sk42_gk
-            # Convert GK -> SK-42 geographic using the same mechanism as grid
+            control_x = settings.control_point_x_sk42_gk  # GK easting (восток)
+            control_y = settings.control_point_y_sk42_gk  # GK northing (север)
+            # Convert GK -> SK-42 geographic using the same mechanism as grid (input order: easting, northing)
             cp_lng_sk42, cp_lat_sk42 = t_sk42_from_gk.transform(control_x, control_y)
-            # Convert SK-42 geographic -> WGS84 using Helmert-aware transformer
+            # Convert SK-42 geographic -> WGS84 using Helmert-aware transformer (input order: lon, lat)
             cp_lng_wgs, cp_lat_wgs = t_sk42_to_wgs.transform(cp_lng_sk42, cp_lat_sk42)
             logger.info(
-                'Контрольная точка: SK-42 GK X=%.3f, Y=%.3f; WGS84 lat=%.8f, lon=%.8f',
-                control_x, control_y, cp_lat_wgs, cp_lng_wgs,
+                'Контрольная точка: СК-42 ГК X(север)=%.3f, Y(восток)=%.3f; WGS84 lat=%.8f, lon=%.8f',
+                control_y, control_x, cp_lat_wgs, cp_lng_wgs,
             )
     except Exception as e:
         logger.warning('Не удалось вывести координаты контрольной точки: %s', e)
@@ -1930,11 +1934,12 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
     log_memory_usage('after grid drawing')
     log_thread_status('after grid drawing')
 
-    # Draw center cross and log its coordinates (SK-42 GK and WGS84)
+    # Draw center cross and log its coordinates (military notation)
+    # PROJ/pyproj uses (easting, northing) with always_xy=True. Military notation wants X=northing, Y=easting.
     try:
         from PIL import ImageDraw
         from constants import CENTER_CROSS_COLOR, CENTER_CROSS_LINE_WIDTH_PX, CENTER_CROSS_LENGTH_PX
-        # Compute center coordinates in SK-42 GK using same mechanics as grid
+        # Compute center coordinates in SK-42 GK using same mechanics as grid (result: x0_gk=easting, y0_gk=northing)
         t_sk42gk_from_sk42 = Transformer.from_crs(
             crs_sk42_geog,
             crs_sk42_gk,
@@ -1943,7 +1948,7 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
         x0_gk, y0_gk = t_sk42gk_from_sk42.transform(center_lng_sk42, center_lat_sk42)
         # Compute center coordinates in WGS84 using Helmert-aware transformer
         center_lng_wgs, center_lat_wgs = t_sk42_to_wgs.transform(center_lng_sk42, center_lat_sk42)
-        logger.info('Центральный крест: SK-42 GK X=%.3f, Y=%.3f; WGS84 lat=%.8f, lon=%.8f', x0_gk, y0_gk, center_lat_wgs, center_lng_wgs)
+        logger.info('Центральный крест: СК-42 ГК X(север)=%.3f, Y(восток)=%.3f; WGS84 lat=%.8f, lon=%.8f', y0_gk, x0_gk, center_lat_wgs, center_lng_wgs)
 
         # Draw the cross at the image center
         cx = result.width // 2
