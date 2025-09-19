@@ -66,6 +66,7 @@ from topography import (
     decode_terrain_rgb_to_elevation_m,
     effective_scale_for_xyz,
     estimate_crop_size_px,
+    meters_per_pixel,
 )
 from elevation_provider import ElevationTileProvider
 
@@ -1961,6 +1962,64 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
         draw.line([(cx - half, cy), (cx + half, cy)], fill=color, width=line_w)
     except Exception as e:
         logger.warning('Не удалось нарисовать центрированный крест или вывести координаты: %s', e)
+
+    # Draw control point as red cross (using same mechanics as grid/center cross)
+    try:
+        if getattr(settings, 'control_point_enabled', False):
+            from PIL import ImageDraw
+            from constants import (
+                CONTROL_POINT_CROSS_COLOR,
+                CONTROL_POINT_CROSS_LINE_WIDTH_PX,
+                CONTROL_POINT_CROSS_LENGTH_PX,
+            )
+            # Get control point coordinates in SK-42 GK (easting, northing)
+            cp_x_gk = float(getattr(settings, 'control_point_x_sk42_gk'))
+            cp_y_gk = float(getattr(settings, 'control_point_y_sk42_gk'))
+
+            # Compute center in GK as above
+            t_sk42gk_from_sk42 = Transformer.from_crs(
+                crs_sk42_geog,
+                crs_sk42_gk,
+                always_xy=True,
+            )
+            x0_gk, y0_gk = t_sk42gk_from_sk42.transform(center_lng_sk42, center_lat_sk42)
+
+            # Pixels-per-meter at center latitude in WGS84
+            mpp = meters_per_pixel(center_lat_wgs, zoom, scale=eff_scale)
+            ppm = 1.0 / mpp if mpp > 0 else 0.0
+
+            # Map GK offsets to pixel offsets (screen Y grows down)
+            dx_m = cp_x_gk - x0_gk
+            dy_m = cp_y_gk - y0_gk
+            cx_img = result.width / 2.0 + dx_m * ppm
+            cy_img = result.height / 2.0 - dy_m * ppm
+
+            # Optional: log WGS84 of control point via Helmert-aware transformer
+            try:
+                t_sk42_from_gk = Transformer.from_crs(crs_sk42_gk, crs_sk42_geog, always_xy=True)
+                cp_lng_sk42, cp_lat_sk42 = t_sk42_from_gk.transform(cp_x_gk, cp_y_gk)
+                cp_lng_wgs, cp_lat_wgs = t_sk42_to_wgs.transform(cp_lng_sk42, cp_lat_sk42)
+                logger.info(
+                    'Контрольная точка: СК-42 ГК X(север)=%.3f, Y(восток)=%.3f; WGS84 lat=%.8f, lon=%.8f',
+                    cp_y_gk, cp_x_gk, cp_lat_wgs, cp_lng_wgs,
+                )
+            except Exception:
+                pass
+
+            # Draw cross if inside image bounds
+            if 0 <= cx_img <= result.width and 0 <= cy_img <= result.height:
+                draw = ImageDraw.Draw(result)
+                half = max(1, int(CONTROL_POINT_CROSS_LENGTH_PX) // 2)
+                line_w = max(1, int(CONTROL_POINT_CROSS_LINE_WIDTH_PX))
+                color = tuple(CONTROL_POINT_CROSS_COLOR)
+                cx_i = int(round(cx_img))
+                cy_i = int(round(cy_img))
+                draw.line([(cx_i, cy_i - half), (cx_i, cy_i + half)], fill=color, width=line_w)
+                draw.line([(cx_i - half, cy_i), (cx_i + half, cy_i)], fill=color, width=line_w)
+            else:
+                logger.debug('Контрольная точка вне кадра: (%.2f, %.2f) not in [0..%d]x[0..%d]', cx_img, cy_img, result.width, result.height)
+    except Exception as e:
+        logger.warning('Не удалось нарисовать контрольную точку: %s', e)
 
     # Preview publishing
     preview_start_time = time.monotonic()

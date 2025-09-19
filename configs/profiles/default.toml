@@ -7,7 +7,7 @@ from_y_low = 35
 to_x_low = 22
 to_y_low = 49
 output_path = "../maps/map.jpg"
-grid_width_px = 4
+grid_width_px = 5
 grid_font_size = 86
 grid_text_margin = 43
 grid_label_bg_padding = 6
@@ -19,8 +19,8 @@ saturation = 1.0
 
 map_type = "SATELLITE"
 # Параметры датум-трансформации СК-42 → WGS84 (Helmert, м / угл. сек / ppm)
-helmert_dx = 24.0
-helmert_dy = -123.0
+helmert_dx = 13.0
+helmert_dy = -122.0
 helmert_dz = -94.0
 helmert_rx_as = 0.0
 helmert_ry_as = 0.0

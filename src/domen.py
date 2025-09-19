@@ -115,19 +115,17 @@ class MapSettings(BaseModel):
 
     @property
     def control_point_x_sk42_gk(self) -> float:
-        # GK X (easting, горизонталь) из Y координаты контрольной точки
-        # Извлекаем high и low компоненты из single coordinate
+        # GK X (easting, горизонталь) из Y координаты контрольной точки — без припуска
         y_high = self.control_point_y // 100000
         y_low_km = (self.control_point_y % 100000) / 1000.0
-        return 1e3 * (y_low_km - ADDITIVE_RATIO) + 1e5 * y_high
+        return 1e3 * y_low_km + 1e5 * y_high
 
     @property
     def control_point_y_sk42_gk(self) -> float:
-        # GK Y (northing, вертикаль) из X координаты контрольной точки
-        # Извлекаем high и low компоненты из single coordinate
+        # GK Y (northing, вертикаль) из X координаты контрольной точки — без припуска
         x_high = self.control_point_x // 100000
         x_low_km = (self.control_point_x % 100000) / 1000.0
-        return 1e3 * (x_low_km - ADDITIVE_RATIO) + 1e5 * x_high
+        return 1e3 * x_low_km + 1e5 * x_high
 
     @property
     def custom_helmert(self) -> tuple[float, float, float, float, float, float, float] | None:

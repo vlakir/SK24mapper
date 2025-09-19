@@ -318,6 +318,14 @@ PSUTIL_AVAILABLE = True
 # Цвет креста (RGB)
 CENTER_CROSS_COLOR = (255, 255, 255)
 # Толщина линий креста (пиксели)
-CENTER_CROSS_LINE_WIDTH_PX = 3
+CENTER_CROSS_LINE_WIDTH_PX = 1
 # Полная длина линии креста (пиксели)
-CENTER_CROSS_LENGTH_PX = 20
+CENTER_CROSS_LENGTH_PX = 40
+
+# --- Контрольная точка: крест, аналогичный центральному, но красного цвета
+# Цвет креста контрольной точки (RGB)
+CONTROL_POINT_CROSS_COLOR = (220, 0, 0)
+# Толщина линий креста контрольной точки (пиксели)
+CONTROL_POINT_CROSS_LINE_WIDTH_PX = 5
+# Полная длина линии креста контрольной точки (пиксели)
+CONTROL_POINT_CROSS_LENGTH_PX = 240

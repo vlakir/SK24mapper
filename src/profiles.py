@@ -79,9 +79,9 @@ def load_profile(name_or_path: str) -> MapSettings:
             cy = int(getattr(settings, 'control_point_y', 0))
             x_high, x_low_m = cx // 100000, cx % 100000
             y_high, y_low_m = cy // 100000, cy % 100000
-            # Variant B (work in meters; ADDITIVE_RATIO is in km)
-            expected_x = (y_low_m - 1000.0 * ADDITIVE_RATIO) + 1e5 * y_high
-            expected_y = (x_low_m - 1000.0 * ADDITIVE_RATIO) + 1e5 * x_high
+            # Expected absolute GK meters for control point (no padding applied)
+            expected_x = y_low_m + 1e5 * y_high
+            expected_y = x_low_m + 1e5 * x_high
 
             got_x = settings.control_point_x_sk42_gk
             got_y = settings.control_point_y_sk42_gk
