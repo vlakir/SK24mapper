@@ -439,6 +439,22 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
     )
     sp.stop('Подготовка: центр WGS84 готов')
 
+    # Log control point coordinates in SK-42 GK and WGS84 (if enabled)
+    try:
+        if getattr(settings, 'control_point_enabled', False):
+            control_x = settings.control_point_x_sk42_gk
+            control_y = settings.control_point_y_sk42_gk
+            # Convert GK -> SK-42 geographic using the same mechanism as grid
+            cp_lng_sk42, cp_lat_sk42 = t_sk42_from_gk.transform(control_x, control_y)
+            # Convert SK-42 geographic -> WGS84 using Helmert-aware transformer
+            cp_lng_wgs, cp_lat_wgs = t_sk42_to_wgs.transform(cp_lng_sk42, cp_lat_sk42)
+            logger.info(
+                'Контрольная точка: SK-42 GK X=%.3f, Y=%.3f; WGS84 lat=%.8f, lon=%.8f',
+                control_x, control_y, cp_lat_wgs, cp_lng_wgs,
+            )
+    except Exception as e:
+        logger.warning('Не удалось вывести координаты контрольной точки: %s', e)
+
     sp = LiveSpinner('Подготовка: подбор zoom')
     sp.start()
     zoom = choose_zoom_with_limit(
@@ -1914,6 +1930,32 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
     log_memory_usage('after grid drawing')
     log_thread_status('after grid drawing')
 
+    # Draw center cross and log its coordinates (SK-42 GK and WGS84)
+    try:
+        from PIL import ImageDraw
+        from constants import CENTER_CROSS_COLOR, CENTER_CROSS_LINE_WIDTH_PX, CENTER_CROSS_LENGTH_PX
+        # Compute center coordinates in SK-42 GK using same mechanics as grid
+        t_sk42gk_from_sk42 = Transformer.from_crs(
+            crs_sk42_geog,
+            crs_sk42_gk,
+            always_xy=True,
+        )
+        x0_gk, y0_gk = t_sk42gk_from_sk42.transform(center_lng_sk42, center_lat_sk42)
+        # Compute center coordinates in WGS84 using Helmert-aware transformer
+        center_lng_wgs, center_lat_wgs = t_sk42_to_wgs.transform(center_lng_sk42, center_lat_sk42)
+        logger.info('Центральный крест: SK-42 GK X=%.3f, Y=%.3f; WGS84 lat=%.8f, lon=%.8f', x0_gk, y0_gk, center_lat_wgs, center_lng_wgs)
+
+        # Draw the cross at the image center
+        cx = result.width // 2
+        cy = result.height // 2
+        half = max(1, int(CENTER_CROSS_LENGTH_PX) // 2)
+        line_w = max(1, int(CENTER_CROSS_LINE_WIDTH_PX))
+        draw = ImageDraw.Draw(result)
+        color = tuple(CENTER_CROSS_COLOR)
+        draw.line([(cx, cy - half), (cx, cy + half)], fill=color, width=line_w)
+        draw.line([(cx - half, cy), (cx + half, cy)], fill=color, width=line_w)
+    except Exception as e:
+        logger.warning('Не удалось нарисовать центрированный крест или вывести координаты: %s', e)
 
     # Preview publishing
     preview_start_time = time.monotonic()

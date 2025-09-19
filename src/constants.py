@@ -313,3 +313,11 @@ HTTP_UNAUTHORIZED = 401
 HTTP_FORBIDDEN = 403
 # Availability flags for optional libs
 PSUTIL_AVAILABLE = True
+
+# --- Центрированный крест на карте
+# Цвет креста (RGB)
+CENTER_CROSS_COLOR = (255, 255, 255)
+# Толщина линий креста (пиксели)
+CENTER_CROSS_LINE_WIDTH_PX = 3
+# Полная длина линии креста (пиксели)
+CENTER_CROSS_LENGTH_PX = 20

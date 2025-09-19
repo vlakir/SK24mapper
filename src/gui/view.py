@@ -602,6 +602,9 @@ class MainWindow(QMainWindow):
         self._estimate_threads: list[QThread] = []
         self._estimate_workers: list[QObject] = []
 
+        # Guard flag to prevent model updates while UI is being populated programmatically
+        self._ui_sync_in_progress: bool = False
+
         self._setup_ui()
         self._setup_connections()
 
@@ -1090,6 +1093,9 @@ class MainWindow(QMainWindow):
     @Slot()
     def _on_settings_changed(self) -> None:
         """Handle settings change from UI (bulk update without intermediate events)."""
+        if getattr(self, '_ui_sync_in_progress', False):
+            logging.getLogger(__name__).debug('Settings change ignored: UI sync in progress')
+            return
         # Clear any existing preview to avoid showing outdated imagery when coordinates or contours change
         self._clear_preview_ui()
         
@@ -1376,6 +1382,9 @@ class MainWindow(QMainWindow):
         if not settings:
             return
 
+        # Block feedback to model while we populate controls programmatically
+        self._ui_sync_in_progress = True
+
         # Update coordinates
         self.from_x_widget.set_values(settings.from_x_high, settings.from_x_low)
         self.from_y_widget.set_values(settings.from_y_high, settings.from_y_low)
@@ -1465,6 +1474,9 @@ class MainWindow(QMainWindow):
         # Enable/disable coordinate inputs based on checkbox state
         self.control_point_x_widget.setEnabled(control_point_enabled)
         self.control_point_y_widget.setEnabled(control_point_enabled)
+
+        # Unblock settings propagation after UI is fully synced
+        self._ui_sync_in_progress = False
 
     def _ensure_busy_dialog(self) -> QProgressDialog:
         """Create BusyDialog lazily to prevent it from showing at startup."""

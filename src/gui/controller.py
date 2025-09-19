@@ -239,6 +239,17 @@ class MilMapperController:
                 logger.info(
                     f'Starting download: center=({center_x}, {center_y}), size=({width_m}x{height_m})',
                 )
+                try:
+                    logger.info(
+                        'Starting download with control point: enabled=%s, GK X=%.3f, Y=%.3f; raw X=%s, raw Y=%s',
+                        getattr(settings, 'control_point_enabled', False),
+                        getattr(settings, 'control_point_x_sk42_gk', 0.0),
+                        getattr(settings, 'control_point_y_sk42_gk', 0.0),
+                        getattr(settings, 'control_point_x', None),
+                        getattr(settings, 'control_point_y', None),
+                    )
+                except Exception:
+                    logger.debug('Failed to log control point settings at start')
                 log_memory_usage('before download start')
 
                 # Start download
