@@ -19,7 +19,6 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QMainWindow,
     QMessageBox,
     QProgressDialog,
@@ -169,16 +168,19 @@ class OldCoordinateInputWidget(QWidget):
 
 
 class CoordinateInputWidget(QWidget):
-    """Widget for coordinate input with simple QLineEdit (0-9999999)."""
+    """Widget for coordinate input with 7-digit format."""
 
     def __init__(self, label: str, high_value: int = 0, low_value: int = 0) -> None:
         super().__init__()
-        # Convert high/low format to coordinate value for initial display
+        # Convert old high/low format to 7-digit format
         coordinate_value = high_value * 100000 + low_value * 1000
         self._setup_ui(label, coordinate_value)
 
     def _setup_ui(self, label: str, coordinate_value: int) -> None:
         """Setup coordinate input UI."""
+        from PySide6.QtWidgets import QLineEdit
+        from PySide6.QtGui import QIntValidator
+        
         layout = QHBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
 
@@ -187,37 +189,31 @@ class CoordinateInputWidget(QWidget):
         label_widget.setMinimumWidth(80)
         layout.addWidget(label_widget)
 
-        # Simple coordinate input using QLineEdit
+        # 7-digit coordinate input
         self.coordinate_edit = QLineEdit()
-        self.coordinate_edit.setText(str(coordinate_value))
-        self.coordinate_edit.setToolTip(f'Координата для {label} (0-9999999)')
+        self.coordinate_edit.setMaxLength(7)
+        validator = QIntValidator(0, 9999999)
+        self.coordinate_edit.setValidator(validator)
+        self.coordinate_edit.setText(f"{coordinate_value:07d}")
+        self.coordinate_edit.setToolTip(f'7-значный формат координаты для {label}')
         layout.addWidget(self.coordinate_edit)
 
         self.setLayout(layout)
 
-    def get_coordinate(self) -> int:
-        """Get the current coordinate value as entered by user."""
-        try:
-            text = self.coordinate_edit.text().strip()
-            return int(text) if text else 0
-        except ValueError:
-            return 0
-
-    def set_coordinate(self, coordinate: int) -> None:
-        """Set the coordinate value directly."""
-        self.coordinate_edit.setText(str(coordinate))
-
     def get_values(self) -> tuple[int, int]:
         """Get high and low values for backward compatibility."""
-        coordinate = self.get_coordinate()
-        high = coordinate // 100000
-        low = (coordinate % 100000) // 1000
-        return high, low
+        try:
+            coordinate = int(self.coordinate_edit.text() or "0")
+            high = coordinate // 100000
+            low = (coordinate % 100000) // 1000
+            return high, low
+        except ValueError:
+            return 0, 0
 
     def set_values(self, high: int, low: int) -> None:
         """Set high and low values for backward compatibility."""
         coordinate_value = high * 100000 + low * 1000
-        self.set_coordinate(coordinate_value)
+        self.coordinate_edit.setText(f"{coordinate_value:07d}")
 
 
 class GridSettingsWidget(QWidget):
@@ -648,7 +644,7 @@ class MainWindow(QMainWindow):
         # Используем минимальный размер и возможность свободно менять размер окна
         self.setMinimumSize(900, 500)
         # Предпочитаемый стартовый размер (не фиксированный)
-        self.resize(1500, 950)
+        self.resize(1200, 1000)
 
         # Центральный виджет
         central_widget = QWidget()
@@ -1034,9 +1030,8 @@ class MainWindow(QMainWindow):
         # Control point
         self.control_point_checkbox.stateChanged.connect(self._on_control_point_toggled)
         self.control_point_checkbox.stateChanged.connect(self._on_settings_changed)
-        # Use editingFinished instead of textChanged to avoid cyclic updates during typing
-        self.control_point_x_widget.coordinate_edit.editingFinished.connect(self._on_settings_changed)
-        self.control_point_y_widget.coordinate_edit.editingFinished.connect(self._on_settings_changed)
+        self.control_point_x_widget.coordinate_edit.textChanged.connect(self._on_settings_changed)
+        self.control_point_y_widget.coordinate_edit.textChanged.connect(self._on_settings_changed)
 
         # Grid settings
         self.grid_widget.width_spin.valueChanged.connect(self._on_settings_changed)
@@ -1140,9 +1135,8 @@ class MainWindow(QMainWindow):
         to_x_high, to_x_low = self.to_x_widget.get_values()
         to_y_high, to_y_low = self.to_y_widget.get_values()
         
-        # Get control point coordinates directly to preserve user input
-        control_point_x = self.control_point_x_widget.get_coordinate()
-        control_point_y = self.control_point_y_widget.get_coordinate()
+        control_point_x_high, control_point_x_low = self.control_point_x_widget.get_values()
+        control_point_y_high, control_point_y_low = self.control_point_y_widget.get_values()
 
         return {
             'from_x_high': from_x_high,
@@ -1154,8 +1148,10 @@ class MainWindow(QMainWindow):
             'to_y_high': to_y_high,
             'to_y_low': to_y_low,
             'control_point_enabled': self.control_point_checkbox.isChecked(),
-            'control_point_x': control_point_x,
-            'control_point_y': control_point_y,
+            'control_point_x_high': control_point_x_high,
+            'control_point_x_low': control_point_x_low,
+            'control_point_y_high': control_point_y_high,
+            'control_point_y_low': control_point_y_low,
         }
 
     @Slot(int)
@@ -1442,25 +1438,17 @@ class MainWindow(QMainWindow):
         with QSignalBlocker(self.control_point_checkbox):
             self.control_point_checkbox.setChecked(control_point_enabled)
         
-        # Programmatically set full control point coordinates without splitting to high/low
-        control_point_x = int(getattr(settings, 'control_point_x', 5415000))
-        control_point_y = int(getattr(settings, 'control_point_y', 7440000))
-
+        # Блокируем сигналы при программном обновлении
         with QSignalBlocker(self.control_point_x_widget.coordinate_edit):
-            self.control_point_x_widget.set_coordinate(control_point_x)
-        with QSignalBlocker(self.control_point_y_widget.coordinate_edit):
-            self.control_point_y_widget.set_coordinate(control_point_y)
-        
-        # Log the values to ensure no truncation occurs during UI update
-        try:
-            x_text = self.control_point_x_widget.coordinate_edit.text()
-            y_text = self.control_point_y_widget.coordinate_edit.text()
-            logger.info(
-                "UI control point set: enabled=%s, x_src=%d -> edit='%s', y_src=%d -> edit='%s'",
-                control_point_enabled, control_point_x, x_text, control_point_y, y_text,
+            self.control_point_x_widget.set_values(
+                getattr(settings, 'control_point_x_high', 54),
+                getattr(settings, 'control_point_x_low', 15),
             )
-        except Exception:
-            logger.exception("Failed to log control point UI update")
+        with QSignalBlocker(self.control_point_y_widget.coordinate_edit):
+            self.control_point_y_widget.set_values(
+                getattr(settings, 'control_point_y_high', 74),
+                getattr(settings, 'control_point_y_low', 40),
+            )
         
         # Enable/disable coordinate inputs based on checkbox state
         self.control_point_x_widget.setEnabled(control_point_enabled)

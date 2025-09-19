@@ -47,36 +47,22 @@ crs_sk42_geog = CRS.from_epsg(SK42_CODE)
 crs_wgs84 = CRS.from_epsg(WGS84_CODE)
 
 
+from pyproj.transformer import TransformerGroup
+
 def build_transformers_sk42(
-    zone_from_lon: float,
     custom_helmert: tuple[float, float, float, float, float, float, float]
     | None = None,
-) -> tuple[Transformer, Transformer, CRS]:
+) -> tuple[Transformer, Transformer]:
     """
-    Собирает трансформеры.
+    Собирает трансформеры для географических координат СК‑42 <-> WGS84.
 
-    - СК‑42 географические <-> WGS84 (с учётом доступных параметров);
-    - СК‑42 / Гаусса–Крюгера (EPSG:284xx) для выбранной 6-градусной зоны.
+    Примечания:
+    - Если переданы пользовательские 7 параметров Хельмерта, они используются напрямую
+      в виде +towgs84=dx,dy,dz,rx,ry,rz,ds, где rx/ry/rz — угловые секунды, ds — ppm.
+    - Если custom_helmert не задан, пытаемся подобрать лучший доступный pipeline через
+      TransformerGroup (например, с использованием гридов NTV2, если они установлены).
+      При отсутствии — используем прямую трансформацию EPSG:4284↔4326 (возможен ballpark).
     """
-    zone = int(
-        math.floor((zone_from_lon + GK_ZONE_CM_OFFSET_DEG) / float(GK_ZONE_WIDTH_DEG))
-        + 1,
-    )
-    zone = max(1, min(60, zone))
-    try:
-        # EPSG:284xx
-        crs_sk42_gk = CRS.from_epsg(EPSG_SK42_GK_BASE + zone)
-    except Exception:
-        # Резервный вариант: построить СК‑42 / Гаусса–Крюгера (6°)
-        # вручную, если EPSG недоступен
-        # Центральный меридиан 6-градусной зоны
-        lon0 = zone * GK_ZONE_WIDTH_DEG - GK_ZONE_CM_OFFSET_DEG
-        proj4 = (
-            f'+proj=tmerc +lat_0=0 +lon_0={lon0} +k=1 '
-            f'+x_0={GK_FALSE_EASTING} +y_0=0 +ellps=krass +units=m +no_defs +type=crs'
-        )
-        crs_sk42_gk = CRS.from_proj4(proj4)
-
     if custom_helmert:
         dx, dy, dz, rx_as, ry_as, rz_as, ds_ppm = custom_helmert
         proj4_sk42_custom = CRS.from_proj4(
@@ -97,10 +83,33 @@ def build_transformers_sk42(
             always_xy=True,
         )
     else:
-        t_sk42_to_wgs = Transformer.from_crs(crs_sk42_geog, crs_wgs84, always_xy=True)
-        t_wgs_to_sk42 = Transformer.from_crs(crs_wgs84, crs_sk42_geog, always_xy=True)
+        # Попробовать подобрать лучший доступный pipeline (например, NTV2)
+        try:
+            tg_fwd = TransformerGroup(crs_sk42_geog, crs_wgs84, always_xy=True)
+            if tg_fwd.best_available and tg_fwd.transformers:
+                t_sk42_to_wgs = tg_fwd.transformers[0]
+            else:
+                t_sk42_to_wgs = Transformer.from_crs(
+                    crs_sk42_geog, crs_wgs84, always_xy=True
+                )
+        except Exception:
+            t_sk42_to_wgs = Transformer.from_crs(
+                crs_sk42_geog, crs_wgs84, always_xy=True
+            )
+        try:
+            tg_rev = TransformerGroup(crs_wgs84, crs_sk42_geog, always_xy=True)
+            if tg_rev.best_available and tg_rev.transformers:
+                t_wgs_to_sk42 = tg_rev.transformers[0]
+            else:
+                t_wgs_to_sk42 = Transformer.from_crs(
+                    crs_wgs84, crs_sk42_geog, always_xy=True
+                )
+        except Exception:
+            t_wgs_to_sk42 = Transformer.from_crs(
+                crs_wgs84, crs_sk42_geog, always_xy=True
+            )
 
-    return t_sk42_to_wgs, t_wgs_to_sk42, crs_sk42_gk
+    return t_sk42_to_wgs, t_wgs_to_sk42
 
 
 def meters_per_pixel(lat_deg: float, zoom: int, scale: int = STATIC_SCALE) -> float:
