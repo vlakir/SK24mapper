@@ -18,23 +18,13 @@ jpeg_quality = 95
 brightness = 1.0
 contrast = 1.0
 saturation = 1.0
-
-#helmert_dx = 13.0
-#helmert_dy = -122.0
-#helmert_dz = -94.0
-#helmert_rx_as = 0.0
-#helmert_ry_as = 0.0
-#helmert_rz_as = 0.0
-#helmert_ds_ppm = 0.0
-
-helmert_dx = -92.388442
-helmert_dy = -101.261562
-helmert_dz = 0.000000
-helmert_rx_as = 0.000000
-helmert_ry_as = 0.000000
-helmert_rz_as = 0.799724
-helmert_ds_ppm = -0.161760
-
+helmert_dx = 10.0
+helmert_dy = -185.0
+helmert_dz = -94.0
+helmert_rx_as = 0.0
+helmert_ry_as = 0.0
+helmert_rz_as = 0.0
+helmert_ds_ppm = 0.0
 control_point_enabled = true
 control_point_x = 5401816
 control_point_y = 7395729
