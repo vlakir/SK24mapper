@@ -1,5 +1,3 @@
-from typing import Optional
-
 from pydantic import BaseModel, field_validator
 
 from constants import ADDITIVE_RATIO, MapType, default_map_type
@@ -54,13 +52,13 @@ class MapSettings(BaseModel):
     saturation: float = 1.0
 
     # Опциональные 7 параметров Хельмерта (единицы: м, угловые секунды, ppm)
-    helmert_dx: Optional[float] = None
-    helmert_dy: Optional[float] = None
-    helmert_dz: Optional[float] = None
-    helmert_rx_as: Optional[float] = None
-    helmert_ry_as: Optional[float] = None
-    helmert_rz_as: Optional[float] = None
-    helmert_ds_ppm: Optional[float] = None
+    helmert_dx: float | None = None
+    helmert_dy: float | None = None
+    helmert_dz: float | None = None
+    helmert_rx_as: float | None = None
+    helmert_ry_as: float | None = None
+    helmert_rz_as: float | None = None
+    helmert_ds_ppm: float | None = None
 
     # Контрольная точка
     control_point_enabled: bool = False
@@ -128,7 +126,9 @@ class MapSettings(BaseModel):
         return 1e3 * x_low_km + 1e5 * x_high
 
     @property
-    def custom_helmert(self) -> tuple[float, float, float, float, float, float, float] | None:
+    def custom_helmert(
+        self,
+    ) -> tuple[float, float, float, float, float, float, float] | None:
         vals = (
             self.helmert_dx,
             self.helmert_dy,

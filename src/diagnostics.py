@@ -312,9 +312,12 @@ async def run_deep_verification(*, api_key: str, settings: Any) -> None:
     # 5) Network/source checks
     async def _check_styles(style_id: str) -> None:
         import asyncio
+
         path = f'{MAPBOX_STATIC_BASE}/{style_id}/tiles/256/0/0/0'
         url = f'{path}?access_token={api_key}'
-        timeout = aiohttp.ClientTimeout(total=10, connect=10, sock_connect=10, sock_read=10)
+        timeout = aiohttp.ClientTimeout(
+            total=10, connect=10, sock_connect=10, sock_read=10
+        )
         attempts = 3
         for i in range(attempts):
             try:
@@ -334,10 +337,16 @@ async def run_deep_verification(*, api_key: str, settings: Any) -> None:
             except asyncio.CancelledError:
                 # важно не маскировать отмену задач
                 raise
-            except (asyncio.TimeoutError, aiohttp.ClientError, OSError) as e:
+            except (TimeoutError, aiohttp.ClientError, OSError) as e:
                 if i < attempts - 1:
-                    backoff = 0.5 * (2 ** i)
-                    logger.warning('Проблема сети при проверке стиля (попытка %s/%s): %s; повтор через %.1fs', i + 1, attempts, e, backoff)
+                    backoff = 0.5 * (2**i)
+                    logger.warning(
+                        'Проблема сети при проверке стиля (попытка %s/%s): %s; повтор через %.1fs',
+                        i + 1,
+                        attempts,
+                        e,
+                        backoff,
+                    )
                     await asyncio.sleep(backoff)
                     continue
                 msg = 'Не удалось связаться с сервером карт. Проверьте подключение к интернету и попробуйте снова.'
@@ -345,10 +354,13 @@ async def run_deep_verification(*, api_key: str, settings: Any) -> None:
 
     async def _check_terrain_small() -> None:
         import asyncio
+
         # Try z=0/x=0/y=0
         path = f'{MAPBOX_TERRAIN_RGB_PATH}/0/0/0.pngraw'
         url = f'{path}?access_token={api_key}'
-        timeout = aiohttp.ClientTimeout(total=10, connect=10, sock_connect=10, sock_read=10)
+        timeout = aiohttp.ClientTimeout(
+            total=10, connect=10, sock_connect=10, sock_read=10
+        )
         attempts = 3
         last_exc: Exception | None = None
         for i in range(attempts):
@@ -372,11 +384,17 @@ async def run_deep_verification(*, api_key: str, settings: Any) -> None:
                         return
             except asyncio.CancelledError:
                 raise
-            except (asyncio.TimeoutError, aiohttp.ClientError, OSError) as e:
+            except (TimeoutError, aiohttp.ClientError, OSError) as e:
                 last_exc = e
                 if i < attempts - 1:
-                    backoff = 0.5 * (2 ** i)
-                    logger.warning('Проблема сети при проверке Terrain-RGB (попытка %s/%s): %s; повтор через %.1fs', i + 1, attempts, e, backoff)
+                    backoff = 0.5 * (2**i)
+                    logger.warning(
+                        'Проблема сети при проверке Terrain-RGB (попытка %s/%s): %s; повтор через %.1fs',
+                        i + 1,
+                        attempts,
+                        e,
+                        backoff,
+                    )
                     await asyncio.sleep(backoff)
                     continue
         msg = 'Не удалось выполнить проверку Terrain-RGB: сеть недоступна. Проверьте подключение к интернету.'

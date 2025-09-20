@@ -16,10 +16,6 @@ from constants import (
     ELEV_PCTL_HI,
     ELEV_PCTL_LO,
     ELEVATION_COLOR_RAMP,
-    EPSG_SK42_GK_BASE,
-    GK_FALSE_EASTING,
-    GK_ZONE_CM_OFFSET_DEG,
-    GK_ZONE_WIDTH_DEG,
     HTTP_5XX_MAX,
     HTTP_5XX_MIN,
     HTTP_BACKOFF_FACTOR,
@@ -48,6 +44,7 @@ crs_wgs84 = CRS.from_epsg(WGS84_CODE)
 
 
 from pyproj.transformer import TransformerGroup
+
 
 def build_transformers_sk42(
     custom_helmert: tuple[float, float, float, float, float, float, float]

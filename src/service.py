@@ -49,6 +49,7 @@ from constants import (
 )
 from diagnostics import log_memory_usage, log_thread_status
 from domen import MapSettings
+from elevation_provider import ElevationTileProvider
 from image import (
     assemble_and_crop,
     center_crop,
@@ -68,7 +69,6 @@ from topography import (
     estimate_crop_size_px,
     meters_per_pixel,
 )
-from elevation_provider import ElevationTileProvider
 
 logger = logging.getLogger(__name__)
 
@@ -199,8 +199,6 @@ def _build_save_kwargs(out_path: Path, settings_obj: object) -> dict[str, object
     }
 
 
-
-
 async def _validate_api_and_connectivity(api_key: str, style_id: str) -> None:
     """Проверяет доступность стилей Mapbox (Styles API tiles endpoint)."""
     """
@@ -232,7 +230,7 @@ async def _validate_api_and_connectivity(api_key: str, style_id: str) -> None:
             raise RuntimeError(
                 msg,
             )
-    except (asyncio.TimeoutError, aiohttp.ClientConnectorError, aiohttp.ClientOSError):
+    except (TimeoutError, aiohttp.ClientConnectorError, aiohttp.ClientOSError):
         msg = 'Нет соединения с интернетом или сервер недоступен. Проверьте подключение к сети.'
         raise RuntimeError(msg) from None
 
@@ -259,7 +257,7 @@ async def _validate_terrain_api(api_key: str) -> None:
                 raise RuntimeError(msg)
             msg = f'Ошибка доступа к серверу карт (HTTP {sc}). Повторите попытку позже.'
             raise RuntimeError(msg)
-    except (asyncio.TimeoutError, aiohttp.ClientConnectorError, aiohttp.ClientOSError):
+    except (TimeoutError, aiohttp.ClientConnectorError, aiohttp.ClientOSError):
         msg = 'Нет соединения с интернетом или сервер недоступен. Проверьте подключение к сети.'
         raise RuntimeError(msg) from None
 
@@ -276,9 +274,10 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
 ) -> str:
     """Полный конвейер."""
     import time
+
     overall_start_time = time.monotonic()
     logger.info('=== ОБЩИЙ ТАЙМЕР: старт download_satellite_rectangle ===')
-    
+
     # Handle default settings if not provided
     if settings is None:
         settings = MapSettings(
@@ -398,20 +397,23 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
         half_width = width_m / 2
         half_height = height_m / 2
         map_left = center_x_sk42_gk - half_width
-        map_right = center_x_sk42_gk + half_width  
+        map_right = center_x_sk42_gk + half_width
         map_bottom = center_y_sk42_gk - half_height
         map_top = center_y_sk42_gk + half_height
-        
+
         control_x = settings.control_point_x_sk42_gk
         control_y = settings.control_point_y_sk42_gk
-        
-        if not (map_left <= control_x <= map_right and map_bottom <= control_y <= map_top):
+
+        if not (
+            map_left <= control_x <= map_right and map_bottom <= control_y <= map_top
+        ):
             # Note on naming: map_left/right are along easting (восток), map_bottom/top are along northing (север).
             # Military printout below uses X=northing, Y=easting for clarity.
-            raise ValueError(
-                f"Контрольная точка X(север)={control_y:.0f}, Y(восток)={control_x:.0f} выходит за пределы карты. "
-                f"Границы карты: Y(восток)=[{map_left:.0f}, {map_right:.0f}], X(север)=[{map_bottom:.0f}, {map_top:.0f}]"
+            msg = (
+                f'Контрольная точка X(север)={control_y:.0f}, Y(восток)={control_x:.0f} выходит за пределы карты. '
+                f'Границы карты: Y(восток)=[{map_left:.0f}, {map_right:.0f}], X(север)=[{map_bottom:.0f}, {map_top:.0f}]'
             )
+            raise ValueError(msg)
 
     sp = LiveSpinner('Подготовка: создание трансформеров')
     sp.start()
@@ -426,7 +428,7 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
         logger.info(
             'Используются пользовательские параметры Helmert: '
             f'dx={custom_helmert[0]}, dy={custom_helmert[1]}, dz={custom_helmert[2]}, '
-            f'rx={custom_helmert[3]}\", ry={custom_helmert[4]}\", rz={custom_helmert[5]}\", '
+            f'rx={custom_helmert[3]}", ry={custom_helmert[4]}", rz={custom_helmert[5]}", '
             f'ds={custom_helmert[6]}ppm'
         )
     t_sk42_to_wgs, t_wgs_to_sk42 = build_transformers_sk42(
@@ -455,7 +457,10 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
             cp_lng_wgs, cp_lat_wgs = t_sk42_to_wgs.transform(cp_lng_sk42, cp_lat_sk42)
             logger.info(
                 'Контрольная точка: СК-42 ГК X(север)=%.3f, Y(восток)=%.3f; WGS84 lat=%.8f, lon=%.8f',
-                control_y, control_x, cp_lat_wgs, cp_lng_wgs,
+                control_y,
+                control_x,
+                cp_lat_wgs,
+                cp_lng_wgs,
             )
     except Exception as e:
         logger.warning('Не удалось вывести координаты контрольной точки: %s', e)
@@ -502,7 +507,9 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
     sp.stop('Подготовка: покрытие рассчитано')
 
     tile_label = (
-        'Загрузка Terrain-RGB тайлов' if (is_elev_color or is_elev_contours) else 'Загрузка XYZ-тайлов'
+        'Загрузка Terrain-RGB тайлов'
+        if (is_elev_color or is_elev_contours)
+        else 'Загрузка XYZ-тайлов'
     )
     tile_progress = ConsoleProgress(total=len(tiles), label=tile_label)
     semaphore = asyncio.Semaphore(DOWNLOAD_CONCURRENCY or ASYNC_MAX_CONCURRENCY)
@@ -560,7 +567,9 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
 
                 from constants import ELEVATION_USE_RETINA
 
-                provider_main = ElevationTileProvider(client=client, api_key=api_key, use_retina=ELEVATION_USE_RETINA)
+                provider_main = ElevationTileProvider(
+                    client=client, api_key=api_key, use_retina=ELEVATION_USE_RETINA
+                )
 
                 full_eff_tile_px = 256 * (2 if ELEVATION_USE_RETINA else 1)
 
@@ -604,7 +613,9 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
                         await tile_progress.step(1)
                         return
                     async with semaphore:
-                        img = await provider_main.get_tile_image(zoom, tile_x_world, tile_y_world)
+                        img = await provider_main.get_tile_image(
+                            zoom, tile_x_world, tile_y_world
+                        )
                         dem_tile = decode_terrain_rgb_to_elevation_m(img)
                         # Iterate coarse grid within tile to limit CPU, but feed values into reservoir
                         h = len(dem_tile)
@@ -674,7 +685,9 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
                         await tile_progress.step(1)
                         return
                     async with semaphore:
-                        img = await provider_main.get_tile_image(zoom, tile_x_world, tile_y_world)
+                        img = await provider_main.get_tile_image(
+                            zoom, tile_x_world, tile_y_world
+                        )
                     # Enqueue with metadata for consumers
                     x0, y0, x1, y1 = ov
                     await queue.put((tx, ty, x0, y0, x1, y1, img))
@@ -778,7 +791,9 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
                     asyncio.create_task(producer(pair)) for pair in enumerate(tiles)
                 ]
                 cpu_workers = max(1, min(os.cpu_count() or 2, 4))
-                consumers = [asyncio.create_task(consumer()) for _ in range(cpu_workers)]
+                consumers = [
+                    asyncio.create_task(consumer()) for _ in range(cpu_workers)
+                ]
                 try:
                     await asyncio.gather(*producers)
                     for _ in consumers:
@@ -811,7 +826,9 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
 
                 full_eff_tile_px = 256 * (2 if ELEVATION_USE_RETINA else 1)
 
-                def _tile_overlap_rect(tx: int, ty: int) -> tuple[int, int, int, int] | None:
+                def _tile_overlap_rect(
+                    tx: int, ty: int
+                ) -> tuple[int, int, int, int] | None:
                     base_x = tx * full_eff_tile_px
                     base_y = ty * full_eff_tile_px
                     cx, cy, cw, ch = crop_rect
@@ -839,6 +856,7 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
 
                 # Prepare low-res DEM seed canvas in crop coordinates
                 from constants import CONTOUR_SEED_DOWNSAMPLE as _SEED_DS
+
                 seed_ds = max(2, int(_SEED_DS))
                 cx, cy, cw, ch = crop_rect
                 seed_w = max(1, (cw + seed_ds - 1) // seed_ds)
@@ -847,7 +865,9 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
                 seed_sum: list[list[float]] = [[0.0] * seed_w for _ in range(seed_h)]
                 seed_cnt: list[list[int]] = [[0] * seed_w for _ in range(seed_h)]
 
-                async def fetch_and_sample2(idx_xy: tuple[int, tuple[int, int]]) -> None:
+                async def fetch_and_sample2(
+                    idx_xy: tuple[int, tuple[int, int]],
+                ) -> None:
                     nonlocal seen, samples, tile_count
                     idx, (tile_x_world, tile_y_world) = idx_xy
                     tx, ty = _tx_ty_from_index(idx)
@@ -855,7 +875,9 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
                         await tile_progress.step(1)
                         return
                     async with semaphore:
-                        img = await provider_main.get_tile_image(zoom, tile_x_world, tile_y_world)
+                        img = await provider_main.get_tile_image(
+                            zoom, tile_x_world, tile_y_world
+                        )
                         dem_tile = decode_terrain_rgb_to_elevation_m(img)
                         h = len(dem_tile)
                         w = len(dem_tile[0]) if h else 0
@@ -863,8 +885,12 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
                             # reservoir sampling for min/max
                             step_y = max(1, h // 32)
                             step_x = max(1, w // 32)
-                            off_y = rng.randrange(0, min(step_y, h)) if step_y > 1 else 0
-                            off_x = rng.randrange(0, min(step_x, w)) if step_x > 1 else 0
+                            off_y = (
+                                rng.randrange(0, min(step_y, h)) if step_y > 1 else 0
+                            )
+                            off_x = (
+                                rng.randrange(0, min(step_x, w)) if step_x > 1 else 0
+                            )
                             for ry in range(off_y, h, step_y):
                                 row = dem_tile[ry]
                                 for rx in range(off_x, w, step_x):
@@ -930,7 +956,13 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
                             filled += 1
                         else:
                             out[sx] = (mn + mx) * 0.5  # fallback to mid
-                logger.info('Seed DEM low-res size=%sx%s, filled=%s/%s', seed_w, seed_h, filled, seed_w*seed_h)
+                logger.info(
+                    'Seed DEM low-res size=%sx%s, filled=%s/%s',
+                    seed_w,
+                    seed_h,
+                    filled,
+                    seed_w * seed_h,
+                )
 
                 # Build contour levels
                 import math as _math
@@ -950,17 +982,26 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
                     v = start + k * interval
 
                 # Pass B: draw contours into result image using global low-res seed polylines
-                result = Image.new('RGB', (crop_rect[2], crop_rect[3]), color=(255, 255, 255))
-                tile_progress = ConsoleProgress(total=len(tiles), label='Построение изогипс (проход 2/2)')
+                result = Image.new(
+                    'RGB', (crop_rect[2], crop_rect[3]), color=(255, 255, 255)
+                )
+                tile_progress = ConsoleProgress(
+                    total=len(tiles), label='Построение изогипс (проход 2/2)'
+                )
                 tile_count = 0
 
                 # Build global polylines from seed_dem via marching squares once (in crop pixels / seed ds)
-                def build_seed_polylines() -> dict[int, list[list[tuple[float, float]]]]:
+                def build_seed_polylines() -> dict[
+                    int, list[list[tuple[float, float]]]
+                ]:
                     Hs = seed_h
                     Ws = seed_w
                     polylines_by_level: dict[int, list[list[tuple[float, float]]]] = {}
+
                     # Simple marching squares on seed grid; coordinates will be in seed-cell space
-                    def interp(p0: float, p1: float, v0: float, v1: float, level: float) -> float:
+                    def interp(
+                        p0: float, p1: float, v0: float, v1: float, level: float
+                    ) -> float:
                         if v1 == v0:
                             return p0
                         t = (level - v0) / (v1 - v0)
@@ -981,8 +1022,13 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
                                 v10 = row0[i + 1]
                                 v11 = row1[i + 1]
                                 v01 = row1[i]
-                                mask = (1 if v00 >= level else 0) | ((1 if v10 >= level else 0) << 1) | ((1 if v11 >= level else 0) << 2) | ((1 if v01 >= level else 0) << 3)
-                                if mask == 0 or mask == 15:
+                                mask = (
+                                    (1 if v00 >= level else 0)
+                                    | ((1 if v10 >= level else 0) << 1)
+                                    | ((1 if v11 >= level else 0) << 2)
+                                    | ((1 if v01 >= level else 0) << 3)
+                                )
+                                if mask in {0, 15}:
                                     continue
                                 x = i
                                 y = j
@@ -990,8 +1036,12 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
                                 yr = interp(y, y + 1, v10, v11, level)
                                 xt = interp(x, x + 1, v00, v10, level)
                                 xb = interp(x, x + 1, v01, v11, level)
-                                def add(a: tuple[float,float], b: tuple[float,float]) -> None:
+
+                                def add(
+                                    a: tuple[float, float], b: tuple[float, float]
+                                ) -> None:
                                     segs.append((a, b))
+
                                 if mask in (1, 14):
                                     add((xt, y), (x, yl))
                                 elif mask in (2, 13):
@@ -1008,11 +1058,10 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
                                             add((xt, y), (xb, y + 1))
                                         else:
                                             add((x, yl), (x + 1, yr))
+                                    elif mask == 5:
+                                        add((x, yl), (x + 1, yr))
                                     else:
-                                        if mask == 5:
-                                            add((x, yl), (x + 1, yr))
-                                        else:
-                                            add((xt, y), (xb, y + 1))
+                                        add((xt, y), (xb, y + 1))
                                 elif mask in (6, 9):
                                     add((xt, y), (xb, y + 1))
                                 elif mask in (7, 8):
@@ -1021,40 +1070,42 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
                         polylines: list[list[tuple[float, float]]] = []
                         if segs:
                             from collections import defaultdict
+
                             buckets = defaultdict(list)
-                            def key(p: tuple[float,float]) -> tuple[int,int]:
+
+                            def key(p: tuple[float, float]) -> tuple[int, int]:
                                 # quantize in seed grid to reduce splits
-                                qx = int(round(p[0]*8))
-                                qy = int(round(p[1]*8))
+                                qx = round(p[0] * 8)
+                                qy = round(p[1] * 8)
                                 return qx, qy
+
                             unused = {}
-                            for idx,(a,b) in enumerate(segs):
-                                unused[idx]=True
-                                buckets[key(a)].append((idx,0))
-                                buckets[key(b)].append((idx,1))
+                            for idx, (a, b) in enumerate(segs):
+                                unused[idx] = True
+                                buckets[key(a)].append((idx, 0))
+                                buckets[key(b)].append((idx, 1))
                             for si in range(len(segs)):
                                 if si not in unused:
                                     continue
                                 # start a polyline from seg si
-                                stack = [si]
                                 unused.pop(si, None)
-                                a,b = segs[si]
-                                poly = [a,b]
+                                a, b = segs[si]
+                                poly = [a, b]
                                 end = b
                                 # extend forward
                                 while True:
                                     k = key(end)
                                     found = None
-                                    for idx, endpos in buckets.get(k,[]):
+                                    for idx, endpos in buckets.get(k, []):
                                         if idx in unused:
-                                            aa,bb = segs[idx]
-                                            if endpos==0:
+                                            aa, bb = segs[idx]
+                                            if endpos == 0:
                                                 end = bb
                                                 poly.append(bb)
                                             else:
                                                 end = aa
                                                 poly.append(aa)
-                                            unused.pop(idx,None)
+                                            unused.pop(idx, None)
                                             found = True
                                             break
                                     if not found:
@@ -1065,7 +1116,9 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
 
                 seed_polylines = build_seed_polylines()
 
-                queue: asyncio.Queue[tuple[int, int, int, int, int, int]] = asyncio.Queue(maxsize=4)
+                queue: asyncio.Queue[tuple[int, int, int, int, int, int]] = (
+                    asyncio.Queue(maxsize=4)
+                )
                 paste_lock = asyncio.Lock()
 
                 async def producer2(idx_xy: tuple[int, tuple[int, int]]) -> None:
@@ -1077,7 +1130,7 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
                         await tile_progress.step(1)
                         return
                     # We don't need image in pass B anymore; only metadata for block
-                    await queue.put(((tx, ty, *ov)))
+                    await queue.put((tx, ty, *ov))
 
                 from PIL import ImageDraw
 
@@ -1100,21 +1153,26 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
                             EDGE_PAD = 1
                             pad_w = block_w + 2 * EDGE_PAD
                             pad_h = block_h + 2 * EDGE_PAD
-                            tmp = Image.new('RGBA', (pad_w, pad_h), (0,0,0,0))
+                            tmp = Image.new('RGBA', (pad_w, pad_h), (0, 0, 0, 0))
                             draw = ImageDraw.Draw(tmp)
 
                             # Block bbox in crop coords
                             bx0, by0, bx1, by1 = x0, y0, x1, y1
 
                             # iterate levels and draw clipped polylines
-                            for li, level in enumerate(levels):
-                                is_index = ((li % max(1, int(CONTOUR_INDEX_EVERY))) == 0)
-                                color = CONTOUR_INDEX_COLOR if is_index else CONTOUR_COLOR
-                                width = int(CONTOUR_INDEX_WIDTH if is_index else CONTOUR_WIDTH)
+                            for li, _level in enumerate(levels):
+                                is_index = (li % max(1, int(CONTOUR_INDEX_EVERY))) == 0
+                                color = (
+                                    CONTOUR_INDEX_COLOR if is_index else CONTOUR_COLOR
+                                )
+                                width = int(
+                                    CONTOUR_INDEX_WIDTH if is_index else CONTOUR_WIDTH
+                                )
                                 for poly in seed_polylines.get(li, []):
                                     # map seed coords to crop pixel coords by multiplying by seed_ds and adding crop origin
-                                    pts_crop: list[tuple[float,float]] = [
-                                        (cx + p[0]*seed_ds, cy + p[1]*seed_ds) for p in poly
+                                    pts_crop: list[tuple[float, float]] = [
+                                        (cx + p[0] * seed_ds, cy + p[1] * seed_ds)
+                                        for p in poly
                                     ]
                                     # clip to block bbox (simple bbox clip by skipping if all outside and no crossing)
                                     # quick bbox test
@@ -1122,31 +1180,46 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
                                     maxx = max(p[0] for p in pts_crop)
                                     miny = min(p[1] for p in pts_crop)
                                     maxy = max(p[1] for p in pts_crop)
-                                    if maxx < bx0 or minx > bx1 or maxy < by0 or miny > by1:
+                                    if (
+                                        maxx < bx0
+                                        or minx > bx1
+                                        or maxy < by0
+                                        or miny > by1
+                                    ):
                                         continue
                                     # render as polyline in block-local coords
                                     prev = None
-                                    for px,py in pts_crop:
+                                    for px, py in pts_crop:
                                         lx = px - bx0 + EDGE_PAD
                                         ly = py - by0 + EDGE_PAD
                                         if prev is not None:
-                                            draw.line((prev[0], prev[1], lx, ly), fill=tuple(list(color)+[255]), width=width)
+                                            draw.line(
+                                                (prev[0], prev[1], lx, ly),
+                                                fill=(*list(color), 255),
+                                                width=width,
+                                            )
                                         prev = (lx, ly)
 
-                            composed = tmp.crop((1,1,1+block_w,1+block_h))
+                            composed = tmp.crop((1, 1, 1 + block_w, 1 + block_h))
                             async with paste_lock:
                                 result.paste(composed, (dx0, dy0), composed)
                         finally:
                             queue.task_done()
                             tile_count += 1
                             if tile_count % 50 == 0:
-                                log_memory_usage(f'pass2(contours) after {tile_count} tiles')
+                                log_memory_usage(
+                                    f'pass2(contours) after {tile_count} tiles'
+                                )
                             await tile_progress.step(1)
 
                 # Launch producers and consumers with guarded cancellation
-                producers = [asyncio.create_task(producer2(pair)) for pair in enumerate(tiles)]
+                producers = [
+                    asyncio.create_task(producer2(pair)) for pair in enumerate(tiles)
+                ]
                 cpu_workers = max(1, min(os.cpu_count() or 2, 4))
-                consumers = [asyncio.create_task(consumer2()) for _ in range(cpu_workers)]
+                consumers = [
+                    asyncio.create_task(consumer2()) for _ in range(cpu_workers)
+                ]
                 try:
                     await asyncio.gather(*producers)
                     for _ in consumers:
@@ -1171,20 +1244,29 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
                 except Exception:
                     _CL_EN = False
                 if is_elev_contours and _CL_EN:
-                    def _draw_contour_labels(img, seed_polylines, levels, crop_rect, seed_ds, mpp, dry_run=False):
+
+                    def _draw_contour_labels(
+                        img,
+                        seed_polylines,
+                        levels,
+                        crop_rect,
+                        seed_ds,
+                        mpp,
+                        dry_run=False,
+                    ):
                         from PIL import Image, ImageDraw, ImageFont
+
                         from constants import (
                             CONTOUR_INDEX_EVERY,
-                            CONTOUR_LABELS_ENABLED,
                             CONTOUR_LABEL_BG_PADDING,
                             CONTOUR_LABEL_BG_RGBA,
                             CONTOUR_LABEL_EDGE_MARGIN_PX,
                             CONTOUR_LABEL_FONT_BOLD,
+                            CONTOUR_LABEL_FONT_KM,
+                            CONTOUR_LABEL_FONT_MAX_PX,
+                            CONTOUR_LABEL_FONT_MIN_PX,
                             CONTOUR_LABEL_FONT_PATH,
                             CONTOUR_LABEL_FONT_SIZE,
-                            CONTOUR_LABEL_FONT_KM,
-                            CONTOUR_LABEL_FONT_MIN_PX,
-                            CONTOUR_LABEL_FONT_MAX_PX,
                             CONTOUR_LABEL_FORMAT,
                             CONTOUR_LABEL_INDEX_ONLY,
                             CONTOUR_LABEL_MIN_SEG_LEN_PX,
@@ -1192,29 +1274,43 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
                             CONTOUR_LABEL_OUTLINE_WIDTH,
                             CONTOUR_LABEL_SPACING_PX,
                             CONTOUR_LABEL_TEXT_COLOR,
+                            CONTOUR_LABELS_ENABLED,
                             GRID_FONT_PATH,
                             GRID_FONT_PATH_BOLD,
                         )
+
                         if not CONTOUR_LABELS_ENABLED:
                             return []
                         W, H = img.size
                         # font (will be chosen dynamically based on mpp)
-                        fp = CONTOUR_LABEL_FONT_PATH or (GRID_FONT_PATH_BOLD if CONTOUR_LABEL_FONT_BOLD else GRID_FONT_PATH)
-                        name = 'DejaVuSans-Bold.ttf' if CONTOUR_LABEL_FONT_BOLD else 'DejaVuSans.ttf'
+                        fp = CONTOUR_LABEL_FONT_PATH or (
+                            GRID_FONT_PATH_BOLD
+                            if CONTOUR_LABEL_FONT_BOLD
+                            else GRID_FONT_PATH
+                        )
+                        name = (
+                            'DejaVuSans-Bold.ttf'
+                            if CONTOUR_LABEL_FONT_BOLD
+                            else 'DejaVuSans.ttf'
+                        )
                         font_cache: dict[int, ImageFont.FreeTypeFont] = {}
+
                         def get_font_px() -> int:
                             try:
-                                px = int(round((CONTOUR_LABEL_FONT_KM * 1000.0) / max(1e-9, mpp)))
+                                px = round(
+                                    (CONTOUR_LABEL_FONT_KM * 1000.0) / max(1e-9, mpp)
+                                )
                             except Exception:
                                 px = CONTOUR_LABEL_FONT_SIZE
-                            
+
                             # Применяем ограничения
                             if px < CONTOUR_LABEL_FONT_MIN_PX:
                                 px = int(CONTOUR_LABEL_FONT_MIN_PX)
                             if px > CONTOUR_LABEL_FONT_MAX_PX:
                                 px = int(CONTOUR_LABEL_FONT_MAX_PX)
-                            
+
                             return px
+
                         def get_font(is_index: bool):
                             size = get_font_px()
                             if size in font_cache:
@@ -1228,19 +1324,28 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
                                 f = ImageFont.load_default()
                             font_cache[size] = f
                             return f
+
                         placed = []  # bboxes
                         import math
+
                         def poly_to_crop(poly):
                             # seed_polylines are in seed grid coordinates starting at (0,0) of the crop
                             # Convert to image pixel coords by scaling only
-                            return [(x*seed_ds, y*seed_ds) for (x, y) in poly]
-                        def intersects(a, b):
-                            ax0, ay0, ax1, ay1 = a; bx0, by0, bx1, by1 = b
-                            return not (ax1 <= bx0 or bx1 <= ax0 or ay1 <= by0 or by1 <= ay0)
+                            return [(x * seed_ds, y * seed_ds) for (x, y) in poly]
+
+                        def intersects(a, b) -> bool:
+                            ax0, ay0, ax1, ay1 = a
+                            bx0, by0, bx1, by1 = b
+                            return not (
+                                ax1 <= bx0 or bx1 <= ax0 or ay1 <= by0 or by1 <= ay0
+                            )
+
                         for li, level in enumerate(levels):
-                            if CONTOUR_LABEL_INDEX_ONLY and (li % max(1, int(CONTOUR_INDEX_EVERY)) != 0):
+                            if CONTOUR_LABEL_INDEX_ONLY and (
+                                li % max(1, int(CONTOUR_INDEX_EVERY)) != 0
+                            ):
                                 continue
-                            is_index_line = (li % max(1, int(CONTOUR_INDEX_EVERY)) == 0)
+                            is_index_line = li % max(1, int(CONTOUR_INDEX_EVERY)) == 0
                             text = CONTOUR_LABEL_FORMAT.format(level)
                             for poly in seed_polylines.get(li, []):
                                 pts = poly_to_crop(poly)
@@ -1250,23 +1355,32 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
                                 segL = []
                                 total = 0.0
                                 for i in range(1, len(pts)):
-                                    dx = pts[i][0]-pts[i-1][0]; dy = pts[i][1]-pts[i-1][1]
+                                    dx = pts[i][0] - pts[i - 1][0]
+                                    dy = pts[i][1] - pts[i - 1][1]
                                     L = math.hypot(dx, dy)
-                                    segL.append(L); total += L
-                                if total < max(CONTOUR_LABEL_MIN_SEG_LEN_PX, CONTOUR_LABEL_SPACING_PX*0.8):
+                                    segL.append(L)
+                                    total += L
+                                if total < max(
+                                    CONTOUR_LABEL_MIN_SEG_LEN_PX,
+                                    CONTOUR_LABEL_SPACING_PX * 0.8,
+                                ):
                                     continue
                                 target = CONTOUR_LABEL_SPACING_PX
                                 while target < total:
-                                    acc = 0.0; idx = -1
+                                    acc = 0.0
+                                    idx = -1
                                     for i, L in enumerate(segL):
                                         if acc + L >= target:
-                                            idx = i; break
+                                            idx = i
+                                            break
                                         acc += L
                                     if idx < 0:
                                         break
                                     t = (target - acc) / max(1e-9, segL[idx])
-                                    x0p, y0p = pts[idx]; x1p, y1p = pts[idx+1]
-                                    px = x0p + (x1p-x0p)*t; py = y0p + (y1p-y0p)*t
+                                    x0p, y0p = pts[idx]
+                                    x1p, y1p = pts[idx + 1]
+                                    px = x0p + (x1p - x0p) * t
+                                    py = y0p + (y1p - y0p) * t
                                     # Compute angle for image coordinates (y increases downward) and normalize to keep text upright
                                     dx = x1p - x0p
                                     dy = y1p - y0p
@@ -1275,32 +1389,65 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
                                         ang += 180
                                     elif ang > 90:
                                         ang -= 180
-                                    if not (CONTOUR_LABEL_EDGE_MARGIN_PX <= px <= W-CONTOUR_LABEL_EDGE_MARGIN_PX and CONTOUR_LABEL_EDGE_MARGIN_PX <= py <= H-CONTOUR_LABEL_EDGE_MARGIN_PX):
-                                        target += CONTOUR_LABEL_SPACING_PX; continue
-                                    tmp = Image.new('RGBA', (1,1), (0,0,0,0))
+                                    if not (
+                                        CONTOUR_LABEL_EDGE_MARGIN_PX
+                                        <= px
+                                        <= W - CONTOUR_LABEL_EDGE_MARGIN_PX
+                                        and CONTOUR_LABEL_EDGE_MARGIN_PX
+                                        <= py
+                                        <= H - CONTOUR_LABEL_EDGE_MARGIN_PX
+                                    ):
+                                        target += CONTOUR_LABEL_SPACING_PX
+                                        continue
+                                    tmp = Image.new('RGBA', (1, 1), (0, 0, 0, 0))
                                     td = ImageDraw.Draw(tmp)
                                     font = get_font(is_index_line)
-                                    tw, th = td.textbbox((0,0), text, font=font)[2:]
+                                    tw, th = td.textbbox((0, 0), text, font=font)[2:]
                                     pad = int(CONTOUR_LABEL_BG_PADDING)
-                                    bw, bh = tw + 2*pad, th + 2*pad
-                                    box = Image.new('RGBA', (bw, bh), (0,0,0,0))
+                                    bw, bh = tw + 2 * pad, th + 2 * pad
+                                    box = Image.new('RGBA', (bw, bh), (0, 0, 0, 0))
                                     bd = ImageDraw.Draw(box)
                                     if CONTOUR_LABEL_BG_RGBA:
-                                        bd.rectangle((0,0,bw-1,bh-1), fill=CONTOUR_LABEL_BG_RGBA)
+                                        bd.rectangle(
+                                            (0, 0, bw - 1, bh - 1),
+                                            fill=CONTOUR_LABEL_BG_RGBA,
+                                        )
                                     ow = max(0, int(CONTOUR_LABEL_OUTLINE_WIDTH))
                                     if ow > 0:
                                         for ox in (-ow, 0, ow):
                                             for oy in (-ow, 0, ow):
-                                                if ox == 0 and oy == 0: continue
-                                                bd.text((pad+ox, pad+oy), text, font=font, fill=CONTOUR_LABEL_OUTLINE_COLOR)
-                                    bd.text((pad, pad), text, font=font, fill=CONTOUR_LABEL_TEXT_COLOR)
-                                    rot = box.rotate(ang, expand=True, resample=Image.BICUBIC)
+                                                if ox == 0 and oy == 0:
+                                                    continue
+                                                bd.text(
+                                                    (pad + ox, pad + oy),
+                                                    text,
+                                                    font=font,
+                                                    fill=CONTOUR_LABEL_OUTLINE_COLOR,
+                                                )
+                                    bd.text(
+                                        (pad, pad),
+                                        text,
+                                        font=font,
+                                        fill=CONTOUR_LABEL_TEXT_COLOR,
+                                    )
+                                    rot = box.rotate(
+                                        ang, expand=True, resample=Image.BICUBIC
+                                    )
                                     rw, rh = rot.size
-                                    x0b = int(round(px - rw/2)); y0b = int(round(py - rh/2))
-                                    x1b = x0b + rw; y1b = y0b + rh
+                                    x0b = round(px - rw / 2)
+                                    y0b = round(py - rh / 2)
+                                    x1b = x0b + rw
+                                    y1b = y0b + rh
                                     bbox = (x0b, y0b, x1b, y1b)
-                                    if x0b < 0 or y0b < 0 or x1b > W or y1b > H or any(intersects(bbox, bb) for bb in placed):
-                                        target += CONTOUR_LABEL_SPACING_PX; continue
+                                    if (
+                                        x0b < 0
+                                        or y0b < 0
+                                        or x1b > W
+                                        or y1b > H
+                                        or any(intersects(bbox, bb) for bb in placed)
+                                    ):
+                                        target += CONTOUR_LABEL_SPACING_PX
+                                        continue
                                     if not dry_run:
                                         if img.mode == 'RGBA':
                                             img.alpha_composite(rot, dest=(x0b, y0b))
@@ -1309,19 +1456,37 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
                                     placed.append(bbox)
                                     target += CONTOUR_LABEL_SPACING_PX
                         return placed
+
                     try:
                         import math
+
                         from constants import EARTH_RADIUS_M, TILE_SIZE
+
                         lat_rad = math.radians(center_lat_wgs)
                         # Web Mercator meters-per-pixel at given zoom and latitude
-                        mpp = (math.cos(lat_rad) * 2 * math.pi * EARTH_RADIUS_M) / (TILE_SIZE * (2 ** zoom))
+                        mpp = (math.cos(lat_rad) * 2 * math.pi * EARTH_RADIUS_M) / (
+                            TILE_SIZE * (2**zoom)
+                        )
                         # Первый проход: получаем позиции подписей БЕЗ размещения на изображении
-                        label_bboxes = _draw_contour_labels(result, seed_polylines, levels, crop_rect, seed_ds, mpp, dry_run=True)
-                        
+                        label_bboxes = _draw_contour_labels(
+                            result,
+                            seed_polylines,
+                            levels,
+                            crop_rect,
+                            seed_ds,
+                            mpp,
+                            dry_run=True,
+                        )
+
                         # Создаем разрывы линий контуров в местах подписей
-                        from constants import CONTOUR_LABEL_GAP_ENABLED, CONTOUR_LABEL_GAP_PADDING
+                        from constants import (
+                            CONTOUR_LABEL_GAP_ENABLED,
+                            CONTOUR_LABEL_GAP_PADDING,
+                        )
+
                         if CONTOUR_LABEL_GAP_ENABLED and label_bboxes:
                             from PIL import ImageDraw
+
                             draw = ImageDraw.Draw(result)
                             gap_padding = int(CONTOUR_LABEL_GAP_PADDING)
                             for bbox in label_bboxes:
@@ -1331,13 +1496,21 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
                                     max(0, x0 - gap_padding),
                                     max(0, y0 - gap_padding),
                                     min(result.width, x1 + gap_padding),
-                                    min(result.height, y1 + gap_padding)
+                                    min(result.height, y1 + gap_padding),
                                 )
                                 # "Стираем" контуры в этой области (заливаем белым)
                                 draw.rectangle(gap_area, fill=(255, 255, 255))
-                        
+
                         # Второй проход: размещаем подписи поверх созданных разрывов
-                        _draw_contour_labels(result, seed_polylines, levels, crop_rect, seed_ds, mpp, dry_run=False)
+                        _draw_contour_labels(
+                            result,
+                            seed_polylines,
+                            levels,
+                            crop_rect,
+                            seed_ds,
+                            mpp,
+                            dry_run=False,
+                        )
                     except Exception as e:
                         logger.warning('Не удалось нанести подписи изогипс: %s', e)
             else:
@@ -1403,6 +1576,7 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
             # Быстрая проверка доступности Terrain-RGB перед началом фазы оверлея
             await _validate_terrain_api(api_key)
             from constants import ELEVATION_USE_RETINA as _ELEV_RETINA
+
             # Строим Terrain-RGB оверлей изолиний независимо, затем масштабируем к размеру основы
             eff_scale_cont = effective_scale_for_xyz(256, use_retina=_ELEV_RETINA)
             base_pad = round(min(target_w_px, target_h_px) * ROTATION_PAD_RATIO)
@@ -1422,15 +1596,28 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
             session_ctx2 = _make_http_session(cache_dir_resolved2)
             from constants import (
                 CONTOUR_COLOR as _C_COLOR,
+            )
+            from constants import (
                 CONTOUR_INDEX_COLOR as _C_IDX_COLOR,
+            )
+            from constants import (
                 CONTOUR_INDEX_EVERY as _C_IDX_EVERY,
+            )
+            from constants import (
                 CONTOUR_INDEX_WIDTH as _C_IDX_WIDTH,
+            )
+            from constants import (
                 CONTOUR_INTERVAL_M as _C_INTERVAL,
+            )
+            from constants import (
                 CONTOUR_WIDTH as _C_WIDTH,
             )
+
             full_eff_tile_px = 256 * (2 if _ELEV_RETINA else 1)
 
-            def _tile_overlap_rect(tx: int, ty: int) -> tuple[int, int, int, int] | None:
+            def _tile_overlap_rect(
+                tx: int, ty: int
+            ) -> tuple[int, int, int, int] | None:
                 base_x = tx * full_eff_tile_px
                 base_y = ty * full_eff_tile_px
                 cx, cy, cw, ch = crop_rect_c
@@ -1452,9 +1639,11 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
             samples: list[float] = []
             seen = 0
             import random
+
             rng = random.Random(42)  # noqa: S311
 
             from constants import CONTOUR_SEED_DOWNSAMPLE as _SEED_DS
+
             seed_ds = max(2, int(_SEED_DS))
             cx_c, cy_c, cw_c, ch_c = crop_rect_c
             seed_w = max(1, (cw_c + seed_ds - 1) // seed_ds)
@@ -1463,9 +1652,13 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
             seed_cnt: list[list[int]] = [[0] * seed_w for _ in range(seed_h)]
 
             # Ограничитель параллелизма для overlay-запросов
-            overlay_semaphore = asyncio.Semaphore(DOWNLOAD_CONCURRENCY or ASYNC_MAX_CONCURRENCY)
+            overlay_semaphore = asyncio.Semaphore(
+                DOWNLOAD_CONCURRENCY or ASYNC_MAX_CONCURRENCY
+            )
 
-            async def fetch_and_sample_overlay(idx_xy: tuple[int, tuple[int, int]], client2: aiohttp.ClientSession) -> None:
+            async def fetch_and_sample_overlay(
+                idx_xy: tuple[int, tuple[int, int]], client2: aiohttp.ClientSession
+            ) -> None:
                 nonlocal seen, samples
                 try:
                     idx, (tile_x_world, tile_y_world) = idx_xy
@@ -1473,7 +1666,9 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
                     if _tile_overlap_rect(tx, ty) is None:
                         return
                     async with overlay_semaphore:
-                        img = await provider2.get_tile_image(zoom, tile_x_world, tile_y_world)
+                        img = await provider2.get_tile_image(
+                            zoom, tile_x_world, tile_y_world
+                        )
                     dem_tile = decode_terrain_rgb_to_elevation_m(img)
                     h = len(dem_tile)
                     w = len(dem_tile[0]) if h else 0
@@ -1521,11 +1716,18 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
 
             # Прогресс-индикатор для overlay-прохода A
             logger.info('Изолинии: старт прохода 1/2')
-            overlay_progress_a = ConsoleProgress(total=len(tiles_c), label='Изолинии: загрузка Terrain-RGB (проход 1/2)')
+            overlay_progress_a = ConsoleProgress(
+                total=len(tiles_c), label='Изолинии: загрузка Terrain-RGB (проход 1/2)'
+            )
             async with session_ctx2 as client2:
-                provider2 = ElevationTileProvider(client=client2, api_key=api_key, use_retina=_ELEV_RETINA)
+                provider2 = ElevationTileProvider(
+                    client=client2, api_key=api_key, use_retina=_ELEV_RETINA
+                )
                 await asyncio.gather(
-                    *[fetch_and_sample_overlay(pair, client2) for pair in enumerate(tiles_c)],
+                    *[
+                        fetch_and_sample_overlay(pair, client2)
+                        for pair in enumerate(tiles_c)
+                    ],
                     return_exceptions=True,
                 )
             overlay_progress_a.close()
@@ -1533,12 +1735,17 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
             try:
                 tiles_len = len(tiles_c)
                 samples_len = len(samples)
-                logger.info('Изолинии: завершён проход 1/2: tiles=%d, samples=%d', tiles_len, samples_len)
+                logger.info(
+                    'Изолинии: завершён проход 1/2: tiles=%d, samples=%d',
+                    tiles_len,
+                    samples_len,
+                )
             except Exception:
                 logger.info('Изолинии: завершён проход 1/2')
-            
+
             if samples:
-                mn = min(samples); mx = max(samples)
+                mn = min(samples)
+                mx = max(samples)
             else:
                 mn, mx = 0.0, 1.0
             if mx < mn:
@@ -1546,84 +1753,136 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
 
             seed_dem: list[list[float]] = [[0.0] * seed_w for _ in range(seed_h)]
             for sy in range(seed_h):
-                row_s = seed_sum[sy]; row_c = seed_cnt[sy]; out = seed_dem[sy]
+                row_s = seed_sum[sy]
+                row_c = seed_cnt[sy]
+                out = seed_dem[sy]
                 for sx in range(seed_w):
                     c = row_c[sx]
                     out[sx] = (row_s[sx] / float(c)) if c > 0 else (mn + mx) * 0.5
 
             import math as _math
+
             interval = float(_C_INTERVAL) if _C_INTERVAL > 0 else 25.0
             start = _math.floor(mn / interval) * interval
             end = _math.ceil(mx / interval) * interval
             levels: list[float] = []
-            k = 0; v = start
+            k = 0
+            v = start
             while v <= end:
-                levels.append(v); k += 1; v = start + k * interval
+                levels.append(v)
+                k += 1
+                v = start + k * interval
 
             def build_seed_polylines() -> dict[int, list[list[tuple[float, float]]]]:
-                Hs = seed_h; Ws = seed_w
+                Hs = seed_h
+                Ws = seed_w
                 polylines_by_level: dict[int, list[list[tuple[float, float]]]] = {}
-                def interp(p0: float, p1: float, v0: float, v1: float, level: float) -> float:
-                    if v1 == v0: return p0
+
+                def interp(
+                    p0: float, p1: float, v0: float, v1: float, level: float
+                ) -> float:
+                    if v1 == v0:
+                        return p0
                     t = (level - v0) / (v1 - v0)
-                    if t < 0.0: t = 0.0
-                    elif t > 1.0: t = 1.0
+                    if t < 0.0:
+                        t = 0.0
+                    elif t > 1.0:
+                        t = 1.0
                     return p0 + (p1 - p0) * t
+
                 for li, level in enumerate(levels):
-                    segs: list[tuple[tuple[float, float], tuple[float, float]]]=[]
+                    segs: list[tuple[tuple[float, float], tuple[float, float]]] = []
                     for j in range(Hs - 1):
-                        row0 = seed_dem[j]; row1 = seed_dem[j + 1]
+                        row0 = seed_dem[j]
+                        row1 = seed_dem[j + 1]
                         for i in range(Ws - 1):
-                            v00 = row0[i]; v10 = row0[i + 1]; v11 = row1[i + 1]; v01 = row1[i]
-                            mask = (1 if v00 >= level else 0) | ((1 if v10 >= level else 0) << 1) | ((1 if v11 >= level else 0) << 2) | ((1 if v01 >= level else 0) << 3)
-                            if mask == 0 or mask == 15: continue
-                            x = i; y = j
+                            v00 = row0[i]
+                            v10 = row0[i + 1]
+                            v11 = row1[i + 1]
+                            v01 = row1[i]
+                            mask = (
+                                (1 if v00 >= level else 0)
+                                | ((1 if v10 >= level else 0) << 1)
+                                | ((1 if v11 >= level else 0) << 2)
+                                | ((1 if v01 >= level else 0) << 3)
+                            )
+                            if mask in {0, 15}:
+                                continue
+                            x = i
+                            y = j
                             yl = interp(y, y + 1, v00, v01, level)
                             yr = interp(y, y + 1, v10, v11, level)
                             xt = interp(x, x + 1, v00, v10, level)
                             xb = interp(x, x + 1, v01, v11, level)
-                            def add(a: tuple[float,float], b: tuple[float,float]) -> None:
+
+                            def add(
+                                a: tuple[float, float], b: tuple[float, float]
+                            ) -> None:
                                 segs.append((a, b))
-                            if mask in (1, 14): add((xt, y), (x, yl))
-                            elif mask in (2, 13): add((xt, y), (x + 1, yr))
-                            elif mask in (3, 12): add((x, yl), (x + 1, yr))
-                            elif mask in (4, 11): add((x + 1, yr), (xb, y + 1))
+
+                            if mask in (1, 14):
+                                add((xt, y), (x, yl))
+                            elif mask in (2, 13):
+                                add((xt, y), (x + 1, yr))
+                            elif mask in (3, 12):
+                                add((x, yl), (x + 1, yr))
+                            elif mask in (4, 11):
+                                add((x + 1, yr), (xb, y + 1))
                             elif mask in (5, 10):
                                 center = (v00 + v10 + v11 + v01) * 0.25
                                 choose_diag = center >= level
                                 if choose_diag:
-                                    if mask == 5: add((xt, y), (xb, y + 1))
-                                    else: add((x, yl), (x + 1, yr))
+                                    if mask == 5:
+                                        add((xt, y), (xb, y + 1))
+                                    else:
+                                        add((x, yl), (x + 1, yr))
+                                elif mask == 5:
+                                    add((x, yl), (x + 1, yr))
                                 else:
-                                    if mask == 5: add((x, yl), (x + 1, yr))
-                                    else: add((xt, y), (xb, y + 1))
-                            elif mask in (6, 9): add((xt, y), (xb, y + 1))
-                            elif mask in (7, 8): add((x, yl), (xb, y + 1))
-                    polylines: list[list[tuple[float, float]]]=[]
+                                    add((xt, y), (xb, y + 1))
+                            elif mask in (6, 9):
+                                add((xt, y), (xb, y + 1))
+                            elif mask in (7, 8):
+                                add((x, yl), (xb, y + 1))
+                    polylines: list[list[tuple[float, float]]] = []
                     if segs:
                         from collections import defaultdict
+
                         buckets = defaultdict(list)
-                        def key(p: tuple[float,float]) -> tuple[int,int]:
-                            qx = int(round(p[0]*8)); qy = int(round(p[1]*8)); return qx, qy
+
+                        def key(p: tuple[float, float]) -> tuple[int, int]:
+                            qx = round(p[0] * 8)
+                            qy = round(p[1] * 8)
+                            return qx, qy
+
                         unused = {}
-                        for idx,(a,b) in enumerate(segs):
-                            unused[idx]=True
-                            buckets[key(a)].append((idx,0))
-                            buckets[key(b)].append((idx,1))
+                        for idx, (a, b) in enumerate(segs):
+                            unused[idx] = True
+                            buckets[key(a)].append((idx, 0))
+                            buckets[key(b)].append((idx, 1))
                         for si in range(len(segs)):
-                            if si not in unused: continue
-                            a,b = segs[si]; poly=[a,b]; end=b
+                            if si not in unused:
+                                continue
+                            a, b = segs[si]
+                            poly = [a, b]
+                            end = b
                             while True:
-                                k = key(end); found=None
-                                for idx,endpos in buckets.get(k,[]):
+                                k = key(end)
+                                found = None
+                                for idx, endpos in buckets.get(k, []):
                                     if idx in unused:
-                                        aa,bb = segs[idx]
-                                        if endpos==0:
-                                            end=bb; poly.append(bb)
+                                        aa, bb = segs[idx]
+                                        if endpos == 0:
+                                            end = bb
+                                            poly.append(bb)
                                         else:
-                                            end=aa; poly.append(aa)
-                                        unused.pop(idx,None); found=True; break
-                                if not found: break
+                                            end = aa
+                                            poly.append(aa)
+                                        unused.pop(idx, None)
+                                        found = True
+                                        break
+                                if not found:
+                                    break
                             polylines.append(poly)
                     polylines_by_level[li] = polylines
                 return polylines_by_level
@@ -1632,38 +1891,47 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
 
             # Draw overlay RGBA with transparent background
             from PIL import ImageDraw
-            overlay = Image.new('RGBA', (crop_rect_c[2], crop_rect_c[3]), (0,0,0,0))
-            overlay_progress_b = ConsoleProgress(total=len(levels), label='Изолинии: построение и рисование (проход 2/2)')
+
+            overlay = Image.new('RGBA', (crop_rect_c[2], crop_rect_c[3]), (0, 0, 0, 0))
+            overlay_progress_b = ConsoleProgress(
+                total=len(levels), label='Изолинии: построение и рисование (проход 2/2)'
+            )
             logger.info('Изолинии: старт прохода 2/2: levels=%d', len(levels))
-            for li, level in enumerate(levels):
-                is_index = ((li % max(1, int(_C_IDX_EVERY))) == 0)
+            for li, _level in enumerate(levels):
+                is_index = (li % max(1, int(_C_IDX_EVERY))) == 0
                 color = _C_IDX_COLOR if is_index else _C_COLOR
                 width = int(_C_IDX_WIDTH if is_index else _C_WIDTH)
                 for poly in seed_polylines.get(li, []):
                     # draw full polylines; block optimization skipped for simplicity
-                    pts_crop = [(p[0]*seed_ds, p[1]*seed_ds) for p in poly]
+                    pts_crop = [(p[0] * seed_ds, p[1] * seed_ds) for p in poly]
                     if len(pts_crop) < 2:
                         continue
                     draw = ImageDraw.Draw(overlay)
                     for i in range(1, len(pts_crop)):
-                        x0, y0 = pts_crop[i-1]; x1, y1 = pts_crop[i]
-                        draw.line((x0, y0, x1, y1), fill=tuple(list(color)+[255]), width=width)
+                        x0, y0 = pts_crop[i - 1]
+                        x1, y1 = pts_crop[i]
+                        draw.line(
+                            (x0, y0, x1, y1), fill=(*list(color), 255), width=width
+                        )
                 # step progress per level
-                try:
+                with contextlib.suppress(Exception):
                     overlay_progress_b.step_sync(1)
-                except Exception:
-                    pass
                 # periodic diagnostics every 5 levels
                 try:
                     if (li + 1) % 5 == 0 or (li + 1) == len(levels):
-                        log_memory_usage(f'Contours pass 2/2 after level {li+1}/{len(levels)}')
-                        log_thread_status(f'Contours pass 2/2 after level {li+1}/{len(levels)}')
+                        log_memory_usage(
+                            f'Contours pass 2/2 after level {li + 1}/{len(levels)}'
+                        )
+                        log_thread_status(
+                            f'Contours pass 2/2 after level {li + 1}/{len(levels)}'
+                        )
                 except Exception:
                     pass
             logger.info('Изолинии: завершён проход 2/2')
 
             # Labels on overlay
             import time
+
             labels_start_time = time.monotonic()
             logger.info('Изолинии: подписи (оверлей) — старт')
             log_memory_usage('before overlay labels')
@@ -1674,25 +1942,31 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
             if _CL_EN:
                 try:
                     # прогресс для подписей можно отразить тем же лейблом
-                    from constants import EARTH_RADIUS_M, TILE_SIZE
                     import math
+
+                    from constants import EARTH_RADIUS_M, TILE_SIZE
+
                     lat_rad = math.radians(center_lat_wgs)
-                    mpp = (math.cos(lat_rad) * 2 * math.pi * EARTH_RADIUS_M) / (TILE_SIZE * (2 ** zoom))
+                    mpp = (math.cos(lat_rad) * 2 * math.pi * EARTH_RADIUS_M) / (
+                        TILE_SIZE * (2**zoom)
+                    )
+
                     # Reuse simplified overlay label drawer similar to above
-                    def _draw_contour_labels_overlay(img, seed_polylines, levels, seed_ds, mpp, dry_run=False):
+                    def _draw_contour_labels_overlay(
+                        img, seed_polylines, levels, seed_ds, mpp, dry_run=False
+                    ):
                         from PIL import Image, ImageDraw, ImageFont
+
                         from constants import (
                             CONTOUR_INDEX_EVERY,
-                            CONTOUR_LABELS_ENABLED,
                             CONTOUR_LABEL_BG_PADDING,
                             CONTOUR_LABEL_BG_RGBA,
-                            CONTOUR_LABEL_EDGE_MARGIN_PX,
                             CONTOUR_LABEL_FONT_BOLD,
+                            CONTOUR_LABEL_FONT_KM,
+                            CONTOUR_LABEL_FONT_MAX_PX,
+                            CONTOUR_LABEL_FONT_MIN_PX,
                             CONTOUR_LABEL_FONT_PATH,
                             CONTOUR_LABEL_FONT_SIZE,
-                            CONTOUR_LABEL_FONT_KM,
-                            CONTOUR_LABEL_FONT_MIN_PX,
-                            CONTOUR_LABEL_FONT_MAX_PX,
                             CONTOUR_LABEL_FORMAT,
                             CONTOUR_LABEL_INDEX_ONLY,
                             CONTOUR_LABEL_MIN_SEG_LEN_PX,
@@ -1700,24 +1974,44 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
                             CONTOUR_LABEL_OUTLINE_WIDTH,
                             CONTOUR_LABEL_SPACING_PX,
                             CONTOUR_LABEL_TEXT_COLOR,
+                            CONTOUR_LABELS_ENABLED,
                             GRID_FONT_PATH,
                             GRID_FONT_PATH_BOLD,
                         )
+
                         if not CONTOUR_LABELS_ENABLED:
                             return []
-                        logger.info('Подписи overlay: старт обработки %d уровней', len(levels))
+                        logger.info(
+                            'Подписи overlay: старт обработки %d уровней', len(levels)
+                        )
                         W, H = img.size
-                        fp = CONTOUR_LABEL_FONT_PATH or (GRID_FONT_PATH_BOLD if CONTOUR_LABEL_FONT_BOLD else GRID_FONT_PATH)
-                        name = 'DejaVuSans-Bold.ttf' if CONTOUR_LABEL_FONT_BOLD else 'DejaVuSans.ttf'
+                        fp = CONTOUR_LABEL_FONT_PATH or (
+                            GRID_FONT_PATH_BOLD
+                            if CONTOUR_LABEL_FONT_BOLD
+                            else GRID_FONT_PATH
+                        )
+                        name = (
+                            'DejaVuSans-Bold.ttf'
+                            if CONTOUR_LABEL_FONT_BOLD
+                            else 'DejaVuSans.ttf'
+                        )
                         font_cache = {}
                         total_labels = 0
+
                         def get_font_px() -> int:
                             try:
-                                px = int(round((CONTOUR_LABEL_FONT_KM * 1000.0) / max(1e-9, mpp)))
+                                px = round(
+                                    (CONTOUR_LABEL_FONT_KM * 1000.0) / max(1e-9, mpp)
+                                )
                             except Exception:
                                 px = CONTOUR_LABEL_FONT_SIZE
-                            final_px = int(max(CONTOUR_LABEL_FONT_MIN_PX, min(CONTOUR_LABEL_FONT_MAX_PX, px)))
-                            return final_px
+                            return int(
+                                max(
+                                    CONTOUR_LABEL_FONT_MIN_PX,
+                                    min(CONTOUR_LABEL_FONT_MAX_PX, px),
+                                )
+                            )
+
                         def get_font(is_index: bool):
                             size = get_font_px()
                             if size in font_cache:
@@ -1731,93 +2025,155 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
                                 f = ImageFont.load_default()
                             font_cache[size] = f
                             return f
+
                         placed = []
                         import math
+
                         def poly_to_crop(poly):
-                            return [(x*seed_ds, y*seed_ds) for (x, y) in poly]
-                        def intersects(a,b):
-                            ax0, ay0, ax1, ay1 = a; bx0, by0, bx1, by1 = b
-                            return not (ax1 <= bx0 or bx1 <= ax0 or ay1 <= by0 or by1 <= ay0)
+                            return [(x * seed_ds, y * seed_ds) for (x, y) in poly]
+
+                        def intersects(a, b) -> bool:
+                            ax0, ay0, ax1, ay1 = a
+                            bx0, by0, bx1, by1 = b
+                            return not (
+                                ax1 <= bx0 or bx1 <= ax0 or ay1 <= by0 or by1 <= ay0
+                            )
+
                         for li, level in enumerate(levels):
-                            if CONTOUR_LABEL_INDEX_ONLY and (li % max(1, int(CONTOUR_INDEX_EVERY)) != 0):
+                            if CONTOUR_LABEL_INDEX_ONLY and (
+                                li % max(1, int(CONTOUR_INDEX_EVERY)) != 0
+                            ):
                                 continue
-                            is_index_line = (li % max(1, int(CONTOUR_INDEX_EVERY)) == 0)
+                            is_index_line = li % max(1, int(CONTOUR_INDEX_EVERY)) == 0
                             text = CONTOUR_LABEL_FORMAT.format(level)
                             level_polys = seed_polylines.get(li, [])
-                            logger.info('Подписи overlay: уровень %d/%d (%.1fm) - полилиний: %d', 
-                                       li+1, len(levels), level, len(level_polys))
+                            logger.info(
+                                'Подписи overlay: уровень %d/%d (%.1fm) - полилиний: %d',
+                                li + 1,
+                                len(levels),
+                                level,
+                                len(level_polys),
+                            )
                             level_labels = 0
                             for poly in level_polys:
                                 pts = poly_to_crop(poly)
                                 if len(pts) < 2:
                                     continue
-                                segL = []; total = 0.0
+                                segL = []
+                                total = 0.0
                                 for i in range(1, len(pts)):
-                                    dx = pts[i][0]-pts[i-1][0]; dy = pts[i][1]-pts[i-1][1]
-                                    L = math.hypot(dx, dy); segL.append(L); total += L
-                                if total < max(CONTOUR_LABEL_MIN_SEG_LEN_PX, CONTOUR_LABEL_SPACING_PX*0.8):
+                                    dx = pts[i][0] - pts[i - 1][0]
+                                    dy = pts[i][1] - pts[i - 1][1]
+                                    L = math.hypot(dx, dy)
+                                    segL.append(L)
+                                    total += L
+                                if total < max(
+                                    CONTOUR_LABEL_MIN_SEG_LEN_PX,
+                                    CONTOUR_LABEL_SPACING_PX * 0.8,
+                                ):
                                     continue
                                 target = CONTOUR_LABEL_SPACING_PX
                                 while target < total:
-                                    acc = 0.0; idx = -1
+                                    acc = 0.0
+                                    idx = -1
                                     for i, L in enumerate(segL):
                                         if acc + L >= target:
-                                            idx = i; break
+                                            idx = i
+                                            break
                                         acc += L
                                     if idx < 0:
                                         break
                                     t = (target - acc) / max(1e-9, segL[idx])
-                                    x0p, y0p = pts[idx]; x1p, y1p = pts[idx+1]
-                                    px = x0p + (x1p-x0p)*t; py = y0p + (y1p-y0p)*t
-                                    dx = x1p - x0p; dy = y1p - y0p
+                                    x0p, y0p = pts[idx]
+                                    x1p, y1p = pts[idx + 1]
+                                    px = x0p + (x1p - x0p) * t
+                                    py = y0p + (y1p - y0p) * t
+                                    dx = x1p - x0p
+                                    dy = y1p - y0p
                                     ang = math.degrees(math.atan2(-dy, dx))
-                                    if ang < -90: ang += 180
-                                    elif ang > 90: ang -= 180
-                                    from PIL import Image, ImageDraw
+                                    if ang < -90:
+                                        ang += 180
+                                    elif ang > 90:
+                                        ang -= 180
                                     font = get_font(is_index_line)
-                                    tmp = Image.new('RGBA', (1,1), (0,0,0,0))
+                                    tmp = Image.new('RGBA', (1, 1), (0, 0, 0, 0))
                                     dd = ImageDraw.Draw(tmp)
-                                    tw, th = dd.textbbox((0,0), text, font=font)[2:]
+                                    tw, th = dd.textbbox((0, 0), text, font=font)[2:]
                                     pad = int(CONTOUR_LABEL_BG_PADDING)
-                                    bw, bh = tw + 2*pad, th + 2*pad
-                                    box = Image.new('RGBA', (bw, bh), (0,0,0,0))
+                                    bw, bh = tw + 2 * pad, th + 2 * pad
+                                    box = Image.new('RGBA', (bw, bh), (0, 0, 0, 0))
                                     bdraw = ImageDraw.Draw(box)
                                     if CONTOUR_LABEL_BG_RGBA:
-                                        bdraw.rectangle((0,0,bw-1,bh-1), fill=CONTOUR_LABEL_BG_RGBA)
+                                        bdraw.rectangle(
+                                            (0, 0, bw - 1, bh - 1),
+                                            fill=CONTOUR_LABEL_BG_RGBA,
+                                        )
                                     ow = max(0, int(CONTOUR_LABEL_OUTLINE_WIDTH))
                                     if ow > 0:
                                         for ox in (-ow, 0, ow):
                                             for oy in (-ow, 0, ow):
-                                                if ox == 0 and oy == 0: continue
-                                                bdraw.text((pad+ox, pad+oy), text, font=font, fill=CONTOUR_LABEL_OUTLINE_COLOR)
-                                    bdraw.text((pad, pad), text, font=font, fill=CONTOUR_LABEL_TEXT_COLOR)
-                                    logger.debug('Поворот подписи "%s" на %.1f°', text, ang)
-                                    rot = box.rotate(ang, expand=True, resample=Image.BICUBIC)
+                                                if ox == 0 and oy == 0:
+                                                    continue
+                                                bdraw.text(
+                                                    (pad + ox, pad + oy),
+                                                    text,
+                                                    font=font,
+                                                    fill=CONTOUR_LABEL_OUTLINE_COLOR,
+                                                )
+                                    bdraw.text(
+                                        (pad, pad),
+                                        text,
+                                        font=font,
+                                        fill=CONTOUR_LABEL_TEXT_COLOR,
+                                    )
+                                    logger.debug(
+                                        'Поворот подписи "%s" на %.1f°', text, ang
+                                    )
+                                    rot = box.rotate(
+                                        ang, expand=True, resample=Image.BICUBIC
+                                    )
                                     rw, rh = rot.size
-                                    x0b = int(round(px - rw/2)); y0b = int(round(py - rh/2))
+                                    x0b = round(px - rw / 2)
+                                    y0b = round(py - rh / 2)
                                     if 0 <= x0b < W and 0 <= y0b < H:
                                         if not dry_run:
                                             img.alpha_composite(rot, dest=(x0b, y0b))
-                                    placed.append((x0b, y0b, x0b+rw, y0b+rh))
+                                    placed.append((x0b, y0b, x0b + rw, y0b + rh))
                                     level_labels += 1
                                     total_labels += 1
                                     target += CONTOUR_LABEL_SPACING_PX
-                            logger.info('Подписи overlay: уровень %d завершен, размещено %d подписей', 
-                                       li+1, level_labels)
-                            
+                            logger.info(
+                                'Подписи overlay: уровень %d завершен, размещено %d подписей',
+                                li + 1,
+                                level_labels,
+                            )
+
                             # Периодический отчет о памяти
                             if (li + 1) % 5 == 0:
-                                log_memory_usage(f'after overlay labels level {li+1}/{len(levels)}')
-                        
-                        logger.info('Подписи overlay: завершено, всего размещено %d подписей', total_labels)
+                                log_memory_usage(
+                                    f'after overlay labels level {li + 1}/{len(levels)}'
+                                )
+
+                        logger.info(
+                            'Подписи overlay: завершено, всего размещено %d подписей',
+                            total_labels,
+                        )
                         return placed
+
                     # Первый проход: получаем позиции подписей БЕЗ размещения на изображении
-                    overlay_label_bboxes = _draw_contour_labels_overlay(overlay, seed_polylines, levels, seed_ds, mpp, dry_run=True)
-                    
+                    overlay_label_bboxes = _draw_contour_labels_overlay(
+                        overlay, seed_polylines, levels, seed_ds, mpp, dry_run=True
+                    )
+
                     # Создаем разрывы линий контуров в местах подписей для overlay
-                    from constants import CONTOUR_LABEL_GAP_ENABLED, CONTOUR_LABEL_GAP_PADDING
+                    from constants import (
+                        CONTOUR_LABEL_GAP_ENABLED,
+                        CONTOUR_LABEL_GAP_PADDING,
+                    )
+
                     if CONTOUR_LABEL_GAP_ENABLED and overlay_label_bboxes:
                         from PIL import ImageDraw
+
                         draw_overlay = ImageDraw.Draw(overlay)
                         gap_padding = int(CONTOUR_LABEL_GAP_PADDING)
                         for bbox in overlay_label_bboxes:
@@ -1827,18 +2183,24 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
                                 max(0, x0 - gap_padding),
                                 max(0, y0 - gap_padding),
                                 min(overlay.width, x1 + gap_padding),
-                                min(overlay.height, y1 + gap_padding)
+                                min(overlay.height, y1 + gap_padding),
                             )
                             # "Стираем" контуры в этой области (делаем прозрачным для RGBA)
                             draw_overlay.rectangle(gap_area, fill=(0, 0, 0, 0))
-                    
+
                     # Второй проход: размещаем подписи поверх созданных разрывов
-                    _draw_contour_labels_overlay(overlay, seed_polylines, levels, seed_ds, mpp, dry_run=False)
+                    _draw_contour_labels_overlay(
+                        overlay, seed_polylines, levels, seed_ds, mpp, dry_run=False
+                    )
                 except Exception as e:
-                    logger.warning('Не удалось нанести подписи изолиний (оверлей): %s', e)
-            
+                    logger.warning(
+                        'Не удалось нанести подписи изолиний (оверлей): %s', e
+                    )
+
             labels_elapsed = time.monotonic() - labels_start_time
-            logger.info('Изолинии: подписи (оверлей) — завершены (%.2fs)', labels_elapsed)
+            logger.info(
+                'Изолинии: подписи (оверлей) — завершены (%.2fs)', labels_elapsed
+            )
             log_memory_usage('after overlay labels')
 
             # Composite overlay onto base (pre-rotation)
@@ -1846,32 +2208,31 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
             logger.info('Изолинии: компоновка overlay на базу — старт')
             try:
                 if overlay.size != (crop_rect[2], crop_rect[3]):
-                    overlay = overlay.resize((crop_rect[2], crop_rect[3]), Image.BICUBIC)
+                    overlay = overlay.resize(
+                        (crop_rect[2], crop_rect[3]), Image.BICUBIC
+                    )
                 # Convert base to RGBA, composite overlay, then convert back to RGB
                 prev_result = result
                 base_rgba = prev_result.convert('RGBA')
                 base_rgba.alpha_composite(overlay)
                 result = base_rgba.convert('RGB')
                 # Explicitly close large temporary images to free memory
-                try:
+                with contextlib.suppress(Exception):
                     overlay.close()
-                except Exception:
-                    pass
-                try:
+                with contextlib.suppress(Exception):
                     base_rgba.close()
-                except Exception:
-                    pass
-                try:
+                with contextlib.suppress(Exception):
                     prev_result.close()
-                except Exception:
-                    pass
                 overlay = None
                 base_rgba = None
                 prev_result = None
             except Exception as e:
                 logger.warning('Не удалось наложить изолинии: %s', e)
             composite_elapsed = time.monotonic() - composite_start_time
-            logger.info('Изолинии: компоновка overlay на базу — завершена (%.2fs)', composite_elapsed)
+            logger.info(
+                'Изолинии: компоновка overlay на базу — завершена (%.2fs)',
+                composite_elapsed,
+            )
             log_memory_usage('after overlay composite')
         except Exception as e:
             logger.warning('Построение оверлея изолиний не удалось: %s', e)
@@ -1888,10 +2249,8 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
     )
     prev_result = result
     result = rotate_keep_size(prev_result, angle_deg, fill=(255, 255, 255))
-    try:
+    with contextlib.suppress(Exception):
         prev_result.close()
-    except Exception:
-        pass
     prev_result = None
     rotation_elapsed = time.monotonic() - rotation_start_time
     logger.info('Поворот изображения — завершён (%.2fs)', rotation_elapsed)
@@ -1902,10 +2261,8 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
     logger.info('Обрезка к целевому размеру — старт')
     prev_result = result
     result = center_crop(prev_result, target_w_px, target_h_px)
-    try:
+    with contextlib.suppress(Exception):
         prev_result.close()
-    except Exception:
-        pass
     prev_result = None
     crop_elapsed = time.monotonic() - crop_start_time
     logger.info('Обрезка к целевому размеру — завершена (%.2fs)', crop_elapsed)
@@ -1939,7 +2296,13 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
     # PROJ/pyproj uses (easting, northing) with always_xy=True. Military notation wants X=northing, Y=easting.
     try:
         from PIL import ImageDraw
-        from constants import CENTER_CROSS_COLOR, CENTER_CROSS_LINE_WIDTH_PX, CENTER_CROSS_LENGTH_PX
+
+        from constants import (
+            CENTER_CROSS_COLOR,
+            CENTER_CROSS_LENGTH_PX,
+            CENTER_CROSS_LINE_WIDTH_PX,
+        )
+
         # Compute center coordinates in SK-42 GK using same mechanics as grid (result: x0_gk=easting, y0_gk=northing)
         t_sk42gk_from_sk42 = Transformer.from_crs(
             crs_sk42_geog,
@@ -1948,8 +2311,16 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
         )
         x0_gk, y0_gk = t_sk42gk_from_sk42.transform(center_lng_sk42, center_lat_sk42)
         # Compute center coordinates in WGS84 using Helmert-aware transformer
-        center_lng_wgs, center_lat_wgs = t_sk42_to_wgs.transform(center_lng_sk42, center_lat_sk42)
-        logger.info('Центральный крест: СК-42 ГК X(север)=%.3f, Y(восток)=%.3f; WGS84 lat=%.8f, lon=%.8f', y0_gk, x0_gk, center_lat_wgs, center_lng_wgs)
+        center_lng_wgs, center_lat_wgs = t_sk42_to_wgs.transform(
+            center_lng_sk42, center_lat_sk42
+        )
+        logger.info(
+            'Центральный крест: СК-42 ГК X(север)=%.3f, Y(восток)=%.3f; WGS84 lat=%.8f, lon=%.8f',
+            y0_gk,
+            x0_gk,
+            center_lat_wgs,
+            center_lng_wgs,
+        )
 
         # Draw the cross at the image center
         cx = result.width // 2
@@ -1961,20 +2332,24 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
         draw.line([(cx, cy - half), (cx, cy + half)], fill=color, width=line_w)
         draw.line([(cx - half, cy), (cx + half, cy)], fill=color, width=line_w)
     except Exception as e:
-        logger.warning('Не удалось нарисовать центрированный крест или вывести координаты: %s', e)
+        logger.warning(
+            'Не удалось нарисовать центрированный крест или вывести координаты: %s', e
+        )
 
     # Draw control point as red cross (using same mechanics as grid/center cross)
     try:
         if getattr(settings, 'control_point_enabled', False):
             from PIL import ImageDraw
+
             from constants import (
                 CONTROL_POINT_CROSS_COLOR,
-                CONTROL_POINT_CROSS_LINE_WIDTH_PX,
                 CONTROL_POINT_CROSS_LENGTH_PX,
+                CONTROL_POINT_CROSS_LINE_WIDTH_PX,
             )
+
             # Get control point coordinates in SK-42 GK (easting, northing)
-            cp_x_gk = float(getattr(settings, 'control_point_x_sk42_gk'))
-            cp_y_gk = float(getattr(settings, 'control_point_y_sk42_gk'))
+            cp_x_gk = float(settings.control_point_x_sk42_gk)
+            cp_y_gk = float(settings.control_point_y_sk42_gk)
 
             # Compute center in GK as above
             t_sk42gk_from_sk42 = Transformer.from_crs(
@@ -1982,7 +2357,9 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
                 crs_sk42_gk,
                 always_xy=True,
             )
-            x0_gk, y0_gk = t_sk42gk_from_sk42.transform(center_lng_sk42, center_lat_sk42)
+            x0_gk, y0_gk = t_sk42gk_from_sk42.transform(
+                center_lng_sk42, center_lat_sk42
+            )
 
             # Pixels-per-meter at center latitude in WGS84
             mpp = meters_per_pixel(center_lat_wgs, zoom, scale=eff_scale)
@@ -1996,12 +2373,19 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
 
             # Optional: log WGS84 of control point via Helmert-aware transformer
             try:
-                t_sk42_from_gk = Transformer.from_crs(crs_sk42_gk, crs_sk42_geog, always_xy=True)
+                t_sk42_from_gk = Transformer.from_crs(
+                    crs_sk42_gk, crs_sk42_geog, always_xy=True
+                )
                 cp_lng_sk42, cp_lat_sk42 = t_sk42_from_gk.transform(cp_x_gk, cp_y_gk)
-                cp_lng_wgs, cp_lat_wgs = t_sk42_to_wgs.transform(cp_lng_sk42, cp_lat_sk42)
+                cp_lng_wgs, cp_lat_wgs = t_sk42_to_wgs.transform(
+                    cp_lng_sk42, cp_lat_sk42
+                )
                 logger.info(
                     'Контрольная точка: СК-42 ГК X(север)=%.3f, Y(восток)=%.3f; WGS84 lat=%.8f, lon=%.8f',
-                    cp_y_gk, cp_x_gk, cp_lat_wgs, cp_lng_wgs,
+                    cp_y_gk,
+                    cp_x_gk,
+                    cp_lat_wgs,
+                    cp_lng_wgs,
                 )
             except Exception:
                 pass
@@ -2012,12 +2396,22 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
                 half = max(1, int(CONTROL_POINT_CROSS_LENGTH_PX) // 2)
                 line_w = max(1, int(CONTROL_POINT_CROSS_LINE_WIDTH_PX))
                 color = tuple(CONTROL_POINT_CROSS_COLOR)
-                cx_i = int(round(cx_img))
-                cy_i = int(round(cy_img))
-                draw.line([(cx_i, cy_i - half), (cx_i, cy_i + half)], fill=color, width=line_w)
-                draw.line([(cx_i - half, cy_i), (cx_i + half, cy_i)], fill=color, width=line_w)
+                cx_i = round(cx_img)
+                cy_i = round(cy_img)
+                draw.line(
+                    [(cx_i, cy_i - half), (cx_i, cy_i + half)], fill=color, width=line_w
+                )
+                draw.line(
+                    [(cx_i - half, cy_i), (cx_i + half, cy_i)], fill=color, width=line_w
+                )
             else:
-                logger.debug('Контрольная точка вне кадра: (%.2f, %.2f) not in [0..%d]x[0..%d]', cx_img, cy_img, result.width, result.height)
+                logger.debug(
+                    'Контрольная точка вне кадра: (%.2f, %.2f) not in [0..%d]x[0..%d]',
+                    cx_img,
+                    cy_img,
+                    result.width,
+                    result.height,
+                )
     except Exception as e:
         logger.warning('Не удалось нарисовать контрольную точку: %s', e)
 
@@ -2039,7 +2433,11 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
     except Exception:
         did_publish = False
     preview_elapsed = time.monotonic() - preview_start_time
-    logger.info('Публикация предпросмотра — %s (%.2fs)', 'успех' if did_publish else 'пропущено', preview_elapsed)
+    logger.info(
+        'Публикация предпросмотра — %s (%.2fs)',
+        'успех' if did_publish else 'пропущено',
+        preview_elapsed,
+    )
 
     # Если GUI подписан на предпросмотр (did_publish=True), не сохраняем автоматически.
     if not did_publish:
@@ -2059,10 +2457,8 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
         try:
             tmp_rgb.save(out_path, **save_kwargs)
         finally:
-            try:
+            with contextlib.suppress(Exception):
                 tmp_rgb.close()
-            except Exception:
-                pass
         # Ensure data is written to disk
         fd = os.open(out_path, os.O_RDONLY)
         os.fsync(fd)
@@ -2073,17 +2469,13 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
         logger.info('Сохранение файла — завершено (%.2fs)', save_elapsed)
         log_memory_usage('after file save')
         # Close the main result image after saving to release memory
-        try:
+        with contextlib.suppress(Exception):
             result.close()
-        except Exception:
-            pass
         result = None
     else:
         # GUI consumed a copy; close original processing buffer to free memory
-        try:
+        with contextlib.suppress(Exception):
             result.close()
-        except Exception:
-            pass
         result = None
 
     # Garbage collection
@@ -2099,5 +2491,8 @@ async def download_satellite_rectangle(  # noqa: PLR0913, PLR0912
         logger.debug(f'Garbage collection failed: {e}')
 
     overall_elapsed = time.monotonic() - overall_start_time
-    logger.info('=== ОБЩИЙ ТАЙМЕР: завершён download_satellite_rectangle (%.2fs) ===', overall_elapsed)
+    logger.info(
+        '=== ОБЩИЙ ТАЙМЕР: завершён download_satellite_rectangle (%.2fs) ===',
+        overall_elapsed,
+    )
     return output_path

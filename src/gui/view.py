@@ -13,10 +13,13 @@ from PySide6.QtCore import QObject, QSignalBlocker, Qt, QThread, QTimer, Signal,
 from PySide6.QtGui import QAction, QPixmapCache
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
+    QDoubleSpinBox,
     QFileDialog,
     QFrame,
     QGridLayout,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -32,9 +35,6 @@ from PySide6.QtWidgets import (
     QStatusBar,
     QVBoxLayout,
     QWidget,
-    QCheckBox,
-    QDoubleSpinBox,
-    QGroupBox,
 )
 
 from constants import (
@@ -103,10 +103,13 @@ class DownloadWorker(QThread):
                 lambda label: None,
             )
             set_preview_image_callback(preview_callback)
-            
+
             # Import and set progress callback for ConsoleProgress updates
             from progress import set_progress_callback
-            set_progress_callback(lambda done, total, label: self.progress_update.emit(done, total, label))
+
+            set_progress_callback(
+                lambda done, total, label: self.progress_update.emit(done, total, label)
+            )
 
             # Run the actual download
             log_memory_usage('before download sync call')
@@ -384,7 +387,8 @@ class _ViewObserver(Observer):
 
 
 class HelmertSettingsWidget(QWidget):
-    """Widget for user to input Helmert transformation parameters.
+    """
+    Widget for user to input Helmert transformation parameters.
 
     Provides enable checkbox and seven numeric fields with proper units:
     - dx, dy, dz (meters)
@@ -400,40 +404,49 @@ class HelmertSettingsWidget(QWidget):
         layout = QGridLayout()
         # Enable checkbox
         self.enable_cb = QCheckBox('Включить пользовательские параметры')
-        self.enable_cb.setToolTip('Включить использование заданных ниже параметров перехода СК-42 → WGS84')
+        self.enable_cb.setToolTip(
+            'Включить использование заданных ниже параметров перехода СК-42 → WGS84'
+        )
         layout.addWidget(self.enable_cb, 0, 0, 1, 4)
 
         # dx, dy, dz (m)
         row = 1
         layout.addWidget(QLabel('dx (м):'), row, 0)
-        self.dx = QDoubleSpinBox(); self._cfg_spin(self.dx, -500.0, 500.0, 3, 0.0)
+        self.dx = QDoubleSpinBox()
+        self._cfg_spin(self.dx, -500.0, 500.0, 3, 0.0)
         layout.addWidget(self.dx, row, 1)
         layout.addWidget(QLabel('dy (м):'), row, 2)
-        self.dy = QDoubleSpinBox(); self._cfg_spin(self.dy, -500.0, 500.0, 3, 0.0)
+        self.dy = QDoubleSpinBox()
+        self._cfg_spin(self.dy, -500.0, 500.0, 3, 0.0)
         layout.addWidget(self.dy, row, 3)
 
         row += 1
         layout.addWidget(QLabel('dz (м):'), row, 0)
-        self.dz = QDoubleSpinBox(); self._cfg_spin(self.dz, -500.0, 500.0, 3, 0.0)
+        self.dz = QDoubleSpinBox()
+        self._cfg_spin(self.dz, -500.0, 500.0, 3, 0.0)
         layout.addWidget(self.dz, row, 1)
 
         # rx, ry, rz (arcsec)
         layout.addWidget(QLabel('rx (угл. сек):'), row, 2)
-        self.rx = QDoubleSpinBox(); self._cfg_spin(self.rx, -60.0, 60.0, 5, 0.0)
+        self.rx = QDoubleSpinBox()
+        self._cfg_spin(self.rx, -60.0, 60.0, 5, 0.0)
         layout.addWidget(self.rx, row, 3)
 
         row += 1
         layout.addWidget(QLabel('ry (угл. сек):'), row, 0)
-        self.ry = QDoubleSpinBox(); self._cfg_spin(self.ry, -60.0, 60.0, 5, 0.0)
+        self.ry = QDoubleSpinBox()
+        self._cfg_spin(self.ry, -60.0, 60.0, 5, 0.0)
         layout.addWidget(self.ry, row, 1)
         layout.addWidget(QLabel('rz (угл. сек):'), row, 2)
-        self.rz = QDoubleSpinBox(); self._cfg_spin(self.rz, -60.0, 60.0, 5, 0.0)
+        self.rz = QDoubleSpinBox()
+        self._cfg_spin(self.rz, -60.0, 60.0, 5, 0.0)
         layout.addWidget(self.rz, row, 3)
 
         # ds (ppm)
         row += 1
         layout.addWidget(QLabel('ds (ppm):'), row, 0)
-        self.ds = QDoubleSpinBox(); self._cfg_spin(self.ds, -10.0, 10.0, 5, 0.0)
+        self.ds = QDoubleSpinBox()
+        self._cfg_spin(self.ds, -10.0, 10.0, 5, 0.0)
         layout.addWidget(self.ds, row, 1)
 
         # Info label
@@ -446,7 +459,14 @@ class HelmertSettingsWidget(QWidget):
         self._update_enabled_state(False)
         self.enable_cb.toggled.connect(self._update_enabled_state)
 
-    def _cfg_spin(self, w: QDoubleSpinBox, min_v: float, max_v: float, decimals: int, default: float) -> None:
+    def _cfg_spin(
+        self,
+        w: QDoubleSpinBox,
+        min_v: float,
+        max_v: float,
+        decimals: int,
+        default: float,
+    ) -> None:
         w.setRange(min_v, max_v)
         w.setDecimals(decimals)
         w.setSingleStep(0.01 if decimals >= 2 else 0.1)
@@ -495,7 +515,11 @@ class HelmertSettingsWidget(QWidget):
         # Block signals during programmatic set
         with QSignalBlocker(self.enable_cb):
             self.enable_cb.setChecked(enabled)
-        for widget, val in zip((self.dx, self.dy, self.dz, self.rx, self.ry, self.rz, self.ds), values):
+        for widget, val in zip(
+            (self.dx, self.dy, self.dz, self.rx, self.ry, self.rz, self.ds),
+            values,
+            strict=False,
+        ):
             with QSignalBlocker(widget):
                 if val is None:
                     # leave default if None
@@ -533,9 +557,9 @@ class MainWindow(QMainWindow):
                 # Drop potential heavy attributes captured in the worker
                 with contextlib.suppress(Exception):
                     if hasattr(sender_obj, 'image'):
-                        setattr(sender_obj, 'image', None)
+                        sender_obj.image = None
                     if hasattr(sender_obj, 'adj'):
-                        setattr(sender_obj, 'adj', None)
+                        sender_obj.adj = None
         except Exception as e:
             logger.debug(f'Adjust slot cleanup failed: {e}')
 
@@ -744,22 +768,24 @@ class MainWindow(QMainWindow):
         control_point_group = QFrame()
         control_point_group.setFrameStyle(QFrame.Shape.StyledPanel)
         control_point_layout = QVBoxLayout()
-        
+
         self.control_point_checkbox = QCheckBox('Контрольная точка')
-        self.control_point_checkbox.setToolTip('Включить отображение контрольной точки на карте')
+        self.control_point_checkbox.setToolTip(
+            'Включить отображение контрольной точки на карте'
+        )
         control_point_layout.addWidget(self.control_point_checkbox)
-        
+
         self.control_point_x_widget = CoordinateInputWidget('X (вертикаль):', 54, 15)
         self.control_point_y_widget = CoordinateInputWidget('Y (горизонталь):', 74, 40)
-        
+
         control_point_layout.addWidget(self.control_point_x_widget)
         control_point_layout.addWidget(self.control_point_y_widget)
         control_point_group.setLayout(control_point_layout)
-        
+
         # По умолчанию контролы координат отключены
         self.control_point_x_widget.setEnabled(False)
         self.control_point_y_widget.setEnabled(False)
-        
+
         coords_layout.addWidget(control_point_group)
         left_container.addWidget(coords_frame)
 
@@ -789,7 +815,9 @@ class MainWindow(QMainWindow):
         self.map_type_combo.setCurrentIndex(0)
         # Чекбокс "Изолинии"
         self.contours_checkbox = QCheckBox('Изолинии')
-        self.contours_checkbox.setToolTip('Наложить изолинии поверх выбранного типа карты')
+        self.contours_checkbox.setToolTip(
+            'Наложить изолинии поверх выбранного типа карты'
+        )
         # Гарантируем кликабельность: резервируем место и фиксируем размер ползунка
         try:
             self.contours_checkbox.setEnabled(True)
@@ -1038,8 +1066,12 @@ class MainWindow(QMainWindow):
         self.control_point_checkbox.stateChanged.connect(self._on_control_point_toggled)
         self.control_point_checkbox.stateChanged.connect(self._on_settings_changed)
         # Use editingFinished instead of textChanged to avoid cyclic updates during typing
-        self.control_point_x_widget.coordinate_edit.editingFinished.connect(self._on_settings_changed)
-        self.control_point_y_widget.coordinate_edit.editingFinished.connect(self._on_settings_changed)
+        self.control_point_x_widget.coordinate_edit.editingFinished.connect(
+            self._on_settings_changed
+        )
+        self.control_point_y_widget.coordinate_edit.editingFinished.connect(
+            self._on_settings_changed
+        )
 
         # Grid settings
         self.grid_widget.width_spin.valueChanged.connect(self._on_settings_changed)
@@ -1094,11 +1126,13 @@ class MainWindow(QMainWindow):
     def _on_settings_changed(self) -> None:
         """Handle settings change from UI (bulk update without intermediate events)."""
         if getattr(self, '_ui_sync_in_progress', False):
-            logging.getLogger(__name__).debug('Settings change ignored: UI sync in progress')
+            logging.getLogger(__name__).debug(
+                'Settings change ignored: UI sync in progress'
+            )
             return
         # Clear any existing preview to avoid showing outdated imagery when coordinates or contours change
         self._clear_preview_ui()
-        
+
         # Collect all current settings first to avoid races
         coords = self._get_current_coordinates()
         grid_settings = self.grid_widget.get_settings()
@@ -1145,7 +1179,7 @@ class MainWindow(QMainWindow):
         from_y_high, from_y_low = self.from_y_widget.get_values()
         to_x_high, to_x_low = self.to_x_widget.get_values()
         to_y_high, to_y_low = self.to_y_widget.get_values()
-        
+
         # Get control point coordinates directly to preserve user input
         control_point_x = self.control_point_x_widget.get_coordinate()
         control_point_y = self.control_point_y_widget.get_coordinate()
@@ -1255,16 +1289,12 @@ class MainWindow(QMainWindow):
             return
 
         # Clear previous preview and pixmap cache between runs
-        try:
+        with contextlib.suppress(Exception):
             self._clear_preview_ui()
-        except Exception:
-            pass
 
         # Cleanup any stale worker from previous run
-        try:
+        with contextlib.suppress(Exception):
             self._cleanup_download_worker()
-        except Exception:
-            pass
 
         self._download_worker = DownloadWorker(self._controller)
         self._download_worker.finished.connect(self._on_download_finished)
@@ -1450,7 +1480,7 @@ class MainWindow(QMainWindow):
         control_point_enabled = getattr(settings, 'control_point_enabled', False)
         with QSignalBlocker(self.control_point_checkbox):
             self.control_point_checkbox.setChecked(control_point_enabled)
-        
+
         # Programmatically set full control point coordinates without splitting to high/low
         control_point_x = int(getattr(settings, 'control_point_x', 5415000))
         control_point_y = int(getattr(settings, 'control_point_y', 7440000))
@@ -1459,18 +1489,22 @@ class MainWindow(QMainWindow):
             self.control_point_x_widget.set_coordinate(control_point_x)
         with QSignalBlocker(self.control_point_y_widget.coordinate_edit):
             self.control_point_y_widget.set_coordinate(control_point_y)
-        
+
         # Log the values to ensure no truncation occurs during UI update
         try:
             x_text = self.control_point_x_widget.coordinate_edit.text()
             y_text = self.control_point_y_widget.coordinate_edit.text()
             logger.info(
                 "UI control point set: enabled=%s, x_src=%d -> edit='%s', y_src=%d -> edit='%s'",
-                control_point_enabled, control_point_x, x_text, control_point_y, y_text,
+                control_point_enabled,
+                control_point_x,
+                x_text,
+                control_point_y,
+                y_text,
             )
         except Exception:
-            logger.exception("Failed to log control point UI update")
-        
+            logger.exception('Failed to log control point UI update')
+
         # Enable/disable coordinate inputs based on checkbox state
         self.control_point_x_widget.setEnabled(control_point_enabled)
         self.control_point_y_widget.setEnabled(control_point_enabled)

@@ -30,7 +30,8 @@ class MilMapperController:
         logger.info('MilMapperController initialized')
 
     def update_settings_bulk(self, **kwargs: Any) -> None:
-        """Пакетное обновление нескольких настроек за один вызов модели.
+        """
+        Пакетное обновление нескольких настроек за один вызов модели.
 
         Обновляет модель одним вызовом update_settings, чтобы сгенерировать
         только одно событие SETTINGS_CHANGED и избежать гонок между View и Model.
@@ -38,13 +39,13 @@ class MilMapperController:
         try:
             if kwargs:
                 self._model.update_settings(**kwargs)
-                logger.debug(f"Обновлены настройки (bulk): {list(kwargs.keys())}")
+                logger.debug(f'Обновлены настройки (bulk): {list(kwargs.keys())}')
         except Exception as e:
-            error_msg = f"Не удалось обновить настройки (bulk): {e}"
+            error_msg = f'Не удалось обновить настройки (bulk): {e}'
             logger.exception(error_msg)
             self._model.notify_observers(
                 ModelEvent.WARNING_OCCURRED,
-                {"warning": error_msg},
+                {'warning': error_msg},
             )
 
     def _load_api_key(self) -> None:
@@ -246,8 +247,12 @@ class MilMapperController:
                         getattr(settings, 'control_point_enabled', False),
                         getattr(settings, 'control_point_y_sk42_gk', 0.0),  # northing
                         getattr(settings, 'control_point_x_sk42_gk', 0.0),  # easting
-                        getattr(settings, 'control_point_y', None),  # historically stored northing
-                        getattr(settings, 'control_point_x', None),  # historically stored easting
+                        getattr(
+                            settings, 'control_point_y', None
+                        ),  # historically stored northing
+                        getattr(
+                            settings, 'control_point_x', None
+                        ),  # historically stored easting
                     )
                 except Exception:
                     logger.debug('Failed to log control point settings at start')

@@ -1,14 +1,13 @@
-import os
 import logging
+import os
 from pathlib import Path
 
 import tomlkit
 
 from domen import MapSettings
-from constants import ADDITIVE_RATIO
-
 
 logger = logging.getLogger(__name__)
+
 
 def _user_profiles_dir() -> Path:
     """
@@ -67,10 +66,16 @@ def load_profile(name_or_path: str) -> MapSettings:
         raise FileNotFoundError(msg)
     text = path.read_text(encoding='utf-8')
     data = tomlkit.parse(text)
-    logger.info("Profile TOML data: control_point_enabled=%s", data.get("control_point_enabled", "NOT_FOUND"))
+    logger.info(
+        'Profile TOML data: control_point_enabled=%s',
+        data.get('control_point_enabled', 'NOT_FOUND'),
+    )
 
     settings = MapSettings.model_validate(data)  # type: ignore[no-any-return]
-    logger.info("Profile MapSettings created: control_point_enabled=%s", getattr(settings, "control_point_enabled", "NOT_FOUND"))
+    logger.info(
+        'Profile MapSettings created: control_point_enabled=%s',
+        getattr(settings, 'control_point_enabled', 'NOT_FOUND'),
+    )
 
     # Verification: ensure control point precision and formulas are consistent
     try:
@@ -87,24 +92,33 @@ def load_profile(name_or_path: str) -> MapSettings:
             got_y = settings.control_point_y_sk42_gk
 
             logger.info(
-                "Control point parts: x_high=%s x_low_m=%s | y_high=%s y_low_m=%s",
-                x_high, x_low_m, y_high, y_low_m,
+                'Control point parts: x_high=%s x_low_m=%s | y_high=%s y_low_m=%s',
+                x_high,
+                x_low_m,
+                y_high,
+                y_low_m,
             )
             logger.info(
-                "Control point GK: computed_A=(%.6f, %.6f) computed_B=(%.6f, %.6f)",
-                got_x, got_y, expected_x, expected_y,
+                'Control point GK: computed_A=(%.6f, %.6f) computed_B=(%.6f, %.6f)',
+                got_x,
+                got_y,
+                expected_x,
+                expected_y,
             )
             dx = abs(got_x - expected_x)
             dy = abs(got_y - expected_y)
             if dx > 1e-6 or dy > 1e-6:
                 logger.error(
-                    "Control point GK mismatch: Δx=%.6f Δy=%.6f (precision issue likely)",
-                    dx, dy,
+                    'Control point GK mismatch: Δx=%.6f Δy=%.6f (precision issue likely)',
+                    dx,
+                    dy,
                 )
             else:
-                logger.info("Control point GK verification passed (Δx=%.6g, Δy=%.6g)", dx, dy)
+                logger.info(
+                    'Control point GK verification passed (Δx=%.6g, Δy=%.6g)', dx, dy
+                )
     except Exception:
-        logger.exception("Failed to verify control point precision")
+        logger.exception('Failed to verify control point precision')
 
     return settings
 

@@ -1,7 +1,7 @@
 import asyncio
+import contextlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional, Tuple
 
 import aiohttp
 from PIL import Image
@@ -17,8 +17,12 @@ class TileKey:
     y: int
     retina: bool
 
-    def path_parts(self) -> Tuple[str, str, str]:
-        return str(self.z), str(self.x), f"{self.y}{'@2x' if self.retina else ''}.pngraw"
+    def path_parts(self) -> tuple[str, str, str]:
+        return (
+            str(self.z),
+            str(self.x),
+            f'{self.y}{"@2x" if self.retina else ""}.pngraw',
+        )
 
 
 class ElevationTileProvider:
@@ -26,7 +30,7 @@ class ElevationTileProvider:
     Shared provider for Terrain-RGB tiles with:
     - in-flight request coalescing
     - in-memory cache of raw bytes (PIL images constructed on demand)
-    - on-disk cache of raw bytes under HTTP_CACHE_DIR/terrain_rgb/z/x/y(@2x).pngraw
+    - on-disk cache of raw bytes under HTTP_CACHE_DIR/terrain_rgb/z/x/y(@2x).pngraw.
 
     It exposes two async methods:
       - get_tile_image: returns PIL.Image (RGB) of a terrain tile
@@ -39,18 +43,18 @@ class ElevationTileProvider:
         api_key: str,
         *,
         use_retina: bool,
-        cache_root: Optional[Path] = None,
+        cache_root: Path | None = None,
         max_mem_tiles: int = 512,
     ) -> None:
         self.client = client
         self.api_key = api_key
         self.use_retina = bool(use_retina)
-        self.cache_root = (cache_root or Path(HTTP_CACHE_DIR)) / "terrain_rgb"
+        self.cache_root = (cache_root or Path(HTTP_CACHE_DIR)) / 'terrain_rgb'
         self.cache_root.mkdir(parents=True, exist_ok=True)
-        self._inflight: Dict[TileKey, asyncio.Future[bytes]] = {}
-        self._mem_raw: Dict[TileKey, bytes] = {}
+        self._inflight: dict[TileKey, asyncio.Future[bytes]] = {}
+        self._mem_raw: dict[TileKey, bytes] = {}
         self._mem_lru: list[TileKey] = []
-        self._mem_dem: Dict[TileKey, list[list[float]]] = {}
+        self._mem_dem: dict[TileKey, list[list[float]]] = {}
         self._max_mem = max(16, int(max_mem_tiles))
 
     def _key(self, z: int, x: int, y: int) -> TileKey:
@@ -70,10 +74,8 @@ class ElevationTileProvider:
 
     def _touch(self, key: TileKey) -> None:
         if key in self._mem_lru:
-            try:
+            with contextlib.suppress(ValueError):
                 self._mem_lru.remove(key)
-            except ValueError:
-                pass
             self._mem_lru.append(key)
 
     async def _fetch_raw(self, key: TileKey) -> bytes:
@@ -114,7 +116,7 @@ class ElevationTileProvider:
                 from io import BytesIO
 
                 buf = BytesIO()
-                img.save(buf, format="PNG")
+                img.save(buf, format='PNG')
                 data = buf.getvalue()
                 # ensure path exists
                 p.parent.mkdir(parents=True, exist_ok=True)
@@ -139,7 +141,7 @@ class ElevationTileProvider:
             self._touch(key)
         from io import BytesIO
 
-        return Image.open(BytesIO(raw)).convert("RGB")
+        return Image.open(BytesIO(raw)).convert('RGB')
 
     async def get_tile_dem(self, z: int, x: int, y: int) -> list[list[float]]:
         key = self._key(z, x, y)
