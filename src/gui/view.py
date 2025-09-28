@@ -323,7 +323,7 @@ class OutputSettingsWidget(QWidget):
         # Яркость
         self.brightness_label = QLabel('Яркость: 100%')
         self.brightness_slider = QSlider(Qt.Orientation.Horizontal)
-        self.brightness_slider.setRange(0, 200)
+        self.brightness_slider.setRange(0, 400)
         self.brightness_slider.setValue(100)
         layout.addWidget(self.brightness_label, 2, 0)
         layout.addWidget(self.brightness_slider, 2, 1)
@@ -367,8 +367,8 @@ class OutputSettingsWidget(QWidget):
         b = float(settings.get('brightness', 1.0))
         c = float(settings.get('contrast', 1.0))
         s = float(settings.get('saturation', 1.0))
-        # Clamp within 0..2
-        b = 0.0 if b < 0.0 else (min(b, 2.0))
+        # Clamp within 0..4
+        b = 0.0 if b < 0.0 else (min(b, 4.0))
         c = 0.0 if c < 0.0 else (min(c, 2.0))
         s = 0.0 if s < 0.0 else (min(s, 2.0))
         self.brightness_slider.setValue(round(b * 100))
@@ -1132,32 +1132,8 @@ class MainWindow(QMainWindow):
             return
         # Clear any existing preview to avoid showing outdated imagery when coordinates or contours change
         self._clear_preview_ui()
-
-        # Collect all current settings first to avoid races
-        coords = self._get_current_coordinates()
-        grid_settings = self.grid_widget.get_settings()
-        output_settings = self.output_widget.get_settings()
-        helmert_settings = self.helmert_widget.get_values()
-
-        # Map type from combo (stored as enum value string)
-        try:
-            idx = max(0, self.map_type_combo.currentIndex())
-            map_type_value = self.map_type_combo.itemData(idx)
-        except Exception:
-            map_type_value = MapType.SATELLITE.value
-
-        # Capture checkbox state before any model notifications
-        overlay_checked = bool(self.contours_checkbox.isChecked())
-
-        # Perform one bulk update to the model to emit a single SETTINGS_CHANGED
-        payload: dict[str, Any] = {}
-        payload.update(coords)
-        payload.update(grid_settings)
-        payload.update(output_settings)
-        payload.update(helmert_settings)
-        payload['map_type'] = map_type_value
-        payload['overlay_contours'] = overlay_checked
-        self._controller.update_settings_bulk(**payload)
+        # Use the same collection logic as forced sync
+        self._sync_ui_to_model_now()
 
     def _on_control_point_toggled(self) -> None:
         """Хендлер изменения состояния чекбокса контрольной точки."""
@@ -1172,6 +1148,35 @@ class MainWindow(QMainWindow):
         self._clear_preview_ui()
         # Delegate to the common settings handler to store the new map type in the model
         self._on_settings_changed()
+
+    def _sync_ui_to_model_now(self) -> None:
+        """
+        Force-collect current UI settings and push them to the model without guards.
+        Does not clear preview or check _ui_sync_in_progress to avoid losing changes during Save/Save As.
+        """
+        # Collect all current settings
+        coords = self._get_current_coordinates()
+        grid_settings = self.grid_widget.get_settings()
+        output_settings = self.output_widget.get_settings()
+        helmert_settings = self.helmert_widget.get_values()
+
+        # Map type from combo (stored as enum value string)
+        try:
+            idx = max(0, self.map_type_combo.currentIndex())
+            map_type_value = self.map_type_combo.itemData(idx)
+        except Exception:
+            map_type_value = MapType.SATELLITE.value
+
+        overlay_checked = bool(self.contours_checkbox.isChecked())
+
+        payload: dict[str, Any] = {}
+        payload.update(coords)
+        payload.update(grid_settings)
+        payload.update(output_settings)
+        payload.update(helmert_settings)
+        payload['map_type'] = map_type_value
+        payload['overlay_contours'] = overlay_checked
+        self._controller.update_settings_bulk(**payload)
 
     def _get_current_coordinates(self) -> dict[str, int]:
         """Get current coordinate values from UI."""
@@ -1222,6 +1227,18 @@ class MainWindow(QMainWindow):
     @Slot()
     def _save_current_profile(self) -> None:
         """Save current settings to profile."""
+        # 1) Ensure pending UI edits are committed (e.g., QLineEdit editingFinished)
+        try:
+            w = QApplication.focusWidget()
+            if w is not None:
+                w.clearFocus()
+            QApplication.processEvents()
+        except Exception:
+            pass
+        # 2) Force bulk sync UI -> Model before saving (bypass guards)
+        with contextlib.suppress(Exception):
+            self._sync_ui_to_model_now()
+
         profile_name = self.profile_combo.currentText()
         if profile_name:
             self._controller.save_current_profile(profile_name)
@@ -1229,6 +1246,18 @@ class MainWindow(QMainWindow):
     @Slot()
     def _save_profile_as(self) -> None:
         """Save current settings to a new profile file."""
+        # 1) Ensure pending UI edits are committed (e.g., QLineEdit editingFinished)
+        try:
+            w = QApplication.focusWidget()
+            if w is not None:
+                w.clearFocus()
+            QApplication.processEvents()
+        except Exception:
+            pass
+        # 2) Force bulk sync UI -> Model before opening the dialog (bypass guards)
+        with contextlib.suppress(Exception):
+            self._sync_ui_to_model_now()
+
         # Get default directory
         project_root = Path(__file__).parent.parent.parent
         default_dir = project_root / PROFILES_DIR
@@ -1242,6 +1271,17 @@ class MainWindow(QMainWindow):
         )
 
         if file_path:
+            # 3) Just in case user changed something via shortcuts while dialog open
+            try:
+                w = QApplication.focusWidget()
+                if w is not None:
+                    w.clearFocus()
+                QApplication.processEvents()
+            except Exception:
+                pass
+            with contextlib.suppress(Exception):
+                self._sync_ui_to_model_now()
+
             # Check if profile already exists and show warning
             profile_path = Path(file_path)
             if profile_path.suffix.lower() != '.toml':
@@ -1608,9 +1648,14 @@ class MainWindow(QMainWindow):
             # Reset images
             self._current_image = None
             self._base_image = None
-            # Reset adjustments to defaults and sync labels
-            self._adj = {'brightness': 1.0, 'contrast': 1.0, 'saturation': 1.0}
-            self._sync_adj_ui_from_state()
+            # ИСПРАВЛЕНИЕ: Сохраняем текущие значения слайдеров вместо сброса
+            # Обновляем self._adj из текущих позиций слайдеров
+            self._adj = {
+                'brightness': self.brightness_slider.value() / 100.0,
+                'contrast': self.contrast_slider.value() / 100.0,
+                'saturation': self.saturation_slider.value() / 100.0,
+            }
+            # НЕ вызываем _sync_adj_ui_from_state(), чтобы слайдеры остались на своих местах
             # Disable save controls
             with contextlib.suppress(Exception):
                 self.save_map_btn.setEnabled(False)

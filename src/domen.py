@@ -82,13 +82,21 @@ class MapSettings(BaseModel):
         iv = max(iv, 10)
         return min(iv, 100)
 
-    @field_validator('brightness', 'contrast', 'saturation')
+    @field_validator('contrast', 'saturation')
     @classmethod
     def validate_adjustments(cls, v: float | str) -> float:
         fv = float(v)
         # Допускаем диапазон 0.0–2.0 (0%–200%)
         fv = max(fv, 0.0)
         return min(fv, 2.0)
+
+    @field_validator('brightness')
+    @classmethod
+    def validate_brightness(cls, v: float | str) -> float:
+        fv = float(v)
+        # Допускаем диапазон 0.0–2.0 (0%–200%)
+        fv = max(fv, 0.0)
+        return min(fv, 4.0)
 
     # Вычисляемые свойства из исходных параметров + ADDITIVE_RATIO
     @property

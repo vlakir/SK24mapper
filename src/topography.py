@@ -1,6 +1,8 @@
 import asyncio
+import logging
 import math
 from collections.abc import Sequence
+from contextlib import suppress
 from http import HTTPStatus
 from io import BytesIO
 from typing import cast
@@ -8,6 +10,7 @@ from typing import cast
 import aiohttp
 from PIL import Image
 from pyproj import CRS, Transformer
+from pyproj.transformer import TransformerGroup
 
 from constants import (
     EARTH_RADIUS_M,
@@ -41,9 +44,6 @@ from constants import (
 crs_sk42_geog = CRS.from_epsg(SK42_CODE)
 # Географическая WGS84
 crs_wgs84 = CRS.from_epsg(WGS84_CODE)
-
-
-from pyproj.transformer import TransformerGroup
 
 
 def build_transformers_sk42(
@@ -424,9 +424,6 @@ async def async_fetch_xyz_tile(  # noqa: PLR0913
                     if callable(release):
                         release()
                 except Exception as e:
-                    # Log and move on; we don't want cleanup issues to mask the real HTTP error
-                    import logging
-
                     logging.getLogger(__name__).debug(
                         'Failed to cleanup HTTP response: %s', e, exc_info=True
                     )
@@ -492,8 +489,6 @@ async def async_fetch_terrain_rgb_tile(  # noqa: PLR0913
                         f'Неожиданный ответ HTTP {sc} для terrain z/x/y={z}/{x}/{y} path={path}',
                     )
             finally:
-                from contextlib import suppress
-
                 with suppress(Exception):
                     close = getattr(resp, 'close', None)
                     if callable(close):
