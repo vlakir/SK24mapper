@@ -71,12 +71,10 @@ GRID_FONT_PATH = None
 GRID_FONT_PATH_BOLD = None
 
 # Включить наложение белой маски поверх карты
-ENABLE_WHITE_MASK = True
 
 WGS84_CODE = 4326
 SK42_CODE = 4284
 
-CURRENT_PROFILE = 'default'
 
 PROFILES_DIR = 'configs/profiles'
 
@@ -144,9 +142,6 @@ ELEVATION_USE_RETINA = True
 # Параллелизм загрузки HTTP
 DOWNLOAD_CONCURRENCY = 20
 # Значения совместимости для «статичного» источника
-STATIC_TILE_WIDTH_PX_PROFILE = 1024
-STATIC_TILE_HEIGHT_PX_PROFILE = 1024
-IMAGE_FORMAT_PROFILE = 'jpg'
 
 # --- Опции кэша (были в секции профиля [cache], перенесены в constants)
 HTTP_CACHE_ENABLED = True
@@ -176,15 +171,8 @@ SK42_VALID_LAT_MAX = 85.0
 
 # --- Временные и размерные константы GUI
 # Ширина предпросмотра по умолчанию (px), когда измерить ширину невозможно
-PREVIEW_FALLBACK_WIDTH = 600
 # Задержка восстановления режима расширения после первичной оценки размеров (мс)
-PREVIEW_RESTORE_EXPAND_DELAY_MS = 200
 # Нормализованная величина шага колеса мыши
-MOUSEWHEEL_DELTA = 120
-RENDER_DEBOUNCE_MS = 12
-HQ_RENDER_DELAY_MS = 160
-RESIZE_DEBOUNCE_MS = 60
-MIN_FIT_SCALE = 0.01
 
 # --- Зона Гаусса–Крюгера и константы EPSG
 # Делитель для извлечения номера зоны из координаты X (метры)
@@ -258,8 +246,7 @@ CONTOUR_LABEL_EDGE_MARGIN_PX = 8
 CONTOUR_LABEL_TEXT_COLOR = (20, 20, 20)
 CONTOUR_LABEL_OUTLINE_COLOR = (255, 255, 255)
 CONTOUR_LABEL_OUTLINE_WIDTH = 0
-# CONTOUR_LABEL_BG_RGBA = (255, 255, 255, 200)
-
+# Подложка для подписи изолиний отключена по умолчанию; для включения задайте RGBA-цвет
 CONTOUR_LABEL_BG_RGBA = None
 
 CONTOUR_LABEL_BG_PADDING = 3
@@ -292,7 +279,6 @@ GRID_LABEL_MOD = 100
 
 # --- Общие константы для валидаторов/обработчиков GUI
 # Минимальное число аргументов команды скролла (tk Scrollbar callback)
-SCROLL_CMD_MIN_ARGS = 3
 
 # --- Константы для окна предпросмотра
 # Фиксированный угол поворота изображения в градусах для улучшения
@@ -337,20 +323,46 @@ SEED_POLYLINE_QUANT_FACTOR = 8
 MARCHING_SQUARES_CENTER_WEIGHT = 0.25
 
 # Marching Squares — именованные маски и группы случаев
+# Битовая раскладка (по часовой стрелке, начиная с верхнего левого):
+# b0: TL, b1: TR, b2: BR, b3: BL
 # Пустая и полная маски (все углы ниже/выше уровня соответственно)
-MS_MASK_EMPTY = 0  # 0b0000
-MS_MASK_FULL = 15  # 0b1111
+MS_MASK_EMPTY = 0   # 0b0000 — все ниже уровня
+MS_MASK_FULL = 15   # 0b1111 — все выше уровня
+
+# Одиночные углы
+MS_MASK_TL = 1      # 0b0001 — только верхний левый
+MS_MASK_TR = 2      # 0b0010 — только верхний правый
+MS_MASK_BR = 4      # 0b0100 — только нижний правый
+MS_MASK_BL = 8      # 0b1000 — только нижний левый
+
+# Две вершины — стороны клетки
+MS_MASK_TOP = 3       # 0b0011 — TL+TR (верх)
+MS_MASK_RIGHT = 6     # 0b0110 — TR+BR (право)
+MS_MASK_BOTTOM = 12   # 0b1100 — BL+BR (низ)
+MS_MASK_LEFT = 9      # 0b1001 — TL+BL (лево)
+
+# Диагональные (седловые) случаи — неоднозначны без разрешения диагонали
+MS_MASK_TL_BR = 5   # 0b0101 — TL+BR
+MS_MASK_TR_BL = 10  # 0b1010 — TR+BL
+
+# Три вершины — «всё кроме …»
+MS_MASK_NOT_TL = 14  # 0b1110 — все кроме TL
+MS_MASK_NOT_TR = 13  # 0b1101 — все кроме TR
+MS_MASK_NOT_BR = 11  # 0b1011 — все кроме BR
+MS_MASK_NOT_BL = 7   # 0b0111 — все кроме BL
+
 # Случаи, когда изолиния в клетке отсутствует
 MS_NO_CONTOUR_CASES = {MS_MASK_EMPTY, MS_MASK_FULL}
+
 # Комплементарные группы масок: какие рёбра клетки соединяет изолиния
 # (именование указывает пары рёбер; порядок в кортеже — комплементарные случаи)
-MS_CONNECT_TOP_LEFT = (1, 14)  # верхнее ↔ левое ребро
-MS_CONNECT_TOP_RIGHT = (2, 13)  # верхнее ↔ правое ребро
-MS_CONNECT_LEFT_RIGHT = (3, 12)  # левое ↔ правое (горизонтально через клетку)
-MS_CONNECT_RIGHT_BOTTOM = (4, 11)  # правое ↔ нижнее ребро
-MS_AMBIGUOUS_CASES = (5, 10)  # седловые (неоднозначные) случаи
-MS_CONNECT_TOP_BOTTOM = (6, 9)  # верхнее ↔ нижнее (вертикально через клетку)
-MS_CONNECT_LEFT_BOTTOM = (7, 8)  # левое ↔ нижнее ребро
+MS_CONNECT_TOP_LEFT = (MS_MASK_TL, MS_MASK_NOT_TL)                 # (1, 14) верх ↔ лево
+MS_CONNECT_TOP_RIGHT = (MS_MASK_TR, MS_MASK_NOT_TR)                # (2, 13) верх ↔ право
+MS_CONNECT_LEFT_RIGHT = (MS_MASK_TOP, MS_MASK_BOTTOM)              # (3, 12) лево ↔ право (горизонталь)
+MS_CONNECT_RIGHT_BOTTOM = (MS_MASK_BR, MS_MASK_NOT_BR)             # (4, 11) право ↔ низ
+MS_AMBIGUOUS_CASES = (MS_MASK_TL_BR, MS_MASK_TR_BL)                # (5, 10) седловые
+MS_CONNECT_TOP_BOTTOM = (MS_MASK_RIGHT, MS_MASK_LEFT)              # (6, 9)  верх ↔ низ (вертикаль)
+MS_CONNECT_LEFT_BOTTOM = (MS_MASK_NOT_BL, MS_MASK_BL)              # (7, 8)  лево ↔ низ
 
 # Пиксельный припуск по краю временного блока при отрисовке контуров
 CONTOUR_BLOCK_EDGE_PAD_PX = 1

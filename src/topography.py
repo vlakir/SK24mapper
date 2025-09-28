@@ -157,7 +157,7 @@ def estimate_crop_size_px(
     return req_w_px, req_h_px, req_w_px * req_h_px
 
 
-def choose_zoom_with_limit(  # noqa: PLR0913
+def choose_zoom_with_limit(
     center_lat: float,
     width_m: float,
     height_m: float,
@@ -175,7 +175,7 @@ def choose_zoom_with_limit(  # noqa: PLR0913
     return 0
 
 
-def compute_grid(  # noqa: PLR0913
+def compute_grid(
     center_lat: float,
     center_lng: float,
     width_m: float,
@@ -262,7 +262,7 @@ def effective_scale_for_xyz(tile_size: int, *, use_retina: bool) -> int:
     return (base // TILE_SIZE) * (RETINA_FACTOR if use_retina else 1)
 
 
-def compute_xyz_coverage(  # noqa: PLR0913
+def compute_xyz_coverage(
     center_lat: float,
     center_lng: float,
     width_m: float,
@@ -354,7 +354,7 @@ def compute_xyz_coverage(  # noqa: PLR0913
     return tiles, (count_x, count_y), (crop_x, crop_y, crop_w, crop_h), map_params
 
 
-async def async_fetch_xyz_tile(  # noqa: PLR0913
+async def async_fetch_xyz_tile(
     client: aiohttp.ClientSession,
     api_key: str,
     style_id: str,
@@ -434,7 +434,7 @@ async def async_fetch_xyz_tile(  # noqa: PLR0913
     raise RuntimeError(msg)
 
 
-async def async_fetch_terrain_rgb_tile(  # noqa: PLR0913
+async def async_fetch_terrain_rgb_tile(
     client: aiohttp.ClientSession,
     api_key: str,
     z: int,

@@ -552,14 +552,12 @@ class MainWindow(QMainWindow):
         try:
             sender_obj = self.sender()
             if isinstance(sender_obj, QObject):
-                with contextlib.suppress(Exception):
-                    sender_obj.disconnect()
+                sender_obj.disconnect()
                 # Drop potential heavy attributes captured in the worker
-                with contextlib.suppress(Exception):
-                    if hasattr(sender_obj, 'image'):
-                        sender_obj.image = None
-                    if hasattr(sender_obj, 'adj'):
-                        sender_obj.adj = None
+                if hasattr(sender_obj, 'image'):
+                    sender_obj.image = None
+                if hasattr(sender_obj, 'adj'):
+                    sender_obj.adj = None
         except Exception as e:
             logger.debug(f'Adjust slot cleanup failed: {e}')
 
@@ -651,21 +649,15 @@ class MainWindow(QMainWindow):
             if self._download_worker is None:
                 return
             # Disconnect all signals from worker to UI
-            with contextlib.suppress(Exception):
-                self._download_worker.finished.disconnect()
-            with contextlib.suppress(Exception):
-                self._download_worker.progress_update.disconnect()
-            with contextlib.suppress(Exception):
-                self._download_worker.preview_ready.disconnect()
+            self._download_worker.finished.disconnect()
+            self._download_worker.progress_update.disconnect()
+            self._download_worker.preview_ready.disconnect()
             # Ensure the thread is stopped
             if self._download_worker.isRunning():
-                with contextlib.suppress(Exception):
-                    self._download_worker.quit()
-                with contextlib.suppress(Exception):
-                    self._download_worker.wait(1000)
+                self._download_worker.quit()
+                self._download_worker.wait(1000)
             # Delete later and drop reference
-            with contextlib.suppress(Exception):
-                self._download_worker.deleteLater()
+            self._download_worker.deleteLater()
         finally:
             self._download_worker = None
 
@@ -819,22 +811,18 @@ class MainWindow(QMainWindow):
             'Наложить изолинии поверх выбранного типа карты'
         )
         # Гарантируем кликабельность: резервируем место и фиксируем размер ползунка
-        try:
-            self.contours_checkbox.setEnabled(True)
-            self.contours_checkbox.setMinimumWidth(110)
-            self.contours_checkbox.setSizePolicy(
-                QSizePolicy.Policy.Fixed,
-                QSizePolicy.Policy.Fixed,
-            )
-        except Exception:
-            pass
+        self.contours_checkbox.setEnabled(True)
+        self.contours_checkbox.setMinimumWidth(110)
+        self.contours_checkbox.setSizePolicy(
+            QSizePolicy.Policy.Fixed,
+            QSizePolicy.Policy.Fixed,
+        )
         maptype_row.addWidget(maptype_label)
         maptype_row.addWidget(self.map_type_combo, 1)
         maptype_row.addSpacing(8)
         maptype_row.addWidget(self.contours_checkbox)
         settings_vertical_layout.addLayout(maptype_row)
 
-        # Датум-трансформация (Helmert)
         self.helmert_group = QGroupBox('Датум-трансформация СК-42 → WGS84 (Helmert)')
         helmert_group_layout = QVBoxLayout()
         self.helmert_widget = HelmertSettingsWidget()
@@ -1228,16 +1216,12 @@ class MainWindow(QMainWindow):
     def _save_current_profile(self) -> None:
         """Save current settings to profile."""
         # 1) Ensure pending UI edits are committed (e.g., QLineEdit editingFinished)
-        try:
-            w = QApplication.focusWidget()
-            if w is not None:
-                w.clearFocus()
-            QApplication.processEvents()
-        except Exception:
-            pass
+        w = QApplication.focusWidget()
+        if w is not None:
+            w.clearFocus()
+        QApplication.processEvents()
         # 2) Force bulk sync UI -> Model before saving (bypass guards)
-        with contextlib.suppress(Exception):
-            self._sync_ui_to_model_now()
+        self._sync_ui_to_model_now()
 
         profile_name = self.profile_combo.currentText()
         if profile_name:
@@ -1247,16 +1231,12 @@ class MainWindow(QMainWindow):
     def _save_profile_as(self) -> None:
         """Save current settings to a new profile file."""
         # 1) Ensure pending UI edits are committed (e.g., QLineEdit editingFinished)
-        try:
-            w = QApplication.focusWidget()
-            if w is not None:
-                w.clearFocus()
-            QApplication.processEvents()
-        except Exception:
-            pass
+        w = QApplication.focusWidget()
+        if w is not None:
+            w.clearFocus()
+        QApplication.processEvents()
         # 2) Force bulk sync UI -> Model before opening the dialog (bypass guards)
-        with contextlib.suppress(Exception):
-            self._sync_ui_to_model_now()
+        self._sync_ui_to_model_now()
 
         # Get default directory
         project_root = Path(__file__).parent.parent.parent
@@ -1272,15 +1252,11 @@ class MainWindow(QMainWindow):
 
         if file_path:
             # 3) Just in case user changed something via shortcuts while dialog open
-            try:
-                w = QApplication.focusWidget()
-                if w is not None:
-                    w.clearFocus()
-                QApplication.processEvents()
-            except Exception:
-                pass
-            with contextlib.suppress(Exception):
-                self._sync_ui_to_model_now()
+            w = QApplication.focusWidget()
+            if w is not None:
+                w.clearFocus()
+            QApplication.processEvents()
+            self._sync_ui_to_model_now()
 
             # Check if profile already exists and show warning
             profile_path = Path(file_path)
@@ -1329,12 +1305,10 @@ class MainWindow(QMainWindow):
             return
 
         # Clear previous preview and pixmap cache between runs
-        with contextlib.suppress(Exception):
-            self._clear_preview_ui()
+        self._clear_preview_ui()
 
         # Cleanup any stale worker from previous run
-        with contextlib.suppress(Exception):
-            self._cleanup_download_worker()
+        self._cleanup_download_worker()
 
         self._download_worker = DownloadWorker(self._controller)
         self._download_worker.finished.connect(self._on_download_finished)
@@ -1377,12 +1351,9 @@ class MainWindow(QMainWindow):
         try:
             set_preview_image_callback(None)
             set_spinner_callbacks(None, None)
-            try:
-                from progress import set_progress_callback as _set_prog
+            from progress import set_progress_callback as _set_prog
 
-                _set_prog(None)
-            except Exception:
-                pass
+            _set_prog(None)
         except Exception as e:
             logger.debug(f'Failed to reset progress callbacks: {e}')
 
@@ -1402,8 +1373,7 @@ class MainWindow(QMainWindow):
         elif event == ModelEvent.PROFILE_LOADED:
             # After loading a new profile, clear the preview and reset related UI
             try:
-                with contextlib.suppress(Exception):
-                    self._preview_area.clear()
+                self._preview_area.clear()
                 self._current_image = None
                 self._base_image = None
                 # Reset adjustments to defaults and sync labels (sliders stay disabled)
@@ -1415,8 +1385,7 @@ class MainWindow(QMainWindow):
                 # Disable adjustment sliders when no image
                 self._set_sliders_enabled(False)
                 # Reset size estimate
-                with contextlib.suppress(Exception):
-                    self.output_widget.size_estimate_value.setText('—')
+                self.output_widget.size_estimate_value.setText('—')
             except Exception as e:
                 logger.debug(f'Failed to clear preview on profile load: {e}')
             # Update the rest of the UI from profile settings
@@ -1643,8 +1612,7 @@ class MainWindow(QMainWindow):
     def _clear_preview_ui(self) -> None:
         """Clear preview image, drop pixmap cache, and disable related controls."""
         try:
-            with contextlib.suppress(Exception):
-                self._preview_area.clear()
+            self._preview_area.clear()
             # Reset images
             self._current_image = None
             self._base_image = None
@@ -1657,17 +1625,14 @@ class MainWindow(QMainWindow):
             }
             # НЕ вызываем _sync_adj_ui_from_state(), чтобы слайдеры остались на своих местах
             # Disable save controls
-            with contextlib.suppress(Exception):
-                self.save_map_btn.setEnabled(False)
-                self.save_map_action.setEnabled(False)
+            self.save_map_btn.setEnabled(False)
+            self.save_map_action.setEnabled(False)
             # Disable sliders
             self._set_sliders_enabled(False)
             # Reset size estimate label if present
-            with contextlib.suppress(Exception):
-                self.output_widget.size_estimate_value.setText('—')
+            self.output_widget.size_estimate_value.setText('—')
             # Aggressively clear global QPixmap cache between runs
-            with contextlib.suppress(Exception):
-                QPixmapCache.clear()
+            QPixmapCache.clear()
         except Exception as e:
             logger.debug(f'Failed to clear preview UI: {e}')
 
@@ -1865,8 +1830,7 @@ class MainWindow(QMainWindow):
         self._adj['saturation'] = self.saturation_slider.value() / 100.0
         self._update_adj_labels()
         # Propagate adjustments to model settings so they are saved in profiles
-        with contextlib.suppress(Exception):
-            self._controller.update_output_settings(self.output_widget.get_settings())
+        self._controller.update_output_settings(self.output_widget.get_settings())
         # Request debounced adjust strictly via GUI signal
         self._sig_schedule_adjust.emit()
         # Also schedule size estimate (debounced)
@@ -2019,13 +1983,11 @@ class MainWindow(QMainWindow):
         try:
             # Proactively disconnect worker signals and drop heavy refs
             if self._save_worker is not None:
-                with contextlib.suppress(Exception):
-                    self._save_worker.disconnect()
-                with contextlib.suppress(Exception):
-                    if hasattr(self._save_worker, 'image'):
-                        self._save_worker.image = None
-                    if hasattr(self._save_worker, 'adj'):
-                        self._save_worker.adj = None
+                self._save_worker.disconnect()
+                if hasattr(self._save_worker, 'image'):
+                    self._save_worker.image = None
+                if hasattr(self._save_worker, 'adj'):
+                    self._save_worker.adj = None
             if self._save_thread is not None:
                 if self._save_thread.isRunning():
                     self._save_thread.quit()
@@ -2299,14 +2261,10 @@ class MainWindow(QMainWindow):
             worker.finished.connect(th.quit, Qt.ConnectionType.QueuedConnection)
 
             def _cleanup() -> None:
-                # Disconnect worker signals and drop heavy refs proactively
-                with contextlib.suppress(Exception):
-                    worker.disconnect()
-                with contextlib.suppress(Exception):
-                    if hasattr(worker, 'image'):
-                        worker.image = None
-                    if hasattr(worker, 'adj'):
-                        worker.adj = None
+                if hasattr(worker, 'image'):
+                    worker.image = None
+                if hasattr(worker, 'adj'):
+                    worker.adj = None
                 try:
                     if worker in self._estimate_workers:
                         self._estimate_workers.remove(worker)
@@ -2330,13 +2288,10 @@ class MainWindow(QMainWindow):
         logger.info('Application closing - cleaning up resources')
         log_comprehensive_diagnostics('CLEANUP_START')
         # Clear preview and drop pixmap cache to free GPU/Qt memory
-        with contextlib.suppress(Exception):
-            self._clear_preview_ui()
-        with contextlib.suppress(Exception):
-            QPixmapCache.clear()
+        self._clear_preview_ui()
+        QPixmapCache.clear()
         # Also cleanup any lingering download worker connections/callbacks
-        with contextlib.suppress(Exception):
-            self._cleanup_download_worker()
+        self._cleanup_download_worker()
 
         # Cleanup progress system resources first
         log_memory_usage('before progress cleanup')
