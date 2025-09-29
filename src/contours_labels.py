@@ -9,14 +9,14 @@ Additionally, it now logs detailed diagnostics to help pinpoint why
 labels might not appear (filters, collisions, edges, etc.).
 """
 
-from typing import TYPE_CHECKING
 import logging
 import math
+from typing import TYPE_CHECKING
+
 from PIL import Image, ImageDraw, ImageFont
 
 from constants import (
     CONTOUR_INDEX_EVERY,
-    CONTOUR_LABELS_ENABLED,
     CONTOUR_LABEL_BG_PADDING,
     CONTOUR_LABEL_BG_RGBA,
     CONTOUR_LABEL_EDGE_MARGIN_PX,
@@ -33,13 +33,12 @@ from constants import (
     CONTOUR_LABEL_OUTLINE_WIDTH,
     CONTOUR_LABEL_SPACING_PX,
     CONTOUR_LABEL_TEXT_COLOR,
+    CONTOUR_LABELS_ENABLED,
     GRID_FONT_PATH,
     GRID_FONT_PATH_BOLD,
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
-
     # PIL Image type hint (runtime available via PIL import above)
     from PIL.Image import Image as PILImage
 
@@ -47,7 +46,7 @@ logger = logging.getLogger(__name__)
 
 
 def draw_contour_labels(
-    img: "PILImage",
+    img: PILImage,
     seed_polylines: dict[int, list[list[tuple[float, float]]]],
     levels: list[float],
     crop_rect: tuple[int, int, int, int] | None,
@@ -56,7 +55,8 @@ def draw_contour_labels(
     *,
     dry_run: bool = False,
 ) -> list[tuple[int, int, int, int]]:
-    """Place contour labels on image and/or compute their bounding boxes.
+    """
+    Place contour labels on image and/or compute their bounding boxes.
 
     Parameters mirror the previous inlined implementation in service.py.
     When dry_run=True, only the list of label bounding boxes is returned
@@ -95,12 +95,11 @@ def draw_contour_labels(
         if size in font_cache:
             return font_cache[size]
         try:
-            if fp:
-                f = ImageFont.truetype(fp, size)
-            else:
-                f = ImageFont.truetype(name, size)
+            f = ImageFont.truetype(fp, size) if fp else ImageFont.truetype(name, size)
         except Exception as ex:
-            logger.warning('Не удалось загрузить шрифт "%s" size=%d: %s', fp or name, size, ex)
+            logger.warning(
+                'Не удалось загрузить шрифт "%s" size=%d: %s', fp or name, size, ex
+            )
             f = ImageFont.load_default()
         font_cache[size] = f
         if not font_reported:
@@ -124,9 +123,7 @@ def draw_contour_labels(
         # Convert to image pixel coords by scaling only
         return [(x * seed_ds, y * seed_ds) for (x, y) in poly]
 
-    def intersects(
-        a: tuple[int, int, int, int], b: tuple[int, int, int, int]
-    ) -> bool:
+    def intersects(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> bool:
         ax0, ay0, ax1, ay1 = a
         bx0, by0, bx1, by1 = b
         return not (ax1 <= bx0 or bx1 <= ax0 or ay1 <= by0 or by1 <= ay0)
@@ -185,7 +182,9 @@ def draw_contour_labels(
                 length = math.hypot(dx, dy)
                 seg_l_list.append(length)
                 total_len += length
-            if total_len < max(CONTOUR_LABEL_MIN_SEG_LEN_PX, CONTOUR_LABEL_SPACING_PX * 0.8):
+            if total_len < max(
+                CONTOUR_LABEL_MIN_SEG_LEN_PX, CONTOUR_LABEL_SPACING_PX * 0.8
+            ):
                 level_skipped_short += 1
                 total_skipped_short += 1
                 continue
@@ -221,8 +220,12 @@ def draw_contour_labels(
                     ang_rad -= math.pi
 
                 if not (
-                    CONTOUR_LABEL_EDGE_MARGIN_PX <= px <= w - CONTOUR_LABEL_EDGE_MARGIN_PX
-                    and CONTOUR_LABEL_EDGE_MARGIN_PX <= py <= h - CONTOUR_LABEL_EDGE_MARGIN_PX
+                    CONTOUR_LABEL_EDGE_MARGIN_PX
+                    <= px
+                    <= w - CONTOUR_LABEL_EDGE_MARGIN_PX
+                    and CONTOUR_LABEL_EDGE_MARGIN_PX
+                    <= py
+                    <= h - CONTOUR_LABEL_EDGE_MARGIN_PX
                 ):
                     level_skipped_edge += 1
                     total_skipped_edge += 1
@@ -255,7 +258,9 @@ def draw_contour_labels(
                                 font=fnt,
                                 fill=CONTOUR_LABEL_OUTLINE_COLOR,
                             )
-                bd.text((pad - l, pad - t), text, font=fnt, fill=CONTOUR_LABEL_TEXT_COLOR)
+                bd.text(
+                    (pad - l, pad - t), text, font=fnt, fill=CONTOUR_LABEL_TEXT_COLOR
+                )
 
                 ang_deg = math.degrees(ang_rad)
                 rot = box.rotate(

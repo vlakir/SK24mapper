@@ -326,43 +326,46 @@ MARCHING_SQUARES_CENTER_WEIGHT = 0.25
 # Битовая раскладка (по часовой стрелке, начиная с верхнего левого):
 # b0: TL, b1: TR, b2: BR, b3: BL
 # Пустая и полная маски (все углы ниже/выше уровня соответственно)
-MS_MASK_EMPTY = 0   # 0b0000 — все ниже уровня
-MS_MASK_FULL = 15   # 0b1111 — все выше уровня
+MS_MASK_EMPTY = 0  # 0b0000 — все ниже уровня
+MS_MASK_FULL = 15  # 0b1111 — все выше уровня
 
 # Одиночные углы
-MS_MASK_TL = 1      # 0b0001 — только верхний левый
-MS_MASK_TR = 2      # 0b0010 — только верхний правый
-MS_MASK_BR = 4      # 0b0100 — только нижний правый
-MS_MASK_BL = 8      # 0b1000 — только нижний левый
+MS_MASK_TL = 1  # 0b0001 — только верхний левый
+MS_MASK_TR = 2  # 0b0010 — только верхний правый
+MS_MASK_BR = 4  # 0b0100 — только нижний правый
+MS_MASK_BL = 8  # 0b1000 — только нижний левый
 
 # Две вершины — стороны клетки
-MS_MASK_TOP = 3       # 0b0011 — TL+TR (верх)
-MS_MASK_RIGHT = 6     # 0b0110 — TR+BR (право)
-MS_MASK_BOTTOM = 12   # 0b1100 — BL+BR (низ)
-MS_MASK_LEFT = 9      # 0b1001 — TL+BL (лево)
+MS_MASK_TOP = 3  # 0b0011 — TL+TR (верх)
+MS_MASK_RIGHT = 6  # 0b0110 — TR+BR (право)
+MS_MASK_BOTTOM = 12  # 0b1100 — BL+BR (низ)
+MS_MASK_LEFT = 9  # 0b1001 — TL+BL (лево)
 
 # Диагональные (седловые) случаи — неоднозначны без разрешения диагонали
-MS_MASK_TL_BR = 5   # 0b0101 — TL+BR
+MS_MASK_TL_BR = 5  # 0b0101 — TL+BR
 MS_MASK_TR_BL = 10  # 0b1010 — TR+BL
 
 # Три вершины — «всё кроме …»
 MS_MASK_NOT_TL = 14  # 0b1110 — все кроме TL
 MS_MASK_NOT_TR = 13  # 0b1101 — все кроме TR
 MS_MASK_NOT_BR = 11  # 0b1011 — все кроме BR
-MS_MASK_NOT_BL = 7   # 0b0111 — все кроме BL
+MS_MASK_NOT_BL = 7  # 0b0111 — все кроме BL
 
 # Случаи, когда изолиния в клетке отсутствует
 MS_NO_CONTOUR_CASES = {MS_MASK_EMPTY, MS_MASK_FULL}
 
 # Комплементарные группы масок: какие рёбра клетки соединяет изолиния
 # (именование указывает пары рёбер; порядок в кортеже — комплементарные случаи)
-MS_CONNECT_TOP_LEFT = (MS_MASK_TL, MS_MASK_NOT_TL)                 # (1, 14) верх ↔ лево
-MS_CONNECT_TOP_RIGHT = (MS_MASK_TR, MS_MASK_NOT_TR)                # (2, 13) верх ↔ право
-MS_CONNECT_LEFT_RIGHT = (MS_MASK_TOP, MS_MASK_BOTTOM)              # (3, 12) лево ↔ право (горизонталь)
-MS_CONNECT_RIGHT_BOTTOM = (MS_MASK_BR, MS_MASK_NOT_BR)             # (4, 11) право ↔ низ
-MS_AMBIGUOUS_CASES = (MS_MASK_TL_BR, MS_MASK_TR_BL)                # (5, 10) седловые
-MS_CONNECT_TOP_BOTTOM = (MS_MASK_RIGHT, MS_MASK_LEFT)              # (6, 9)  верх ↔ низ (вертикаль)
-MS_CONNECT_LEFT_BOTTOM = (MS_MASK_NOT_BL, MS_MASK_BL)              # (7, 8)  лево ↔ низ
+MS_CONNECT_TOP_LEFT = (MS_MASK_TL, MS_MASK_NOT_TL)  # (1, 14) верх ↔ лево
+MS_CONNECT_TOP_RIGHT = (MS_MASK_TR, MS_MASK_NOT_TR)  # (2, 13) верх ↔ право
+MS_CONNECT_LEFT_RIGHT = (
+    MS_MASK_TOP,
+    MS_MASK_BOTTOM,
+)  # (3, 12) лево ↔ право (горизонталь)
+MS_CONNECT_RIGHT_BOTTOM = (MS_MASK_BR, MS_MASK_NOT_BR)  # (4, 11) право ↔ низ
+MS_AMBIGUOUS_CASES = (MS_MASK_TL_BR, MS_MASK_TR_BL)  # (5, 10) седловые
+MS_CONNECT_TOP_BOTTOM = (MS_MASK_RIGHT, MS_MASK_LEFT)  # (6, 9)  верх ↔ низ (вертикаль)
+MS_CONNECT_LEFT_BOTTOM = (MS_MASK_NOT_BL, MS_MASK_BL)  # (7, 8)  лево ↔ низ
 
 # Пиксельный припуск по краю временного блока при отрисовке контуров
 CONTOUR_BLOCK_EDGE_PAD_PX = 1
