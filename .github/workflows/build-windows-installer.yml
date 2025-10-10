@@ -28,6 +28,12 @@ jobs:
           # Если на 3.13 нет нужных wheels, поменяйте на '3.12'
           python-version: '3.13'
 
+      - name: Set pipx environment variables
+        shell: bash
+        run: |
+          echo "PIPX_HOME=${{ runner.temp }}/pipx" >> $GITHUB_ENV
+          echo "PIPX_BIN_DIR=${{ runner.temp }}/pipx/bin" >> $GITHUB_ENV
+
       - name: Install Poetry
         run: pipx install poetry
 
