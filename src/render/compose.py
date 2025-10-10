@@ -21,6 +21,7 @@ def compose_final_image(
 ) -> Image.Image:
     """
     Thin facade for final composition steps; currently only rotation is applied here.
+
     Other overlays are still applied in service.py using existing helpers.
     """
     img = base_img
@@ -34,7 +35,7 @@ def save_image(
 ) -> None:
     if save_kwargs is None:
         # Fallback: try to infer default save kwargs
-        from profiles import MapSettings  # type: ignore
+        from profiles import MapSettings  # type: ignore[attr-defined]
 
         try:
             save_kwargs = _build_save_kwargs(path, MapSettings())  # type: ignore[arg-type]

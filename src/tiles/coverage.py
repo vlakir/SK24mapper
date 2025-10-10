@@ -1,10 +1,22 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any
+
 from geometry import tile_overlap_rect_common as _tile_overlap_rect_common
 from topography import compute_xyz_coverage as _compute_xyz_coverage
 
+if TYPE_CHECKING:
+    from collections.abc import Generator
 
-def compute_coverage(bounds, zoom):
+
+def compute_coverage(
+    bounds: Any, zoom: int
+) -> tuple[
+    list[tuple[int, tuple[int, int]]],
+    tuple[int, int],
+    tuple[int, int, int, int],
+    dict[str, Any],
+]:
     """
     Thin facade over topography.compute_xyz_coverage to standardize naming.
 
@@ -21,7 +33,7 @@ def iter_overlapping_tiles(
     crop_rect: tuple[int, int, int, int],
     *,
     tile_px: int,
-):
+) -> Generator[tuple[int, tuple[int, int]]]:
     """Yield only tiles whose effective pixel rect overlaps with crop_rect."""
     for idx, (tile_x_world, tile_y_world) in tiles:
         tx = idx % tiles_x

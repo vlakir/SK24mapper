@@ -21,6 +21,8 @@ from constants import (
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
+MIN_GRID_SIZE = 2
+
 
 @dataclass(frozen=True)
 class MSParams:
@@ -51,10 +53,10 @@ def build_seed_polylines(
         ms = MSParams()
 
     # Normalize dem to a list of lists for indexing
-    dem = [list(row) for row in dem]
+    dem_list: list[list[float]] = [list(row) for row in dem]
 
-    seed_h = len(dem)
-    seed_w = len(dem[0]) if seed_h else 0
+    seed_h = len(dem_list)
+    seed_w = len(dem_list[0]) if seed_h else 0
 
     def interp(p0: float, p1: float, v0: float, v1: float, level: float) -> float:
         if v1 == v0:
@@ -70,10 +72,10 @@ def build_seed_polylines(
 
     for li, level in enumerate(levels):
         segs: list[tuple[tuple[float, float], tuple[float, float]]] = []
-        if seed_h >= 2 and seed_w >= 2:
+        if seed_h >= MIN_GRID_SIZE and seed_w >= MIN_GRID_SIZE:
             for j in range(seed_h - 1):
-                row0 = dem[j]
-                row1 = dem[j + 1]
+                row0 = dem_list[j]
+                row1 = dem_list[j + 1]
                 for i in range(seed_w - 1):
                     v00 = row0[i]
                     v10 = row0[i + 1]
@@ -94,8 +96,14 @@ def build_seed_polylines(
                     xt = interp(x, x + 1, v00, v10, level)
                     xb = interp(x, x + 1, v01, v11, level)
 
-                    def add(a: tuple[float, float], b: tuple[float, float]) -> None:
-                        segs.append((a, b))
+                    def add(
+                        a: tuple[float, float],
+                        b: tuple[float, float],
+                        segs_list: list[
+                            tuple[tuple[float, float], tuple[float, float]]
+                        ] = segs,
+                    ) -> None:
+                        segs_list.append((a, b))
 
                     if mask in MS_CONNECT_TOP_LEFT:
                         add((xt, y), (x, yl))

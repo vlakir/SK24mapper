@@ -42,7 +42,6 @@ from constants import (
     BYTES_TO_KB_THRESHOLD,
     FLOAT_COMPARISON_TOLERANCE,
     MAP_TYPE_LABELS_RU,
-    PROFILES_DIR,
     MapType,
 )
 from diagnostics import (
@@ -53,6 +52,7 @@ from diagnostics import (
 from gui.controller import MilMapperController
 from gui.model import EventData, MilMapperModel, ModelEvent, Observer
 from gui.preview_window import OptimizedImageView
+from profiles import ensure_profiles_dir
 from progress import (
     cleanup_all_progress_resources,
     set_preview_image_callback,
@@ -64,6 +64,9 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
+
+# Constant for decimal precision threshold
+MIN_DECIMALS_FOR_SMALL_STEP = 2
 
 
 class DownloadWorker(QThread):
@@ -409,7 +412,6 @@ class HelmertSettingsWidget(QWidget):
         )
         layout.addWidget(self.enable_cb, 0, 0, 1, 4)
 
-        # dx, dy, dz (m)
         row = 1
         layout.addWidget(QLabel('dx (м):'), row, 0)
         self.dx = QDoubleSpinBox()
@@ -426,7 +428,6 @@ class HelmertSettingsWidget(QWidget):
         self._cfg_spin(self.dz, -500.0, 500.0, 3, 0.0)
         layout.addWidget(self.dz, row, 1)
 
-        # rx, ry, rz (arcsec)
         layout.addWidget(QLabel('rx (угл. сек):'), row, 2)
         self.rx = QDoubleSpinBox()
         self._cfg_spin(self.rx, -60.0, 60.0, 5, 0.0)
@@ -442,7 +443,6 @@ class HelmertSettingsWidget(QWidget):
         self._cfg_spin(self.rz, -60.0, 60.0, 5, 0.0)
         layout.addWidget(self.rz, row, 3)
 
-        # ds (ppm)
         row += 1
         layout.addWidget(QLabel('ds (ppm):'), row, 0)
         self.ds = QDoubleSpinBox()
@@ -469,7 +469,7 @@ class HelmertSettingsWidget(QWidget):
     ) -> None:
         w.setRange(min_v, max_v)
         w.setDecimals(decimals)
-        w.setSingleStep(0.01 if decimals >= 2 else 0.1)
+        w.setSingleStep(0.01 if decimals >= MIN_DECIMALS_FOR_SMALL_STEP else 0.1)
         w.setValue(default)
         w.setEnabled(False)
 
@@ -548,16 +548,15 @@ class MainWindow(QMainWindow):
                 self._preview_area.set_image(img_obj)
             except Exception as ex:
                 logger.exception(f'[ADJ] set_image failed: {ex}')
-        # After handling, proactively disconnect sender's signals and drop heavy refs
+        # After handling, drop heavy refs from sender (disconnect happens via deleteLater)
         try:
             sender_obj = self.sender()
             if isinstance(sender_obj, QObject):
-                sender_obj.disconnect()
                 # Drop potential heavy attributes captured in the worker
                 if hasattr(sender_obj, 'image'):
-                    sender_obj.image = None
+                    delattr(sender_obj, 'image')
                 if hasattr(sender_obj, 'adj'):
-                    sender_obj.adj = None
+                    delattr(sender_obj, 'adj')
         except Exception as e:
             logger.debug(f'Adjust slot cleanup failed: {e}')
 
@@ -1140,6 +1139,7 @@ class MainWindow(QMainWindow):
     def _sync_ui_to_model_now(self) -> None:
         """
         Force-collect current UI settings and push them to the model without guards.
+
         Does not clear preview or check _ui_sync_in_progress to avoid losing changes during Save/Save As.
         """
         # Collect all current settings
@@ -1238,9 +1238,8 @@ class MainWindow(QMainWindow):
         # 2) Force bulk sync UI -> Model before opening the dialog (bypass guards)
         self._sync_ui_to_model_now()
 
-        # Get default directory
-        project_root = Path(__file__).parent.parent.parent
-        default_dir = project_root / PROFILES_DIR
+        # Get default directory (always user/resolved profiles dir)
+        default_dir = ensure_profiles_dir()
 
         # Show file dialog
         file_path, _ = QFileDialog.getSaveFileName(
@@ -1284,13 +1283,25 @@ class MainWindow(QMainWindow):
             saved_profile_name = self._controller.save_current_profile_as(file_path)
             if saved_profile_name:
                 # Update profile combo if the file was saved in profiles directory
-                if Path(file_path).parent == default_dir:
+                if Path(file_path).with_suffix('.toml').parent == ensure_profiles_dir():
                     # Refresh profile list
                     self._load_initial_data()
                     # Select the newly saved profile safely (no extra load)
                     index = self.profile_combo.findText(saved_profile_name)
                     if index >= 0:
                         self._set_profile_selection_safely(index=index)
+                        # Explicitly load the newly saved profile to avoid reverting to default
+                        try:
+                            logger.info(
+                                'After Save As 								-> selecting and loading profile: %s',
+                                saved_profile_name,
+                            )
+                            self._controller.load_profile_by_name(saved_profile_name)
+                        except Exception:
+                            logger.exception(
+                                'Failed to load newly saved profile: %s',
+                                saved_profile_name,
+                            )
 
                 self._status_proxy.show_message(
                     f'Профиль сохранён как: {saved_profile_name}',
@@ -1985,9 +1996,9 @@ class MainWindow(QMainWindow):
             if self._save_worker is not None:
                 self._save_worker.disconnect()
                 if hasattr(self._save_worker, 'image'):
-                    self._save_worker.image = None
+                    delattr(self._save_worker, 'image')
                 if hasattr(self._save_worker, 'adj'):
-                    self._save_worker.adj = None
+                    delattr(self._save_worker, 'adj')
             if self._save_thread is not None:
                 if self._save_thread.isRunning():
                     self._save_thread.quit()
@@ -2262,9 +2273,9 @@ class MainWindow(QMainWindow):
 
             def _cleanup() -> None:
                 if hasattr(worker, 'image'):
-                    worker.image = None
+                    delattr(worker, 'image')
                 if hasattr(worker, 'adj'):
-                    worker.adj = None
+                    delattr(worker, 'adj')
                 try:
                     if worker in self._estimate_workers:
                         self._estimate_workers.remove(worker)

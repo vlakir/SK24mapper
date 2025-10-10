@@ -53,8 +53,8 @@ async def stream_tiles(
 ) -> AsyncIterator[tuple[tuple[int, int, int], Image.Image]]:
     """Stream tiles using a bounded queue to limit memory."""
     sem = asyncio.Semaphore(concurrency)
-    queue: asyncio.Queue[tuple[tuple[int, int, int], Image.Image]] = asyncio.Queue(
-        maxsize=max_queue
+    queue: asyncio.Queue[tuple[tuple[int, int, int], Image.Image | None]] = (
+        asyncio.Queue(maxsize=max_queue)
     )
 
     async def _produce() -> None:
@@ -73,6 +73,7 @@ async def stream_tiles(
             key, img = await queue.get()
             if img is None and key[1] == -1:
                 break
+            assert img is not None
             yield key, img
     finally:
         with contextlib.suppress(Exception):

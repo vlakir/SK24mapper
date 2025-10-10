@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 from pyproj import CRS, Transformer
@@ -34,6 +35,15 @@ from constants import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Constants for validation and computation
+COORD_DIMENSIONS = 3
+MIN_POINTS_FOR_HELMERT = 3
+MIN_POINT_PAIRS = 2
+CSV_COLUMNS_REQUIRED = 4
+MAX_TRANSLATION_M = 10000
+MAX_ROTATION_ARCSEC = 3600
+MAX_SCALE_PPM = 1000
 if not logger.handlers:
     logging.basicConfig(
         level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s'
@@ -67,57 +77,58 @@ class Helmert7Result:
 def estimate_helmert_7p(xs: np.ndarray, xw: np.ndarray) -> Helmert7Result:
     """
     Оценка 7 параметров Bursa–Wolf между двумя наборами геоцентрических координат.
+
     xs — (N,3) точки в СК-42 (Krassovsky) геоцентрических XYZ (метры)
     xw — (N,3) соответствующие точки в WGS84 геоцентрических XYZ (метры)
     Возвращает dx,dy,dz (м), rx,ry,rz (угл.сек), ds_ppm (ppm).
     """
-    if xs.shape != xw.shape or xs.shape[1] != 3:
+    if xs.shape != xw.shape or xs.shape[1] != COORD_DIMENSIONS:
         msg = 'Формат точек должен быть (N,3), xs и xw одинаковых размеров'
         raise ValueError(msg)
     n = xs.shape[0]
-    if n < 3:
+    if n < MIN_POINTS_FOR_HELMERT:
         msg = 'Для оценки 7 параметров нужно не менее трёх точек'
         raise ValueError(msg)
 
-    A = np.zeros((3 * n, 7), dtype=float)
-    L = np.zeros((3 * n, 1), dtype=float)
+    matrix_a = np.zeros((3 * n, 7), dtype=float)
+    vector_l = np.zeros((3 * n, 1), dtype=float)
     for i in range(n):
-        Xs, Ys, Zs = xs[i]
-        Xw, Yw, Zw = xw[i]
+        x_s, y_s, z_s = xs[i]
+        x_w, y_w, z_w = xw[i]
         # Уравнения разностей (WGS - SK42)
         # Xw - Xs = dX + (-rz*Ys + ry*Zs) + m*Xs
         # Yw - Ys = dY + ( rz*Xs - rx*Zs) + m*Ys
         # Zw - Zs = dZ + (-ry*Xs + rx*Ys) + m*Zs
         r = 3 * i
         # Для X
-        A[r, 0] = 1.0  # dX
-        A[r, 1] = 0.0  # dY
-        A[r, 2] = 0.0  # dZ
-        A[r, 3] = 0.0  # rx
-        A[r, 4] = Zs  # ry
-        A[r, 5] = -Ys  # rz
-        A[r, 6] = Xs  # m
-        L[r, 0] = Xw - Xs
+        matrix_a[r, 0] = 1.0  # dX
+        matrix_a[r, 1] = 0.0  # dY
+        matrix_a[r, 2] = 0.0  # dZ
+        matrix_a[r, 3] = 0.0  # rx
+        matrix_a[r, 4] = z_s  # ry
+        matrix_a[r, 5] = -y_s  # rz
+        matrix_a[r, 6] = x_s  # m
+        vector_l[r, 0] = x_w - x_s
         # Для Y
-        A[r + 1, 0] = 0.0
-        A[r + 1, 1] = 1.0
-        A[r + 1, 2] = 0.0
-        A[r + 1, 3] = -Zs  # rx
-        A[r + 1, 4] = 0.0  # ry
-        A[r + 1, 5] = Xs  # rz
-        A[r + 1, 6] = Ys  # m
-        L[r + 1, 0] = Yw - Ys
+        matrix_a[r + 1, 0] = 0.0
+        matrix_a[r + 1, 1] = 1.0
+        matrix_a[r + 1, 2] = 0.0
+        matrix_a[r + 1, 3] = -z_s  # rx
+        matrix_a[r + 1, 4] = 0.0  # ry
+        matrix_a[r + 1, 5] = x_s  # rz
+        matrix_a[r + 1, 6] = y_s  # m
+        vector_l[r + 1, 0] = y_w - y_s
         # Для Z
-        A[r + 2, 0] = 0.0
-        A[r + 2, 1] = 0.0
-        A[r + 2, 2] = 1.0
-        A[r + 2, 3] = Ys  # rx
-        A[r + 2, 4] = -Xs  # ry
-        A[r + 2, 5] = 0.0  # rz
-        A[r + 2, 6] = Zs  # m
-        L[r + 2, 0] = Zw - Zs
+        matrix_a[r + 2, 0] = 0.0
+        matrix_a[r + 2, 1] = 0.0
+        matrix_a[r + 2, 2] = 1.0
+        matrix_a[r + 2, 3] = y_s  # rx
+        matrix_a[r + 2, 4] = -x_s  # ry
+        matrix_a[r + 2, 5] = 0.0  # rz
+        matrix_a[r + 2, 6] = z_s  # m
+        vector_l[r + 2, 0] = z_w - z_s
 
-    x_hat, *_ = np.linalg.lstsq(A, L, rcond=None)
+    x_hat, *_ = np.linalg.lstsq(matrix_a, vector_l, rcond=None)
     dx = float(x_hat[0, 0])
     dy = float(x_hat[1, 0])
     dz = float(x_hat[2, 0])
@@ -249,7 +260,7 @@ class HelmertToolWindow(QMainWindow):
                 continue
             src.append((x1, y1))
             dst.append((x2, y2))
-        if len(src) < 2:
+        if len(src) < MIN_POINT_PAIRS:
             msg = 'Введите минимум две корректные пары точек'
             raise ValueError(msg)
         return np.array(src, dtype=float), np.array(dst, dtype=float)
@@ -317,43 +328,45 @@ class HelmertToolWindow(QMainWindow):
             lats = p_dst_deg_latlon[:, 0]
             lons = p_dst_deg_latlon[:, 1]
 
-            def _solve_variant(use_prefix: bool):
+            def _solve_variant(
+                use_prefix: bool,
+            ) -> dict[str, float | Helmert7Result | np.ndarray | bool]:
                 p_src_en = p_src_en_base.copy()
                 if use_prefix:
                     p_src_en[:, 0] = p_src_en[:, 0] - zone * GK_ZONE_X_PREFIX_DIV
                 # TM (для диагностики 2D)
-                Xw_tm, Yw_tm = t_wgs_to_wgs_gk.transform(lons, lats)
+                x_w_tm, y_w_tm = t_wgs_to_wgs_gk.transform(lons, lats)
                 # СК-42 ГК -> СК-42 географические
                 lng_sk42, lat_sk42 = t_sk42_from_gk.transform(
                     p_src_en[:, 0], p_src_en[:, 1]
                 )
                 # Географические -> геоцентрические (h=0)
                 zeros = np.zeros_like(lng_sk42)
-                Xs, Ys, Zs = t_sk42_geog_to_xyz.transform(lng_sk42, lat_sk42, zeros)
+                x_s, y_s, z_s = t_sk42_geog_to_xyz.transform(lng_sk42, lat_sk42, zeros)
                 zeros_w = np.zeros_like(lons)
-                Xw, Yw, Zw = t_wgs_geog_to_xyz.transform(lons, lats, zeros_w)
-                xs = np.column_stack([Xs, Ys, Zs])
-                xw = np.column_stack([Xw, Yw, Zw])
+                x_w, y_w, z_w = t_wgs_geog_to_xyz.transform(lons, lats, zeros_w)
+                xs = np.column_stack([x_s, y_s, z_s])
+                xw = np.column_stack([x_w, y_w, z_w])
                 res_local = estimate_helmert_7p(xs, xw)
                 # Применим параметры
                 mloc = res_local.ds_ppm / 1e6
                 rxloc = math.radians(res_local.rx_as / 3600.0)
                 ryloc = math.radians(res_local.ry_as / 3600.0)
                 rzloc = math.radians(res_local.rz_as / 3600.0)
-                Xp = Xs + res_local.dx + (-rzloc * Ys + ryloc * Zs) + mloc * Xs
-                Yp = Ys + res_local.dy + (rzloc * Xs - rxloc * Zs) + mloc * Ys
-                Zp = Zs + res_local.dz + (-ryloc * Xs + rxloc * Ys) + mloc * Zs
-                lon_pred, lat_pred, _hp = t_wgs_xyz_to_geog.transform(Xp, Yp, Zp)
-                Xp_tm, Yp_tm = t_wgs_to_wgs_gk.transform(lon_pred, lat_pred)
-                rx2d = Xw_tm - Xp_tm
-                ry2d = Yw_tm - Yp_tm
+                x_p = x_s + res_local.dx + (-rzloc * y_s + ryloc * z_s) + mloc * x_s
+                y_p = y_s + res_local.dy + (rzloc * x_s - rxloc * z_s) + mloc * y_s
+                z_p = z_s + res_local.dz + (-ryloc * x_s + rxloc * y_s) + mloc * z_s
+                lon_pred, lat_pred, _hp = t_wgs_xyz_to_geog.transform(x_p, y_p, z_p)
+                x_p_tm, y_p_tm = t_wgs_to_wgs_gk.transform(lon_pred, lat_pred)
+                rx2d = x_w_tm - x_p_tm
+                ry2d = y_w_tm - y_p_tm
                 r2 = rx2d**2 + ry2d**2
                 rms_x_loc = float(np.sqrt(np.mean(rx2d**2)))
                 rms_y_loc = float(np.sqrt(np.mean(ry2d**2)))
                 rms_2d_loc = float(np.sqrt(np.mean(r2)))
-                r3x = Xw - Xp
-                r3y = Yw - Yp
-                r3z = Zw - Zp
+                r3x = x_w - x_p
+                r3y = y_w - y_p
+                r3z = z_w - z_p
                 rms_3d_loc = float(np.sqrt(np.mean(r3x**2 + r3y**2 + r3z**2)))
                 return {
                     'res': res_local,
@@ -369,18 +382,29 @@ class HelmertToolWindow(QMainWindow):
 
             out_with = _solve_variant(True)
             out_without = _solve_variant(False)
-            chosen = (
-                out_with if out_with['rms_2d'] <= out_without['rms_2d'] else out_without
-            )
+            rms_2d_with = out_with['rms_2d']
+            rms_2d_without = out_without['rms_2d']
+            assert isinstance(rms_2d_with, float)
+            assert isinstance(rms_2d_without, float)
+            chosen = out_with if rms_2d_with <= rms_2d_without else out_without
             res = chosen['res']
+            assert isinstance(res, Helmert7Result)
             rms_2d = chosen['rms_2d']
+            assert isinstance(rms_2d, float)
             rms_x = chosen['rms_x']
+            assert isinstance(rms_x, float)
             rms_y = chosen['rms_y']
+            assert isinstance(rms_y, float)
             rms_3d = chosen['rms_3d']
+            assert isinstance(rms_3d, float)
             rx2d = chosen['rx2d']
+            assert isinstance(rx2d, np.ndarray)
             ry2d = chosen['ry2d']
+            assert isinstance(ry2d, np.ndarray)
             r2 = chosen['r2']
+            assert isinstance(r2, np.ndarray)
             used_prefix = chosen['used_prefix']
+            assert isinstance(used_prefix, bool)
             logger.info(
                 'Гипотезы: с префиксом RMS2D=%.3f, без префикса RMS2D=%.3f. Выбрана: %s',
                 out_with['rms_2d'],
@@ -420,13 +444,13 @@ class HelmertToolWindow(QMainWindow):
 
         # Санити‑чек реалистичности параметров
         insane = (
-            abs(res.dx) > 10000
-            or abs(res.dy) > 10000
-            or abs(res.dz) > 10000
-            or abs(res.rx_as) > 3600
-            or abs(res.ry_as) > 3600
-            or abs(res.rz_as) > 3600
-            or abs(res.ds_ppm) > 1000
+            abs(res.dx) > MAX_TRANSLATION_M
+            or abs(res.dy) > MAX_TRANSLATION_M
+            or abs(res.dz) > MAX_TRANSLATION_M
+            or abs(res.rx_as) > MAX_ROTATION_ARCSEC
+            or abs(res.ry_as) > MAX_ROTATION_ARCSEC
+            or abs(res.rz_as) > MAX_ROTATION_ARCSEC
+            or abs(res.ds_ppm) > MAX_SCALE_PPM
         )
         if insane:
             warnings.append(
@@ -495,6 +519,10 @@ class HelmertToolWindow(QMainWindow):
         )
 
     def _on_load_csv(self) -> None:
+        def _raise_no_valid_rows() -> None:
+            msg = 'В файле не найдено ни одной валидной строки из 4 чисел'
+            raise ValueError(msg)
+
         path, _ = QFileDialog.getOpenFileName(
             self,
             'Выберите CSV с точками',
@@ -505,7 +533,7 @@ class HelmertToolWindow(QMainWindow):
             return
         try:
             rows: list[tuple[float, float, float, float]] = []
-            with open(path, encoding='utf-8') as f:
+            with Path(path).open(encoding='utf-8') as f:
                 for ln in f:
                     line = ln.strip()
                     if not line or line.startswith(('#', '//')):
@@ -513,7 +541,7 @@ class HelmertToolWindow(QMainWindow):
                     # Нормализуем разделители: запятая/точка с запятой/таб/пробел
                     line = line.replace(';', ' ').replace(',', ' ')
                     parts = [p for p in line.split() if p]
-                    if len(parts) < 4:
+                    if len(parts) < CSV_COLUMNS_REQUIRED:
                         continue
                     try:
                         x_mil = float(parts[0])
@@ -524,8 +552,7 @@ class HelmertToolWindow(QMainWindow):
                         continue
                     rows.append((x_mil, y_mil, lat, lon))
             if not rows:
-                msg = 'В файле не найдено ни одной валидной строки из 4 чисел'
-                raise ValueError(msg)
+                _raise_no_valid_rows()
             self._set_table_rows(rows)
             QMessageBox.information(
                 self, 'Загрузка завершена', f'Загружено строк: {len(rows)}'
@@ -544,7 +571,9 @@ class HelmertToolWindow(QMainWindow):
             vals = rows[r]
             for c in range(4):
                 item = QTableWidgetItem(str(vals[c]))
-                item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                item.setTextAlignment(
+                    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+                )
                 self.table.setItem(r, c, item)
 
 

@@ -1,0 +1,987 @@
+E402 Module level import not at top of file
+  --> src/contours.py:13:1
+   |
+11 | """
+12 |
+13 | import os
+   | ^^^^^^^^^
+14 |
+15 | # Expose package path for submodules (treat this module as a package)
+   |
+
+PTH118 `os.path.join()` should be replaced by `Path` with `/` operator
+  --> src/contours.py:16:13
+   |
+15 | # Expose package path for submodules (treat this module as a package)
+16 | __path__ = [os.path.join(os.path.dirname(__file__), 'contours')]
+   |             ^^^^^^^^^^^^
+17 |
+18 | # Backward-compatible re-exports
+   |
+
+PTH120 `os.path.dirname()` should be replaced by `Path.parent`
+  --> src/contours.py:16:26
+   |
+15 | # Expose package path for submodules (treat this module as a package)
+16 | __path__ = [os.path.join(os.path.dirname(__file__), 'contours')]
+   |                          ^^^^^^^^^^^^^^^
+17 |
+18 | # Backward-compatible re-exports
+   |
+help: Replace with `Path(...).parent`
+
+SIM105 Use `contextlib.suppress(Exception)` instead of `try`-`except`-`pass`
+  --> src/contours.py:20:1
+   |
+18 |   # Backward-compatible re-exports
+19 |
+20 | / try:
+21 | |     pass
+22 | | except Exception:  # pragma: no cover - during early startup
+23 | |     # If submodule isn't available yet, leave name undefined; callers importing
+24 | |     # from contours.seeds will still work thanks to __path__ above.
+25 | |     pass
+   | |________^
+   |
+help: Replace with `contextlib.suppress(Exception)`
+
+S110 `try`-`except`-`pass` detected, consider logging the exception
+  --> src/contours.py:22:1
+   |
+20 |   try:
+21 |       pass
+22 | / except Exception:  # pragma: no cover - during early startup
+23 | |     # If submodule isn't available yet, leave name undefined; callers importing
+24 | |     # from contours.seeds will still work thanks to __path__ above.
+25 | |     pass
+   | |________^
+   |
+
+E402 Module level import not at top of file
+  --> src/contours/__init__.py:9:1
+   |
+ 8 | # Public API re-exports
+ 9 | from contours_labels import draw_contour_labels  # uses shared implementation
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+10 |
+11 | from .labels_overlay import draw_contour_labels_overlay  # overlay drawer
+   |
+
+F401 `contours_labels.draw_contour_labels` imported but unused; consider removing, adding to `__all__`, or using a redundant alias
+  --> src/contours/__init__.py:9:29
+   |
+ 8 | # Public API re-exports
+ 9 | from contours_labels import draw_contour_labels  # uses shared implementation
+   |                             ^^^^^^^^^^^^^^^^^^^
+10 |
+11 | from .labels_overlay import draw_contour_labels_overlay  # overlay drawer
+   |
+help: Use an explicit re-export: `draw_contour_labels as draw_contour_labels`
+
+E402 Module level import not at top of file
+  --> src/contours/__init__.py:11:1
+   |
+ 9 | from contours_labels import draw_contour_labels  # uses shared implementation
+10 |
+11 | from .labels_overlay import draw_contour_labels_overlay  # overlay drawer
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+12 | from .seeds import build_seed_polylines  # marching-squares seeds
+   |
+
+F401 `.labels_overlay.draw_contour_labels_overlay` imported but unused; consider removing, adding to `__all__`, or using a redundant alias
+  --> src/contours/__init__.py:11:29
+   |
+ 9 | from contours_labels import draw_contour_labels  # uses shared implementation
+10 |
+11 | from .labels_overlay import draw_contour_labels_overlay  # overlay drawer
+   |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+12 | from .seeds import build_seed_polylines  # marching-squares seeds
+   |
+help: Use an explicit re-export: `draw_contour_labels_overlay as draw_contour_labels_overlay`
+
+E402 Module level import not at top of file
+  --> src/contours/__init__.py:12:1
+   |
+11 | from .labels_overlay import draw_contour_labels_overlay  # overlay drawer
+12 | from .seeds import build_seed_polylines  # marching-squares seeds
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+
+F401 `.seeds.build_seed_polylines` imported but unused; consider removing, adding to `__all__`, or using a redundant alias
+  --> src/contours/__init__.py:12:20
+   |
+11 | from .labels_overlay import draw_contour_labels_overlay  # overlay drawer
+12 | from .seeds import build_seed_polylines  # marching-squares seeds
+   |                    ^^^^^^^^^^^^^^^^^^^^
+   |
+help: Use an explicit re-export: `build_seed_polylines as build_seed_polylines`
+
+PLR2004 Magic value used in comparison, consider replacing `2` with a constant variable
+  --> src/contours/seeds.py:73:22
+   |
+71 |     for li, level in enumerate(levels):
+72 |         segs: list[tuple[tuple[float, float], tuple[float, float]]] = []
+73 |         if seed_h >= 2 and seed_w >= 2:
+   |                      ^
+74 |             for j in range(seed_h - 1):
+75 |                 row0 = dem[j]
+   |
+
+PLR2004 Magic value used in comparison, consider replacing `2` with a constant variable
+  --> src/contours/seeds.py:73:38
+   |
+71 |     for li, level in enumerate(levels):
+72 |         segs: list[tuple[tuple[float, float], tuple[float, float]]] = []
+73 |         if seed_h >= 2 and seed_w >= 2:
+   |                                      ^
+74 |             for j in range(seed_h - 1):
+75 |                 row0 = dem[j]
+   |
+
+B023 Function definition does not bind loop variable `segs`
+   --> src/contours/seeds.py:98:25
+    |
+ 97 |                     def add(a: tuple[float, float], b: tuple[float, float]) -> None:
+ 98 |                         segs.append((a, b))
+    |                         ^^^^
+ 99 |
+100 |                     if mask in MS_CONNECT_TOP_LEFT:
+    |
+
+E402 Module level import not at top of file
+  --> src/contours_labels.py:12:1
+   |
+10 | """
+11 |
+12 | import logging
+   | ^^^^^^^^^^^^^^
+13 | import math
+14 | from typing import TYPE_CHECKING
+   |
+
+E402 Module level import not at top of file
+  --> src/contours_labels.py:13:1
+   |
+12 | import logging
+13 | import math
+   | ^^^^^^^^^^^
+14 | from typing import TYPE_CHECKING
+   |
+
+E402 Module level import not at top of file
+  --> src/contours_labels.py:14:1
+   |
+12 | import logging
+13 | import math
+14 | from typing import TYPE_CHECKING
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+15 |
+16 | from PIL import Image, ImageDraw, ImageFont
+   |
+
+E402 Module level import not at top of file
+  --> src/contours_labels.py:16:1
+   |
+14 | from typing import TYPE_CHECKING
+15 |
+16 | from PIL import Image, ImageDraw, ImageFont
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+17 |
+18 | from constants import (
+   |
+
+E402 Module level import not at top of file
+  --> src/contours_labels.py:18:1
+   |
+16 |   from PIL import Image, ImageDraw, ImageFont
+17 |
+18 | / from constants import (
+19 | |     CONTOUR_INDEX_EVERY,
+20 | |     CONTOUR_LABEL_BG_PADDING,
+21 | |     CONTOUR_LABEL_BG_RGBA,
+22 | |     CONTOUR_LABEL_EDGE_MARGIN_PX,
+23 | |     CONTOUR_LABEL_FONT_BOLD,
+24 | |     CONTOUR_LABEL_FONT_KM,
+25 | |     CONTOUR_LABEL_FONT_MAX_PX,
+26 | |     CONTOUR_LABEL_FONT_MIN_PX,
+27 | |     CONTOUR_LABEL_FONT_PATH,
+28 | |     CONTOUR_LABEL_FONT_SIZE,
+29 | |     CONTOUR_LABEL_FORMAT,
+30 | |     CONTOUR_LABEL_INDEX_ONLY,
+31 | |     CONTOUR_LABEL_MIN_SEG_LEN_PX,
+32 | |     CONTOUR_LABEL_OUTLINE_COLOR,
+33 | |     CONTOUR_LABEL_OUTLINE_WIDTH,
+34 | |     CONTOUR_LABEL_SPACING_PX,
+35 | |     CONTOUR_LABEL_TEXT_COLOR,
+36 | |     CONTOUR_LABELS_ENABLED,
+37 | |     GRID_FONT_PATH,
+38 | |     GRID_FONT_PATH_BOLD,
+39 | | )
+   | |_^
+40 |
+41 |   if TYPE_CHECKING:
+   |
+
+PLR2004 Magic value used in comparison, consider replacing `2` with a constant variable
+   --> src/contours_labels.py:174:27
+    |
+172 |         for poly in level_polys:
+173 |             pts = poly_to_crop(poly)
+174 |             if len(pts) < 2:
+    |                           ^
+175 |                 continue
+176 |             # segment lengths and total
+    |
+
+E741 Ambiguous variable name: `l`
+   --> src/contours_labels.py:239:17
+    |
+237 |                 td = ImageDraw.Draw(tmp)
+238 |                 fnt = get_font(is_index_line)
+239 |                 l, t, r, b = td.textbbox((0, 0), text, font=fnt)
+    |                 ^
+240 |                 tw, th = r - l, b - t
+241 |                 pad = int(CONTOUR_LABEL_BG_PADDING)
+    |
+
+SIM117 Use a single `with` statement with multiple contexts instead of nested `with` statements
+   --> src/diagnostics.py:324:17
+    |
+322 |           for i in range(attempts):
+323 |               try:
+324 | /                 async with aiohttp.ClientSession() as client:
+325 | |                     async with client.get(url, timeout=timeout) as resp:
+    | |________________________________________________________________________^
+326 |                           from constants import HTTP_FORBIDDEN, HTTP_OK, HTTP_UNAUTHORIZED
+    |
+help: Combine `with` statements
+
+SIM117 Use a single `with` statement with multiple contexts instead of nested `with` statements
+   --> src/diagnostics.py:368:17
+    |
+366 |           for i in range(attempts):
+367 |               try:
+368 | /                 async with aiohttp.ClientSession() as client:
+369 | |                     async with client.get(url, timeout=timeout) as resp:
+    | |________________________________________________________________________^
+370 |                           from constants import HTTP_FORBIDDEN, HTTP_OK, HTTP_UNAUTHORIZED
+    |
+help: Combine `with` statements
+
+INP001 File `src/elevation/stats.py` is part of an implicit namespace package. Add an `__init__.py`.
+--> src/elevation/stats.py:1:1
+
+S311 Standard pseudo-random generators are not suitable for cryptographic purposes
+  --> src/elevation/stats.py:48:11
+   |
+47 |     """
+48 |     rng = random.Random(rng_seed)
+   |           ^^^^^^^^^^^^^^^^^^^^^^^
+49 |     samples: list[float] = []
+50 |     seen_count = 0
+   |
+
+S110 `try`-`except`-`pass` detected, consider logging the exception
+   --> src/elevation/stats.py:99:13
+    |
+ 98 |                   log_memory_usage(f'elev pass1 after {tile_count} tiles')
+ 99 | /             except Exception:
+100 | |                 pass
+    | |____________________^
+101 |
+102 |       # Run sequentially here — service should orchestrate concurrency around us if needed.
+    |
+
+D205 1 blank line required between summary line and description
+  --> src/elevation_provider.py:29:5
+   |
+28 |   class ElevationTileProvider:
+29 | /     """
+30 | |     Shared provider for Terrain-RGB tiles with:
+31 | |     - in-flight request coalescing
+32 | |     - in-memory cache of raw bytes (PIL images constructed on demand)
+33 | |     - on-disk cache of raw bytes under HTTP_CACHE_DIR/terrain_rgb/z/x/y(@2x).pngraw.
+34 | |
+35 | |     It exposes two async methods:
+36 | |       - get_tile_image: returns PIL.Image (RGB) of a terrain tile
+37 | |       - get_tile_dem: returns list[list[float]] DEM decoded from the tile
+38 | |     """
+   | |_______^
+39 |
+40 |       def __init__(
+   |
+help: Insert single blank line
+
+RUF006 Store a reference to the return value of `asyncio.create_task`
+   --> src/elevation_provider.py:131:9
+    |
+129 |                 self._inflight.pop(key, None)
+130 |
+131 |         asyncio.create_task(run())
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^
+132 |         return await fut
+    |
+
+INP001 File `src/geo/coords.py` is part of an implicit namespace package. Add an `__init__.py`.
+--> src/geo/coords.py:1:1
+
+B904 Within an `except` clause, raise exceptions with `raise ... from err` or `raise ... from None` to distinguish them from errors in exception handling
+   --> src/gui/controller.py:285:21
+    |
+283 |                     logger.exception(error_msg)
+284 |                     # Пробрасываем ошибку, чтобы обработать единообразно в GUI-потоке
+285 |                     raise RuntimeError(error_msg)
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+286 |
+287 |                 self._model.start_download()
+    |
+
+B904 Within an `except` clause, raise exceptions with `raise ... from err` or `raise ... from None` to distinguish them from errors in exception handling
+   --> src/gui/controller.py:341:17
+    |
+339 |                 self._model.complete_download(success=False, error_msg=error_msg)
+340 |                 # Пробрасываем ошибку для централизованной обработки в GUI-потоке (DownloadWorker.finished)
+341 |                 raise RuntimeError(error_msg)
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+342 |
+343 |     def start_map_download_sync(self) -> None:
+    |
+
+D205 1 blank line required between summary line and description
+  --> src/gui/helmert_tool.py:68:5
+   |
+67 |   def estimate_helmert_7p(xs: np.ndarray, xw: np.ndarray) -> Helmert7Result:
+68 | /     """
+69 | |     Оценка 7 параметров Bursa–Wolf между двумя наборами геоцентрических координат.
+70 | |     xs — (N,3) точки в СК-42 (Krassovsky) геоцентрических XYZ (метры)
+71 | |     xw — (N,3) соответствующие точки в WGS84 геоцентрических XYZ (метры)
+72 | |     Возвращает dx,dy,dz (м), rx,ry,rz (угл.сек), ds_ppm (ppm).
+73 | |     """
+   | |_______^
+74 |       if xs.shape != xw.shape or xs.shape[1] != 3:
+75 |           msg = 'Формат точек должен быть (N,3), xs и xw одинаковых размеров'
+   |
+help: Insert single blank line
+
+PLR2004 Magic value used in comparison, consider replacing `3` with a constant variable
+  --> src/gui/helmert_tool.py:74:47
+   |
+72 |     Возвращает dx,dy,dz (м), rx,ry,rz (угл.сек), ds_ppm (ppm).
+73 |     """
+74 |     if xs.shape != xw.shape or xs.shape[1] != 3:
+   |                                               ^
+75 |         msg = 'Формат точек должен быть (N,3), xs и xw одинаковых размеров'
+76 |         raise ValueError(msg)
+   |
+
+PLR2004 Magic value used in comparison, consider replacing `3` with a constant variable
+  --> src/gui/helmert_tool.py:78:12
+   |
+76 |         raise ValueError(msg)
+77 |     n = xs.shape[0]
+78 |     if n < 3:
+   |            ^
+79 |         msg = 'Для оценки 7 параметров нужно не менее трёх точек'
+80 |         raise ValueError(msg)
+   |
+
+N806 Variable `A` in function should be lowercase
+  --> src/gui/helmert_tool.py:82:5
+   |
+80 |         raise ValueError(msg)
+81 |
+82 |     A = np.zeros((3 * n, 7), dtype=float)
+   |     ^
+83 |     L = np.zeros((3 * n, 1), dtype=float)
+84 |     for i in range(n):
+   |
+
+N806 Variable `L` in function should be lowercase
+  --> src/gui/helmert_tool.py:83:5
+   |
+82 |     A = np.zeros((3 * n, 7), dtype=float)
+83 |     L = np.zeros((3 * n, 1), dtype=float)
+   |     ^
+84 |     for i in range(n):
+85 |         Xs, Ys, Zs = xs[i]
+   |
+
+N806 Variable `Xs` in function should be lowercase
+  --> src/gui/helmert_tool.py:85:9
+   |
+83 |     L = np.zeros((3 * n, 1), dtype=float)
+84 |     for i in range(n):
+85 |         Xs, Ys, Zs = xs[i]
+   |         ^^
+86 |         Xw, Yw, Zw = xw[i]
+87 |         # Уравнения разностей (WGS - SK42)
+   |
+
+N806 Variable `Ys` in function should be lowercase
+  --> src/gui/helmert_tool.py:85:13
+   |
+83 |     L = np.zeros((3 * n, 1), dtype=float)
+84 |     for i in range(n):
+85 |         Xs, Ys, Zs = xs[i]
+   |             ^^
+86 |         Xw, Yw, Zw = xw[i]
+87 |         # Уравнения разностей (WGS - SK42)
+   |
+
+N806 Variable `Zs` in function should be lowercase
+  --> src/gui/helmert_tool.py:85:17
+   |
+83 |     L = np.zeros((3 * n, 1), dtype=float)
+84 |     for i in range(n):
+85 |         Xs, Ys, Zs = xs[i]
+   |                 ^^
+86 |         Xw, Yw, Zw = xw[i]
+87 |         # Уравнения разностей (WGS - SK42)
+   |
+
+N806 Variable `Xw` in function should be lowercase
+  --> src/gui/helmert_tool.py:86:9
+   |
+84 |     for i in range(n):
+85 |         Xs, Ys, Zs = xs[i]
+86 |         Xw, Yw, Zw = xw[i]
+   |         ^^
+87 |         # Уравнения разностей (WGS - SK42)
+88 |         # Xw - Xs = dX + (-rz*Ys + ry*Zs) + m*Xs
+   |
+
+N806 Variable `Yw` in function should be lowercase
+  --> src/gui/helmert_tool.py:86:13
+   |
+84 |     for i in range(n):
+85 |         Xs, Ys, Zs = xs[i]
+86 |         Xw, Yw, Zw = xw[i]
+   |             ^^
+87 |         # Уравнения разностей (WGS - SK42)
+88 |         # Xw - Xs = dX + (-rz*Ys + ry*Zs) + m*Xs
+   |
+
+N806 Variable `Zw` in function should be lowercase
+  --> src/gui/helmert_tool.py:86:17
+   |
+84 |     for i in range(n):
+85 |         Xs, Ys, Zs = xs[i]
+86 |         Xw, Yw, Zw = xw[i]
+   |                 ^^
+87 |         # Уравнения разностей (WGS - SK42)
+88 |         # Xw - Xs = dX + (-rz*Ys + ry*Zs) + m*Xs
+   |
+
+PLR2004 Magic value used in comparison, consider replacing `2` with a constant variable
+   --> src/gui/helmert_tool.py:252:23
+    |
+250 |             src.append((x1, y1))
+251 |             dst.append((x2, y2))
+252 |         if len(src) < 2:
+    |                       ^
+253 |             msg = 'Введите минимум две корректные пары точек'
+254 |             raise ValueError(msg)
+    |
+
+ANN202 Missing return type annotation for private function `_solve_variant`
+   --> src/gui/helmert_tool.py:320:17
+    |
+318 |             lons = p_dst_deg_latlon[:, 1]
+319 |
+320 |             def _solve_variant(use_prefix: bool):
+    |                 ^^^^^^^^^^^^^^
+321 |                 p_src_en = p_src_en_base.copy()
+322 |                 if use_prefix:
+    |
+help: Add return type annotation
+
+N806 Variable `Xw_tm` in function should be lowercase
+   --> src/gui/helmert_tool.py:325:17
+    |
+323 |                     p_src_en[:, 0] = p_src_en[:, 0] - zone * GK_ZONE_X_PREFIX_DIV
+324 |                 # TM (для диагностики 2D)
+325 |                 Xw_tm, Yw_tm = t_wgs_to_wgs_gk.transform(lons, lats)
+    |                 ^^^^^
+326 |                 # СК-42 ГК -> СК-42 географические
+327 |                 lng_sk42, lat_sk42 = t_sk42_from_gk.transform(
+    |
+
+N806 Variable `Yw_tm` in function should be lowercase
+   --> src/gui/helmert_tool.py:325:24
+    |
+323 |                     p_src_en[:, 0] = p_src_en[:, 0] - zone * GK_ZONE_X_PREFIX_DIV
+324 |                 # TM (для диагностики 2D)
+325 |                 Xw_tm, Yw_tm = t_wgs_to_wgs_gk.transform(lons, lats)
+    |                        ^^^^^
+326 |                 # СК-42 ГК -> СК-42 географические
+327 |                 lng_sk42, lat_sk42 = t_sk42_from_gk.transform(
+    |
+
+N806 Variable `Xs` in function should be lowercase
+   --> src/gui/helmert_tool.py:332:17
+    |
+330 |                 # Географические -> геоцентрические (h=0)
+331 |                 zeros = np.zeros_like(lng_sk42)
+332 |                 Xs, Ys, Zs = t_sk42_geog_to_xyz.transform(lng_sk42, lat_sk42, zeros)
+    |                 ^^
+333 |                 zeros_w = np.zeros_like(lons)
+334 |                 Xw, Yw, Zw = t_wgs_geog_to_xyz.transform(lons, lats, zeros_w)
+    |
+
+N806 Variable `Ys` in function should be lowercase
+   --> src/gui/helmert_tool.py:332:21
+    |
+330 |                 # Географические -> геоцентрические (h=0)
+331 |                 zeros = np.zeros_like(lng_sk42)
+332 |                 Xs, Ys, Zs = t_sk42_geog_to_xyz.transform(lng_sk42, lat_sk42, zeros)
+    |                     ^^
+333 |                 zeros_w = np.zeros_like(lons)
+334 |                 Xw, Yw, Zw = t_wgs_geog_to_xyz.transform(lons, lats, zeros_w)
+    |
+
+N806 Variable `Zs` in function should be lowercase
+   --> src/gui/helmert_tool.py:332:25
+    |
+330 |                 # Географические -> геоцентрические (h=0)
+331 |                 zeros = np.zeros_like(lng_sk42)
+332 |                 Xs, Ys, Zs = t_sk42_geog_to_xyz.transform(lng_sk42, lat_sk42, zeros)
+    |                         ^^
+333 |                 zeros_w = np.zeros_like(lons)
+334 |                 Xw, Yw, Zw = t_wgs_geog_to_xyz.transform(lons, lats, zeros_w)
+    |
+
+N806 Variable `Xw` in function should be lowercase
+   --> src/gui/helmert_tool.py:334:17
+    |
+332 |                 Xs, Ys, Zs = t_sk42_geog_to_xyz.transform(lng_sk42, lat_sk42, zeros)
+333 |                 zeros_w = np.zeros_like(lons)
+334 |                 Xw, Yw, Zw = t_wgs_geog_to_xyz.transform(lons, lats, zeros_w)
+    |                 ^^
+335 |                 xs = np.column_stack([Xs, Ys, Zs])
+336 |                 xw = np.column_stack([Xw, Yw, Zw])
+    |
+
+N806 Variable `Yw` in function should be lowercase
+   --> src/gui/helmert_tool.py:334:21
+    |
+332 |                 Xs, Ys, Zs = t_sk42_geog_to_xyz.transform(lng_sk42, lat_sk42, zeros)
+333 |                 zeros_w = np.zeros_like(lons)
+334 |                 Xw, Yw, Zw = t_wgs_geog_to_xyz.transform(lons, lats, zeros_w)
+    |                     ^^
+335 |                 xs = np.column_stack([Xs, Ys, Zs])
+336 |                 xw = np.column_stack([Xw, Yw, Zw])
+    |
+
+N806 Variable `Zw` in function should be lowercase
+   --> src/gui/helmert_tool.py:334:25
+    |
+332 |                 Xs, Ys, Zs = t_sk42_geog_to_xyz.transform(lng_sk42, lat_sk42, zeros)
+333 |                 zeros_w = np.zeros_like(lons)
+334 |                 Xw, Yw, Zw = t_wgs_geog_to_xyz.transform(lons, lats, zeros_w)
+    |                         ^^
+335 |                 xs = np.column_stack([Xs, Ys, Zs])
+336 |                 xw = np.column_stack([Xw, Yw, Zw])
+    |
+
+N806 Variable `Xp` in function should be lowercase
+   --> src/gui/helmert_tool.py:343:17
+    |
+341 |                 ryloc = math.radians(res_local.ry_as / 3600.0)
+342 |                 rzloc = math.radians(res_local.rz_as / 3600.0)
+343 |                 Xp = Xs + res_local.dx + (-rzloc * Ys + ryloc * Zs) + mloc * Xs
+    |                 ^^
+344 |                 Yp = Ys + res_local.dy + (rzloc * Xs - rxloc * Zs) + mloc * Ys
+345 |                 Zp = Zs + res_local.dz + (-ryloc * Xs + rxloc * Ys) + mloc * Zs
+    |
+
+N806 Variable `Yp` in function should be lowercase
+   --> src/gui/helmert_tool.py:344:17
+    |
+342 |                 rzloc = math.radians(res_local.rz_as / 3600.0)
+343 |                 Xp = Xs + res_local.dx + (-rzloc * Ys + ryloc * Zs) + mloc * Xs
+344 |                 Yp = Ys + res_local.dy + (rzloc * Xs - rxloc * Zs) + mloc * Ys
+    |                 ^^
+345 |                 Zp = Zs + res_local.dz + (-ryloc * Xs + rxloc * Ys) + mloc * Zs
+346 |                 lon_pred, lat_pred, _hp = t_wgs_xyz_to_geog.transform(Xp, Yp, Zp)
+    |
+
+N806 Variable `Zp` in function should be lowercase
+   --> src/gui/helmert_tool.py:345:17
+    |
+343 |                 Xp = Xs + res_local.dx + (-rzloc * Ys + ryloc * Zs) + mloc * Xs
+344 |                 Yp = Ys + res_local.dy + (rzloc * Xs - rxloc * Zs) + mloc * Ys
+345 |                 Zp = Zs + res_local.dz + (-ryloc * Xs + rxloc * Ys) + mloc * Zs
+    |                 ^^
+346 |                 lon_pred, lat_pred, _hp = t_wgs_xyz_to_geog.transform(Xp, Yp, Zp)
+347 |                 Xp_tm, Yp_tm = t_wgs_to_wgs_gk.transform(lon_pred, lat_pred)
+    |
+
+N806 Variable `Xp_tm` in function should be lowercase
+   --> src/gui/helmert_tool.py:347:17
+    |
+345 |                 Zp = Zs + res_local.dz + (-ryloc * Xs + rxloc * Ys) + mloc * Zs
+346 |                 lon_pred, lat_pred, _hp = t_wgs_xyz_to_geog.transform(Xp, Yp, Zp)
+347 |                 Xp_tm, Yp_tm = t_wgs_to_wgs_gk.transform(lon_pred, lat_pred)
+    |                 ^^^^^
+348 |                 rx2d = Xw_tm - Xp_tm
+349 |                 ry2d = Yw_tm - Yp_tm
+    |
+
+N806 Variable `Yp_tm` in function should be lowercase
+   --> src/gui/helmert_tool.py:347:24
+    |
+345 |                 Zp = Zs + res_local.dz + (-ryloc * Xs + rxloc * Ys) + mloc * Zs
+346 |                 lon_pred, lat_pred, _hp = t_wgs_xyz_to_geog.transform(Xp, Yp, Zp)
+347 |                 Xp_tm, Yp_tm = t_wgs_to_wgs_gk.transform(lon_pred, lat_pred)
+    |                        ^^^^^
+348 |                 rx2d = Xw_tm - Xp_tm
+349 |                 ry2d = Yw_tm - Yp_tm
+    |
+
+PLR2004 Magic value used in comparison, consider replacing `10000` with a constant variable
+   --> src/gui/helmert_tool.py:423:27
+    |
+421 |         # Санити‑чек реалистичности параметров
+422 |         insane = (
+423 |             abs(res.dx) > 10000
+    |                           ^^^^^
+424 |             or abs(res.dy) > 10000
+425 |             or abs(res.dz) > 10000
+    |
+
+PLR2004 Magic value used in comparison, consider replacing `10000` with a constant variable
+   --> src/gui/helmert_tool.py:424:30
+    |
+422 |         insane = (
+423 |             abs(res.dx) > 10000
+424 |             or abs(res.dy) > 10000
+    |                              ^^^^^
+425 |             or abs(res.dz) > 10000
+426 |             or abs(res.rx_as) > 3600
+    |
+
+PLR2004 Magic value used in comparison, consider replacing `10000` with a constant variable
+   --> src/gui/helmert_tool.py:425:30
+    |
+423 |             abs(res.dx) > 10000
+424 |             or abs(res.dy) > 10000
+425 |             or abs(res.dz) > 10000
+    |                              ^^^^^
+426 |             or abs(res.rx_as) > 3600
+427 |             or abs(res.ry_as) > 3600
+    |
+
+PLR2004 Magic value used in comparison, consider replacing `3600` with a constant variable
+   --> src/gui/helmert_tool.py:426:33
+    |
+424 |             or abs(res.dy) > 10000
+425 |             or abs(res.dz) > 10000
+426 |             or abs(res.rx_as) > 3600
+    |                                 ^^^^
+427 |             or abs(res.ry_as) > 3600
+428 |             or abs(res.rz_as) > 3600
+    |
+
+PLR2004 Magic value used in comparison, consider replacing `3600` with a constant variable
+   --> src/gui/helmert_tool.py:427:33
+    |
+425 |             or abs(res.dz) > 10000
+426 |             or abs(res.rx_as) > 3600
+427 |             or abs(res.ry_as) > 3600
+    |                                 ^^^^
+428 |             or abs(res.rz_as) > 3600
+429 |             or abs(res.ds_ppm) > 1000
+    |
+
+PLR2004 Magic value used in comparison, consider replacing `3600` with a constant variable
+   --> src/gui/helmert_tool.py:428:33
+    |
+426 |             or abs(res.rx_as) > 3600
+427 |             or abs(res.ry_as) > 3600
+428 |             or abs(res.rz_as) > 3600
+    |                                 ^^^^
+429 |             or abs(res.ds_ppm) > 1000
+430 |         )
+    |
+
+PLR2004 Magic value used in comparison, consider replacing `1000` with a constant variable
+   --> src/gui/helmert_tool.py:429:34
+    |
+427 |             or abs(res.ry_as) > 3600
+428 |             or abs(res.rz_as) > 3600
+429 |             or abs(res.ds_ppm) > 1000
+    |                                  ^^^^
+430 |         )
+431 |         if insane:
+    |
+
+PTH123 `open()` should be replaced by `Path.open()`
+   --> src/gui/helmert_tool.py:508:18
+    |
+506 |         try:
+507 |             rows: list[tuple[float, float, float, float]] = []
+508 |             with open(path, encoding='utf-8') as f:
+    |                  ^^^^
+509 |                 for ln in f:
+510 |                     line = ln.strip()
+    |
+
+PLR2004 Magic value used in comparison, consider replacing `4` with a constant variable
+   --> src/gui/helmert_tool.py:516:37
+    |
+514 |                     line = line.replace(';', ' ').replace(',', ' ')
+515 |                     parts = [p for p in line.split() if p]
+516 |                     if len(parts) < 4:
+    |                                     ^
+517 |                         continue
+518 |                     try:
+    |
+
+TRY301 Abstract `raise` to an inner function
+   --> src/gui/helmert_tool.py:528:17
+    |
+526 |             if not rows:
+527 |                 msg = 'В файле не найдено ни одной валидной строки из 4 чисел'
+528 |                 raise ValueError(msg)
+    |                 ^^^^^^^^^^^^^^^^^^^^^
+529 |             self._set_table_rows(rows)
+530 |             QMessageBox.information(
+    |
+
+ERA001 Found commented-out code
+   --> src/gui/view.py:412:9
+    |
+410 |         layout.addWidget(self.enable_cb, 0, 0, 1, 4)
+411 |
+412 |         # dx, dy, dz (m)
+    |         ^^^^^^^^^^^^^^^^
+413 |         row = 1
+414 |         layout.addWidget(QLabel('dx (м):'), row, 0)
+    |
+help: Remove commented-out code
+
+ERA001 Found commented-out code
+   --> src/gui/view.py:429:9
+    |
+427 |         layout.addWidget(self.dz, row, 1)
+428 |
+429 |         # rx, ry, rz (arcsec)
+    |         ^^^^^^^^^^^^^^^^^^^^^
+430 |         layout.addWidget(QLabel('rx (угл. сек):'), row, 2)
+431 |         self.rx = QDoubleSpinBox()
+    |
+help: Remove commented-out code
+
+ERA001 Found commented-out code
+   --> src/gui/view.py:445:9
+    |
+443 |         layout.addWidget(self.rz, row, 3)
+444 |
+445 |         # ds (ppm)
+    |         ^^^^^^^^^^
+446 |         row += 1
+447 |         layout.addWidget(QLabel('ds (ppm):'), row, 0)
+    |
+help: Remove commented-out code
+
+PLR2004 Magic value used in comparison, consider replacing `2` with a constant variable
+   --> src/gui/view.py:472:45
+    |
+470 |         w.setRange(min_v, max_v)
+471 |         w.setDecimals(decimals)
+472 |         w.setSingleStep(0.01 if decimals >= 2 else 0.1)
+    |                                             ^
+473 |         w.setValue(default)
+474 |         w.setEnabled(False)
+    |
+
+D205 1 blank line required between summary line and description
+    --> src/gui/view.py:1141:9
+     |
+1140 |       def _sync_ui_to_model_now(self) -> None:
+1141 | /         """
+1142 | |         Force-collect current UI settings and push them to the model without guards.
+1143 | |         Does not clear preview or check _ui_sync_in_progress to avoid losing changes during Save/Save As.
+1144 | |         """
+     | |___________^
+1145 |           # Collect all current settings
+1146 |           coords = self._get_current_coordinates()
+     |
+help: Insert single blank line
+
+E402 Module level import not at top of file
+ --> src/preview.py:8:1
+  |
+6 | stable API for preview publication.
+7 | """
+8 | from progress import publish_preview_image as _publish_preview_image
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+
+PLR2004 Magic value used in comparison, consider replacing `1e-6` with a constant variable
+   --> src/profiles.py:110:21
+    |
+108 |             dx = abs(got_x - expected_x)
+109 |             dy = abs(got_y - expected_y)
+110 |             if dx > 1e-6 or dy > 1e-6:
+    |                     ^^^^
+111 |                 logger.error(
+112 |                     'Control point GK mismatch: Δx=%.6f Δy=%.6f (precision issue likely)',
+    |
+
+PLR2004 Magic value used in comparison, consider replacing `1e-6` with a constant variable
+   --> src/profiles.py:110:34
+    |
+108 |             dx = abs(got_x - expected_x)
+109 |             dy = abs(got_y - expected_y)
+110 |             if dx > 1e-6 or dy > 1e-6:
+    |                                  ^^^^
+111 |                 logger.error(
+112 |                     'Control point GK mismatch: Δx=%.6f Δy=%.6f (precision issue likely)',
+    |
+
+INP001 File `src/render/compose.py` is part of an implicit namespace package. Add an `__init__.py`.
+--> src/render/compose.py:1:1
+
+D205 1 blank line required between summary line and description
+  --> src/render/compose.py:22:5
+   |
+20 |       grid=None,
+21 |   ) -> Image.Image:
+22 | /     """
+23 | |     Thin facade for final composition steps; currently only rotation is applied here.
+24 | |     Other overlays are still applied in service.py using existing helpers.
+25 | |     """
+   | |_______^
+26 |       img = base_img
+27 |       if rotate_deg is not None:
+   |
+help: Insert single blank line
+
+PGH003 Use specific rule codes when ignoring type issues
+  --> src/render/compose.py:37:43
+   |
+35 |     if save_kwargs is None:
+36 |         # Fallback: try to infer default save kwargs
+37 |         from profiles import MapSettings  # type: ignore
+   |                                           ^^^^^^^^^^^^^^
+38 |
+39 |         try:
+   |
+
+E402 Module level import not at top of file
+   --> src/service.py:114:1
+    |
+114 | / from coords_sk42 import (
+115 | |     build_sk42_gk_crs as _build_sk42_gk_crs,
+116 | | )
+    | |_^
+117 |   from coords_sk42 import (
+118 |       determine_zone as _determine_zone,
+    |
+
+E402 Module level import not at top of file
+   --> src/service.py:117:1
+    |
+115 |       build_sk42_gk_crs as _build_sk42_gk_crs,
+116 |   )
+117 | / from coords_sk42 import (
+118 | |     determine_zone as _determine_zone,
+119 | | )
+    | |_^
+120 |   from coords_sk42 import (
+121 |       validate_sk42_bounds as _validate_sk42_bounds,
+    |
+
+E402 Module level import not at top of file
+   --> src/service.py:120:1
+    |
+118 |       determine_zone as _determine_zone,
+119 |   )
+120 | / from coords_sk42 import (
+121 | |     validate_sk42_bounds as _validate_sk42_bounds,
+122 | | )
+    | |_^
+    |
+
+ANN202 Missing return type annotation for private function `_get_dem_tile`
+   --> src/service.py:424:27
+    |
+422 |                 tile_progress.label = 'Проверка диапазона высот (проход 1/2)'
+423 |
+424 |                 async def _get_dem_tile(xw: int, yw: int):
+    |                           ^^^^^^^^^^^^^
+425 |                     return await provider_main.get_tile_image(zoom, xw, yw)
+    |
+help: Add return type annotation
+
+B023 Function definition does not bind loop variable `segs`
+   --> src/service.py:791:37
+    |
+789 |                                     a: tuple[float, float], b: tuple[float, float]
+790 |                                 ) -> None:
+791 |                                     segs.append((a, b))
+    |                                     ^^^^
+792 |
+793 |                                 if mask in MS_CONNECT_TOP_LEFT:
+    |
+
+INP001 File `src/tiles/coverage.py` is part of an implicit namespace package. Add an `__init__.py`.
+--> src/tiles/coverage.py:1:1
+
+ANN201 Missing return type annotation for public function `compute_coverage`
+ --> src/tiles/coverage.py:7:5
+  |
+7 | def compute_coverage(bounds, zoom):
+  |     ^^^^^^^^^^^^^^^^
+8 |     """
+9 |     Thin facade over topography.compute_xyz_coverage to standardize naming.
+  |
+help: Add return type annotation
+
+ANN201 Missing return type annotation for public function `iter_overlapping_tiles`
+  --> src/tiles/coverage.py:18:5
+   |
+18 | def iter_overlapping_tiles(
+   |     ^^^^^^^^^^^^^^^^^^^^^^
+19 |     tiles: list[tuple[int, tuple[int, int]]],
+20 |     tiles_x: int,
+   |
+help: Add return type annotation
+
+INP001 File `src/tiles/fetcher.py` is part of an implicit namespace package. Add an `__init__.py`.
+--> src/tiles/fetcher.py:1:1
+
+Found 87 errors.
+39 files left unchanged
+src/contours/seeds.py:57: error: Argument 1 to "len" has incompatible type "Iterable[float]"; expected "Sized"  [arg-type]
+src/contours/seeds.py:78: error: Value of type "Iterable[float]" is not indexable  [index]
+src/contours/seeds.py:79: error: Value of type "Iterable[float]" is not indexable  [index]
+src/contours/seeds.py:80: error: Value of type "Iterable[float]" is not indexable  [index]
+src/contours/seeds.py:81: error: Value of type "Iterable[float]" is not indexable  [index]
+src/gui/helmert_tool.py:547: error: "type[Qt]" has no attribute "AlignRight"  [attr-defined]
+src/gui/helmert_tool.py:547: error: "type[Qt]" has no attribute "AlignVCenter"  [attr-defined]
+src/tiles/fetcher.py:68: error: Argument 1 to "put" of "Queue" has incompatible type "tuple[tuple[int, int, int], None]"; expected "tuple[tuple[int, int, int], Image]"  [arg-type]
+src/gui/view.py:555: error: All overload variants of "disconnect" of "QObject" require at least one argument  [call-overload]
+src/gui/view.py:555: note: Possible overload variants:
+src/gui/view.py:555: note:     def disconnect(QMetaMethod, QObject, QMetaMethod, /) -> bool
+src/gui/view.py:555: note:     def disconnect(str, QObject, str, /) -> bool
+src/gui/view.py:555: note:     def disconnect(str, Callable[..., Any], /) -> bool
+src/gui/view.py:555: note:     def disconnect(self, QObject, /, member: str | None = ...) -> bool
+src/gui/view.py:555: note:     def disconnect(self, str, QObject, str, /) -> bool
+src/gui/view.py:555: note:     def disconnect(self, str, Callable[..., Any], /) -> bool
+src/gui/view.py:2276: error: Incompatible types in assignment (expression has type "None", variable has type "Image")  [assignment]
+src/gui/view.py:2278: error: Incompatible types in assignment (expression has type "None", variable has type "dict[str, float]")  [assignment]
+src/service.py:579: error: Incompatible types in assignment (expression has type "Task[None]", variable has type "float")  [assignment]
+src/service.py:580: error: "float" has no attribute "cancel"  [attr-defined]
+src/service.py:596: error: Name "samples" already defined on line 427  [no-redef]
+src/service.py:869: error: Name "queue" already defined on line 458  [no-redef]
+src/service.py:892: error: Too many values to unpack (6 expected, 7 provided)  [misc]
+src/service.py:985: error: Incompatible types in assignment (expression has type "Task[None]", variable has type "float")  [assignment]
+src/service.py:986: error: "float" has no attribute "cancel"  [attr-defined]
+src/service.py:1161: error: Name "samples" already defined on line 427  [no-redef]
+src/contours_labels.py:96: error: Incompatible return value type (got "FreeTypeFont", expected "ImageFont")  [return-value]
+src/contours_labels.py:103: error: Incompatible types in assignment (expression has type "FreeTypeFont | ImageFont", variable has type "FreeTypeFont")  [assignment]
+src/contours_labels.py:117: error: Incompatible return value type (got "FreeTypeFont", expected "ImageFont")  [return-value]
+src/contours_labels.py:244: error: Argument 2 to "new" has incompatible type "tuple[float, float]"; expected "tuple[int, int] | list[int]"  [arg-type]
+Found 23 errors in 6 files (checked 34 source files)

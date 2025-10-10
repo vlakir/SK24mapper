@@ -70,6 +70,9 @@ from constants import (
 )
 from contours import draw_contour_labels as _draw_contour_labels
 from contours_helpers import tx_ty_from_index
+from coords_sk42 import build_sk42_gk_crs as _build_sk42_gk_crs
+from coords_sk42 import determine_zone as _determine_zone
+from coords_sk42 import validate_sk42_bounds as _validate_sk42_bounds
 from diagnostics import log_memory_usage, log_thread_status
 from domen import MapSettings
 from elevation_provider import ElevationTileProvider
@@ -109,17 +112,6 @@ from topography import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-from coords_sk42 import (
-    build_sk42_gk_crs as _build_sk42_gk_crs,
-)
-from coords_sk42 import (
-    determine_zone as _determine_zone,
-)
-from coords_sk42 import (
-    validate_sk42_bounds as _validate_sk42_bounds,
-)
 
 
 async def download_satellite_rectangle(
@@ -421,7 +413,7 @@ async def download_satellite_rectangle(
 
                 tile_progress.label = 'Проверка диапазона высот (проход 1/2)'
 
-                async def _get_dem_tile(xw: int, yw: int):
+                async def _get_dem_tile(xw: int, yw: int) -> Image.Image:
                     return await provider_main.get_tile_image(zoom, xw, yw)
 
                 samples, seen_count = await _sample_elev(
@@ -576,8 +568,8 @@ async def download_satellite_rectangle(
                     await queue.join()
                     await asyncio.gather(*consumers)
                 except Exception:
-                    for t in producers + consumers:
-                        t.cancel()
+                    for task in producers + consumers:
+                        task.cancel()
                     # attempt to drain queue and stop consumers
                     for _ in consumers:
                         await queue.put(None)  # type: ignore[arg-type]
@@ -593,7 +585,7 @@ async def download_satellite_rectangle(
 
                 # Pass A: sample min/max elevations and build global low-res DEM seed
                 max_samples = 50000
-                samples: list[float] = []
+                samples_contours: list[float] = []
                 seen = 0
 
                 rng = random.Random(42)  # noqa: S311
@@ -612,7 +604,7 @@ async def download_satellite_rectangle(
                 async def fetch_and_sample2(
                     idx_xy: tuple[int, tuple[int, int]],
                 ) -> None:
-                    nonlocal seen, samples, tile_count
+                    nonlocal seen, samples_contours, tile_count
                     idx, (tile_x_world, tile_y_world) = idx_xy
                     tx, ty = tx_ty_from_index(idx, tiles_x)
                     if (
@@ -643,12 +635,12 @@ async def download_satellite_rectangle(
                                 for rx in range(off_x, w, step_x):
                                     v = row[rx]
                                     seen += 1
-                                    if len(samples) < max_samples:
-                                        samples.append(v)
+                                    if len(samples_contours) < max_samples:
+                                        samples_contours.append(v)
                                     else:
                                         j = rng.randrange(0, seen)
                                         if j < max_samples:
-                                            samples[j] = v
+                                            samples_contours[j] = v
                             # accumulate into low-res seed for this tile overlap
                             ov = _tile_overlap_rect_common(
                                 tx, ty, crop_rect, full_eff_tile_px
@@ -683,9 +675,9 @@ async def download_satellite_rectangle(
                             tg.create_task(fetch_and_sample2(pair))
                 finally:
                     tile_progress.close()
-                if samples:
-                    mn = min(samples)
-                    mx = max(samples)
+                if samples_contours:
+                    mn = min(samples_contours)
+                    mx = max(samples_contours)
                 else:
                     mn, mx = 0.0, 1.0
                 if mx < mn:
@@ -786,9 +778,13 @@ async def download_satellite_rectangle(
                                 xb = interp(x, x + 1, v01, v11, level)
 
                                 def add(
-                                    a: tuple[float, float], b: tuple[float, float]
+                                    a: tuple[float, float],
+                                    b: tuple[float, float],
+                                    segs_list: list[
+                                        tuple[tuple[float, float], tuple[float, float]]
+                                    ] = segs,
                                 ) -> None:
-                                    segs.append((a, b))
+                                    segs_list.append((a, b))
 
                                 if mask in MS_CONNECT_TOP_LEFT:
                                     add((xt, y), (x, yl))
@@ -866,7 +862,7 @@ async def download_satellite_rectangle(
 
                 seed_polylines = _build_seeds(seed_dem, levels)
 
-                queue: asyncio.Queue[tuple[int, int, int, int, int, int]] = (
+                queue_contours: asyncio.Queue[tuple[int, int, int, int, int, int]] = (
                     asyncio.Queue(maxsize=CONTOUR_PASS2_QUEUE_MAXSIZE)
                 )
                 paste_lock = asyncio.Lock()
@@ -880,14 +876,14 @@ async def download_satellite_rectangle(
                         await tile_progress.step(1)
                         return
                     # We don't need image in pass B anymore; only metadata for block
-                    await queue.put((tx, ty, *ov))
+                    await queue_contours.put((tx, ty, *ov))
 
                 async def consumer2() -> None:
                     nonlocal tile_count
                     while True:
-                        item = await queue.get()
+                        item = await queue_contours.get()
                         if item is None:  # type: ignore[comparison-overlap]
-                            queue.task_done()
+                            queue_contours.task_done()
                             break
                         tx, ty, x0, y0, x1, y1 = item
                         try:
@@ -959,7 +955,7 @@ async def download_satellite_rectangle(
                             async with paste_lock:
                                 result.paste(composed, (dx0, dy0), composed)
                         finally:
-                            queue.task_done()
+                            queue_contours.task_done()
                             tile_count += 1
                             if tile_count % CONTOUR_LOG_MEMORY_EVERY_TILES == 0:
                                 log_memory_usage(
@@ -978,16 +974,16 @@ async def download_satellite_rectangle(
                 try:
                     await asyncio.gather(*producers)
                     for _ in consumers:
-                        await queue.put(None)  # type: ignore[arg-type]
-                    await queue.join()
+                        await queue_contours.put(None)  # type: ignore[arg-type]
+                    await queue_contours.join()
                     await asyncio.gather(*consumers)
                 except Exception:
-                    for t in producers + consumers:
-                        t.cancel()
+                    for task in producers + consumers:
+                        task.cancel()
                     with contextlib.suppress(Exception):
                         for _ in consumers:
-                            await queue.put(None)  # type: ignore[arg-type]
-                        await queue.join()
+                            await queue_contours.put(None)  # type: ignore[arg-type]
+                        await queue_contours.join()
                         await asyncio.gather(*consumers, return_exceptions=True)
                     raise
                 finally:
@@ -1158,7 +1154,7 @@ async def download_satellite_rectangle(
 
             # Pass A: gather samples and build low-res seed
             max_samples = 50000
-            samples: list[float] = []
+            samples_overlay: list[float] = []
             seen = 0
 
             rng = random.Random(42)  # noqa: S311
@@ -1178,7 +1174,7 @@ async def download_satellite_rectangle(
             async def fetch_and_sample_overlay(
                 idx_xy: tuple[int, tuple[int, int]], client2: aiohttp.ClientSession
             ) -> None:
-                nonlocal seen, samples
+                nonlocal seen, samples_overlay
                 try:
                     idx, (tile_x_world, tile_y_world) = idx_xy
                     tx, ty = tx_ty_from_index(idx, tiles_x_c)
@@ -1204,12 +1200,12 @@ async def download_satellite_rectangle(
                             for rx in range(off_x, w, step_x):
                                 v = row[rx]
                                 seen += 1
-                                if len(samples) < max_samples:
-                                    samples.append(v)
+                                if len(samples_overlay) < max_samples:
+                                    samples_overlay.append(v)
                                 else:
                                     j = rng.randrange(0, seen)
                                     if j < max_samples:
-                                        samples[j] = v
+                                        samples_overlay[j] = v
                         ov = _tile_overlap_rect_common(
                             tx, ty, crop_rect_c, full_eff_tile_px
                         )
@@ -1258,7 +1254,7 @@ async def download_satellite_rectangle(
             # Логи по завершении прохода A
             try:
                 tiles_len = len(tiles_c)
-                samples_len = len(samples)
+                samples_len = len(samples_overlay)
                 logger.info(
                     'Изолинии: завершён проход 1/2: tiles=%d, samples=%d',
                     tiles_len,

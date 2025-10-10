@@ -321,19 +321,21 @@ async def run_deep_verification(*, api_key: str, settings: Any) -> None:
         attempts = 3
         for i in range(attempts):
             try:
-                async with aiohttp.ClientSession() as client:
-                    async with client.get(url, timeout=timeout) as resp:
-                        from constants import HTTP_FORBIDDEN, HTTP_OK, HTTP_UNAUTHORIZED
+                async with (
+                    aiohttp.ClientSession() as client,
+                    client.get(url, timeout=timeout) as resp,
+                ):
+                    from constants import HTTP_FORBIDDEN, HTTP_OK, HTTP_UNAUTHORIZED
 
-                        if resp.status == HTTP_OK:
-                            with contextlib.suppress(Exception):
-                                await resp.read()
-                            return
-                        if resp.status in (HTTP_UNAUTHORIZED, HTTP_FORBIDDEN):
-                            msg = 'Неверный или недействительный API-ключ. Проверьте ключ и попробуйте снова.'
-                            raise RuntimeError(msg)
-                        msg = f'Ошибка доступа к серверу карт (HTTP {resp.status}). Повторите попытку позже.'
+                    if resp.status == HTTP_OK:
+                        with contextlib.suppress(Exception):
+                            await resp.read()
+                        return
+                    if resp.status in (HTTP_UNAUTHORIZED, HTTP_FORBIDDEN):
+                        msg = 'Неверный или недействительный API-ключ. Проверьте ключ и попробуйте снова.'
                         raise RuntimeError(msg)
+                    msg = f'Ошибка доступа к серверу карт (HTTP {resp.status}). Повторите попытку позже.'
+                    raise RuntimeError(msg)
             except asyncio.CancelledError:
                 # важно не маскировать отмену задач
                 raise
@@ -365,23 +367,25 @@ async def run_deep_verification(*, api_key: str, settings: Any) -> None:
         last_exc: Exception | None = None
         for i in range(attempts):
             try:
-                async with aiohttp.ClientSession() as client:
-                    async with client.get(url, timeout=timeout) as resp:
-                        from constants import HTTP_FORBIDDEN, HTTP_OK, HTTP_UNAUTHORIZED
+                async with (
+                    aiohttp.ClientSession() as client,
+                    client.get(url, timeout=timeout) as resp,
+                ):
+                    from constants import HTTP_FORBIDDEN, HTTP_OK, HTTP_UNAUTHORIZED
 
-                        if resp.status == HTTP_OK:
-                            data = await resp.read()
-                        elif resp.status in (HTTP_UNAUTHORIZED, HTTP_FORBIDDEN):
-                            msg = 'Неверный или недействительный API-ключ. Проверьте ключ и попробуйте снова.'
-                            raise RuntimeError(msg)
-                        else:
-                            msg = f'Ошибка доступа к серверу карт (HTTP {resp.status}). Повторите попытку позже.'
-                            raise RuntimeError(msg)
-                        # Decode tiny image and colorize to ensure pipeline works
-                        img = Image.open(io.BytesIO(data)).convert('RGB')
-                        dem = decode_terrain_rgb_to_elevation_m(img)
-                        _ = colorize_dem_to_image(dem)
-                        return
+                    if resp.status == HTTP_OK:
+                        data = await resp.read()
+                    elif resp.status in (HTTP_UNAUTHORIZED, HTTP_FORBIDDEN):
+                        msg = 'Неверный или недействительный API-ключ. Проверьте ключ и попробуйте снова.'
+                        raise RuntimeError(msg)
+                    else:
+                        msg = f'Ошибка доступа к серверу карт (HTTP {resp.status}). Повторите попытку позже.'
+                        raise RuntimeError(msg)
+                    # Decode tiny image and colorize to ensure pipeline works
+                    img = Image.open(io.BytesIO(data)).convert('RGB')
+                    dem = decode_terrain_rgb_to_elevation_m(img)
+                    _ = colorize_dem_to_image(dem)
+                    return
             except asyncio.CancelledError:
                 raise
             except (TimeoutError, aiohttp.ClientError, OSError) as e:

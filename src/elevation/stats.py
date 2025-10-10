@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import logging
 import random
 from typing import TYPE_CHECKING
 
@@ -13,6 +14,8 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Iterable
 
     from PIL import Image
+
+logger = logging.getLogger(__name__)
 
 
 async def sample_elevation_percentiles(
@@ -45,7 +48,9 @@ async def sample_elevation_percentiles(
         (samples, seen_count): sampled elevation values and total number of seen samples.
 
     """
-    rng = random.Random(rng_seed)
+    rng = random.Random(  # noqa: S311
+        rng_seed
+    )
     samples: list[float] = []
     seen_count = 0
     tile_count = 0
@@ -96,8 +101,8 @@ async def sample_elevation_percentiles(
                 from diagnostics import log_memory_usage
 
                 log_memory_usage(f'elev pass1 after {tile_count} tiles')
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug('Failed to log memory usage: %s', e)
 
     # Run sequentially here — service should orchestrate concurrency around us if needed.
     # This keeps the module reusable and free of task lifecycle concerns.

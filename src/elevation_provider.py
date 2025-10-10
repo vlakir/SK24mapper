@@ -27,7 +27,9 @@ class TileKey:
 
 class ElevationTileProvider:
     """
-    Shared provider for Terrain-RGB tiles with:
+    Shared provider for Terrain-RGB tiles with caching.
+
+    Features:
     - in-flight request coalescing
     - in-memory cache of raw bytes (PIL images constructed on demand)
     - on-disk cache of raw bytes under HTTP_CACHE_DIR/terrain_rgb/z/x/y(@2x).pngraw.
@@ -56,6 +58,7 @@ class ElevationTileProvider:
         self._mem_lru: list[TileKey] = []
         self._mem_dem: dict[TileKey, list[list[float]]] = {}
         self._max_mem = max(16, int(max_mem_tiles))
+        self._background_tasks: set[asyncio.Task] = set()
 
     def _key(self, z: int, x: int, y: int) -> TileKey:
         return TileKey(int(z), int(x), int(y), self.use_retina)
@@ -128,7 +131,9 @@ class ElevationTileProvider:
             finally:
                 self._inflight.pop(key, None)
 
-        asyncio.create_task(run())
+        task = asyncio.create_task(run())
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
         return await fut
 
     async def get_tile_image(self, z: int, x: int, y: int) -> Image.Image:

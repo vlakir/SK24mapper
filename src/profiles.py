@@ -8,6 +8,9 @@ from domen import MapSettings
 
 logger = logging.getLogger(__name__)
 
+# Tolerance for control point coordinate precision checks (meters)
+CONTROL_POINT_PRECISION_TOLERANCE_M = 1e-6
+
 
 def _user_profiles_dir() -> Path:
     """
@@ -107,7 +110,10 @@ def load_profile(name_or_path: str) -> MapSettings:
             )
             dx = abs(got_x - expected_x)
             dy = abs(got_y - expected_y)
-            if dx > 1e-6 or dy > 1e-6:
+            if (
+                dx > CONTROL_POINT_PRECISION_TOLERANCE_M
+                or dy > CONTROL_POINT_PRECISION_TOLERANCE_M
+            ):
                 logger.error(
                     'Control point GK mismatch: Δx=%.6f Δy=%.6f (precision issue likely)',
                     dx,
@@ -126,6 +132,30 @@ def load_profile(name_or_path: str) -> MapSettings:
 def save_profile(name: str, settings: MapSettings) -> Path:
     """Сохранение профиля в TOML (без атомарности и бэкапов)."""
     path = profile_path(name)
+    try:
+        logger.info(
+            (
+                "save_profile('%s') → %s; from(xH=%s,xL=%s,yH=%s,yL=%s) → BL(%.3f, %.3f); "
+                'to(xH=%s,xL=%s,yH=%s,yL=%s) → TR(%.3f, %.3f)'
+            ),
+            name,
+            str(path),
+            getattr(settings, 'from_x_high', None),
+            getattr(settings, 'from_x_low', None),
+            getattr(settings, 'from_y_high', None),
+            getattr(settings, 'from_y_low', None),
+            getattr(settings, 'bottom_left_x_sk42_gk', 0.0),
+            getattr(settings, 'bottom_left_y_sk42_gk', 0.0),
+            getattr(settings, 'to_x_high', None),
+            getattr(settings, 'to_x_low', None),
+            getattr(settings, 'to_y_high', None),
+            getattr(settings, 'to_y_low', None),
+            getattr(settings, 'top_right_x_sk42_gk', 0.0),
+            getattr(settings, 'top_right_y_sk42_gk', 0.0),
+        )
+    except Exception:
+        logger.debug('Failed to log detailed settings in save_profile')
+
     data = settings.model_dump()
     text = tomlkit.dumps(data)
     path.write_text(text, encoding='utf-8')
@@ -134,8 +164,6 @@ def save_profile(name: str, settings: MapSettings) -> Path:
 
 def delete_profile(name: str) -> None:
     """Удаление файла профиля, если он существует."""
-    path = profile_path(name)
-    if path.exists():
-        path = profile_path(name)
-    if path.exists():
-        path.unlink()
+    p = profile_path(name)
+    if p.exists():
+        p.unlink()

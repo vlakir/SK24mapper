@@ -1,14 +1,5 @@
 from __future__ import annotations
 
-"""Unified contour labeling utilities.
-
-This module hosts label rendering logic extracted from service.py.
-The function below is intentionally minimal and mirrors the previous
-working behavior to avoid regressions while completing the migration.
-Additionally, it now logs detailed diagnostics to help pinpoint why
-labels might not appear (filters, collisions, edges, etc.).
-"""
-
 import logging
 import math
 from typing import TYPE_CHECKING
@@ -38,11 +29,22 @@ from constants import (
     GRID_FONT_PATH_BOLD,
 )
 
+"""Unified contour labeling utilities.
+
+This module hosts label rendering logic extracted from service.py.
+The function below is intentionally minimal and mirrors the previous
+working behavior to avoid regressions while completing the migration.
+Additionally, it now logs detailed diagnostics to help pinpoint why
+labels might not appear (filters, collisions, edges, etc.).
+"""
+
 if TYPE_CHECKING:
     # PIL Image type hint (runtime available via PIL import above)
     from PIL.Image import Image as PILImage
 
 logger = logging.getLogger(__name__)
+
+MIN_POLYLINE_POINTS = 2
 
 
 def draw_contour_labels(
@@ -74,7 +76,7 @@ def draw_contour_labels(
         GRID_FONT_PATH_BOLD if CONTOUR_LABEL_FONT_BOLD else GRID_FONT_PATH
     )
     name = 'DejaVuSans-Bold.ttf' if CONTOUR_LABEL_FONT_BOLD else 'DejaVuSans.ttf'
-    font_cache: dict[int, ImageFont.FreeTypeFont] = {}
+    font_cache: dict[int, ImageFont.FreeTypeFont | ImageFont.ImageFont] = {}
     font_reported = False
 
     def get_font_px() -> int:
@@ -89,13 +91,15 @@ def draw_contour_labels(
             px = int(CONTOUR_LABEL_FONT_MAX_PX)
         return px
 
-    def get_font(is_index: bool) -> ImageFont.ImageFont:
+    def get_font(is_index: bool) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
         nonlocal font_reported
         size = get_font_px()
         if size in font_cache:
             return font_cache[size]
         try:
-            f = ImageFont.truetype(fp, size) if fp else ImageFont.truetype(name, size)
+            f: ImageFont.FreeTypeFont | ImageFont.ImageFont = (
+                ImageFont.truetype(fp, size) if fp else ImageFont.truetype(name, size)
+            )
         except Exception as ex:
             logger.warning(
                 'Не удалось загрузить шрифт "%s" size=%d: %s', fp or name, size, ex
@@ -171,7 +175,7 @@ def draw_contour_labels(
 
         for poly in level_polys:
             pts = poly_to_crop(poly)
-            if len(pts) < 2:
+            if len(pts) < MIN_POLYLINE_POINTS:
                 continue
             # segment lengths and total
             seg_l_list: list[float] = []
@@ -236,10 +240,10 @@ def draw_contour_labels(
                 tmp = Image.new('RGBA', (1, 1), (0, 0, 0, 0))
                 td = ImageDraw.Draw(tmp)
                 fnt = get_font(is_index_line)
-                l, t, r, b = td.textbbox((0, 0), text, font=fnt)
-                tw, th = r - l, b - t
+                left, top, right, bottom = td.textbbox((0, 0), text, font=fnt)
+                tw, th = right - left, bottom - top
                 pad = int(CONTOUR_LABEL_BG_PADDING)
-                bw, bh = tw + 2 * pad, th + 2 * pad
+                bw, bh = int(tw + 2 * pad), int(th + 2 * pad)
 
                 box = Image.new('RGBA', (bw, bh), (0, 0, 0, 0))
                 bd = ImageDraw.Draw(box)
@@ -253,13 +257,16 @@ def draw_contour_labels(
                             if ox == 0 and oy == 0:
                                 continue
                             bd.text(
-                                (pad - l + ox, pad - t + oy),
+                                (pad - left + ox, pad - top + oy),
                                 text,
                                 font=fnt,
                                 fill=CONTOUR_LABEL_OUTLINE_COLOR,
                             )
                 bd.text(
-                    (pad - l, pad - t), text, font=fnt, fill=CONTOUR_LABEL_TEXT_COLOR
+                    (pad - left, pad - top),
+                    text,
+                    font=fnt,
+                    fill=CONTOUR_LABEL_TEXT_COLOR,
                 )
 
                 ang_deg = math.degrees(ang_rad)
