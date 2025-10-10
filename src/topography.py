@@ -1,25 +1,31 @@
 import asyncio
+import logging
 import math
+from collections.abc import Sequence
+from contextlib import suppress
 from http import HTTPStatus
 from io import BytesIO
+from typing import cast
 
 import aiohttp
 from PIL import Image
 from pyproj import CRS, Transformer
+from pyproj.transformer import TransformerGroup
 
 from constants import (
     EARTH_RADIUS_M,
     EAST_VECTOR_SAMPLE_M,
-    EPSG_SK42_GK_BASE,
-    GK_FALSE_EASTING,
-    GK_ZONE_CM_OFFSET_DEG,
-    GK_ZONE_WIDTH_DEG,
+    ELEV_MIN_RANGE_M,
+    ELEV_PCTL_HI,
+    ELEV_PCTL_LO,
+    ELEVATION_COLOR_RAMP,
     HTTP_5XX_MAX,
     HTTP_5XX_MIN,
     HTTP_BACKOFF_FACTOR,
     HTTP_RETRIES_DEFAULT,
     HTTP_TIMEOUT_DEFAULT,
     MAPBOX_STATIC_BASE,
+    MAPBOX_TERRAIN_RGB_PATH,
     MERCATOR_MAX_SIN,
     RETINA_FACTOR,
     SK42_CODE,
@@ -41,35 +47,19 @@ crs_wgs84 = CRS.from_epsg(WGS84_CODE)
 
 
 def build_transformers_sk42(
-    zone_from_lon: float,
     custom_helmert: tuple[float, float, float, float, float, float, float]
     | None = None,
-) -> tuple[Transformer, Transformer, CRS]:
+) -> tuple[Transformer, Transformer]:
     """
-    Собирает трансформеры.
+    Собирает трансформеры для географических координат СК‑42 <-> WGS84.
 
-    - СК‑42 географические <-> WGS84 (с учётом доступных параметров);
-    - СК‑42 / Гаусса–Крюгера (EPSG:284xx) для выбранной 6-градусной зоны.
+    Примечания:
+    - Если переданы пользовательские 7 параметров Хельмерта, они используются напрямую
+      в виде +towgs84=dx,dy,dz,rx,ry,rz,ds, где rx/ry/rz — угловые секунды, ds — ppm.
+    - Если custom_helmert не задан, пытаемся подобрать лучший доступный pipeline через
+      TransformerGroup (например, с использованием гридов NTV2, если они установлены).
+      При отсутствии — используем прямую трансформацию EPSG:4284↔4326 (возможен ballpark).
     """
-    zone = int(
-        math.floor((zone_from_lon + GK_ZONE_CM_OFFSET_DEG) / float(GK_ZONE_WIDTH_DEG))
-        + 1,
-    )
-    zone = max(1, min(60, zone))
-    try:
-        # EPSG:284xx
-        crs_sk42_gk = CRS.from_epsg(EPSG_SK42_GK_BASE + zone)
-    except Exception:
-        # Резервный вариант: построить СК‑42 / Гаусса–Крюгера (6°)
-        # вручную, если EPSG недоступен
-        # Центральный меридиан 6-градусной зоны
-        lon0 = zone * GK_ZONE_WIDTH_DEG - GK_ZONE_CM_OFFSET_DEG
-        proj4 = (
-            f'+proj=tmerc +lat_0=0 +lon_0={lon0} +k=1 '
-            f'+x_0={GK_FALSE_EASTING} +y_0=0 +ellps=krass +units=m +no_defs +type=crs'
-        )
-        crs_sk42_gk = CRS.from_proj4(proj4)
-
     if custom_helmert:
         dx, dy, dz, rx_as, ry_as, rz_as, ds_ppm = custom_helmert
         proj4_sk42_custom = CRS.from_proj4(
@@ -90,10 +80,33 @@ def build_transformers_sk42(
             always_xy=True,
         )
     else:
-        t_sk42_to_wgs = Transformer.from_crs(crs_sk42_geog, crs_wgs84, always_xy=True)
-        t_wgs_to_sk42 = Transformer.from_crs(crs_wgs84, crs_sk42_geog, always_xy=True)
+        # Попробовать подобрать лучший доступный pipeline (например, NTV2)
+        try:
+            tg_fwd = TransformerGroup(crs_sk42_geog, crs_wgs84, always_xy=True)
+            if tg_fwd.best_available and tg_fwd.transformers:
+                t_sk42_to_wgs = tg_fwd.transformers[0]
+            else:
+                t_sk42_to_wgs = Transformer.from_crs(
+                    crs_sk42_geog, crs_wgs84, always_xy=True
+                )
+        except Exception:
+            t_sk42_to_wgs = Transformer.from_crs(
+                crs_sk42_geog, crs_wgs84, always_xy=True
+            )
+        try:
+            tg_rev = TransformerGroup(crs_wgs84, crs_sk42_geog, always_xy=True)
+            if tg_rev.best_available and tg_rev.transformers:
+                t_wgs_to_sk42 = tg_rev.transformers[0]
+            else:
+                t_wgs_to_sk42 = Transformer.from_crs(
+                    crs_wgs84, crs_sk42_geog, always_xy=True
+                )
+        except Exception:
+            t_wgs_to_sk42 = Transformer.from_crs(
+                crs_wgs84, crs_sk42_geog, always_xy=True
+            )
 
-    return t_sk42_to_wgs, t_wgs_to_sk42, crs_sk42_gk
+    return t_sk42_to_wgs, t_wgs_to_sk42
 
 
 def meters_per_pixel(lat_deg: float, zoom: int, scale: int = STATIC_SCALE) -> float:
@@ -144,7 +157,7 @@ def estimate_crop_size_px(
     return req_w_px, req_h_px, req_w_px * req_h_px
 
 
-def choose_zoom_with_limit(  # noqa: PLR0913
+def choose_zoom_with_limit(
     center_lat: float,
     width_m: float,
     height_m: float,
@@ -162,7 +175,7 @@ def choose_zoom_with_limit(  # noqa: PLR0913
     return 0
 
 
-def compute_grid(  # noqa: PLR0913
+def compute_grid(
     center_lat: float,
     center_lng: float,
     width_m: float,
@@ -249,7 +262,7 @@ def effective_scale_for_xyz(tile_size: int, *, use_retina: bool) -> int:
     return (base // TILE_SIZE) * (RETINA_FACTOR if use_retina else 1)
 
 
-def compute_xyz_coverage(  # noqa: PLR0913
+def compute_xyz_coverage(
     center_lat: float,
     center_lng: float,
     width_m: float,
@@ -341,7 +354,7 @@ def compute_xyz_coverage(  # noqa: PLR0913
     return tiles, (count_x, count_y), (crop_x, crop_y, crop_w, crop_h), map_params
 
 
-async def async_fetch_xyz_tile(  # noqa: PLR0913
+async def async_fetch_xyz_tile(
     client: aiohttp.ClientSession,
     api_key: str,
     style_id: str,
@@ -411,9 +424,6 @@ async def async_fetch_xyz_tile(  # noqa: PLR0913
                     if callable(release):
                         release()
                 except Exception as e:
-                    # Log and move on; we don't want cleanup issues to mask the real HTTP error
-                    import logging
-
                     logging.getLogger(__name__).debug(
                         'Failed to cleanup HTTP response: %s', e, exc_info=True
                     )
@@ -422,6 +432,223 @@ async def async_fetch_xyz_tile(  # noqa: PLR0913
         await asyncio.sleep(backoff**attempt)
     msg = f'Не удалось загрузить тайл z/x/y={z}/{x}/{y}: {last_exc}'
     raise RuntimeError(msg)
+
+
+async def async_fetch_terrain_rgb_tile(
+    client: aiohttp.ClientSession,
+    api_key: str,
+    z: int,
+    x: int,
+    y: int,
+    *,
+    use_retina: bool,
+    async_timeout: float = HTTP_TIMEOUT_DEFAULT,
+    retries: int = HTTP_RETRIES_DEFAULT,
+    backoff: float = HTTP_BACKOFF_FACTOR,
+) -> Image.Image:
+    """
+    Загружает один тайл Terrain-RGB (pngraw) и возвращает PIL.Image in RGB.
+
+    URL: https://api.mapbox.com/v4/mapbox.terrain-rgb/{z}/{x}/{y}{@2x}.pngraw?access_token=...
+    Токен не логируется; в сообщениях используем путь без query.
+    Поведение ошибок/ретраев аналогично async_fetch_xyz_tile.
+    """
+    scale_suffix = '@2x' if use_retina else ''
+    path = f'{MAPBOX_TERRAIN_RGB_PATH}/{z}/{x}/{y}{scale_suffix}.pngraw'
+    url = f'{path}?access_token={api_key}'
+
+    last_exc: Exception | None = None
+    for attempt in range(retries):
+        try:
+            timeout = aiohttp.ClientTimeout(total=async_timeout)
+            resp = await client.get(url, timeout=timeout)
+            try:
+                sc = resp.status
+                if sc == HTTPStatus.OK:
+                    data = await resp.read()
+                    return Image.open(BytesIO(data)).convert('RGB')
+                if sc in (HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN):
+                    msg = f'Доступ запрещён (HTTP {sc}) для terrain тайла z/x/y={z}/{x}/{y} path={path}'
+                    raise RuntimeError(
+                        msg,
+                    )
+                if sc == HTTPStatus.NOT_FOUND:
+                    msg = f'Ресурс не найден (404) для terrain тайла z/x/y={z}/{x}/{y} path={path}'
+                    raise RuntimeError(
+                        msg,
+                    )
+                is_rate_or_5xx = (sc == HTTPStatus.TOO_MANY_REQUESTS) or (
+                    HTTP_5XX_MIN <= sc < HTTP_5XX_MAX
+                )
+                if is_rate_or_5xx:
+                    last_exc = RuntimeError(
+                        f'HTTP {sc} при загрузке terrain тайла z/x/y={z}/{x}/{y} path={path}',
+                    )
+                else:
+                    last_exc = RuntimeError(
+                        f'Неожиданный ответ HTTP {sc} для terrain z/x/y={z}/{x}/{y} path={path}',
+                    )
+            finally:
+                with suppress(Exception):
+                    close = getattr(resp, 'close', None)
+                    if callable(close):
+                        close()
+                    release = getattr(resp, 'release', None)
+                    if callable(release):
+                        release()
+        except Exception as e:
+            last_exc = e
+        await asyncio.sleep(backoff**attempt)
+    msg = f'Не удалось загрузить terrain тайл z/x/y={z}/{x}/{y}: {last_exc}'
+    raise RuntimeError(msg)
+
+
+def decode_terrain_rgb_to_elevation_m(img: Image.Image) -> list[list[float]]:
+    """
+    Декодирует Terrain-RGB картинку в двумерный массив высот (метры).
+
+    elevation = -10000 + (R*256*256 + G*256 + B) * 0.1
+
+    Возвращает список строк для экономии зависимостей (без numpy).
+    """
+    w, h = img.size
+    pix = img.load()
+    assert pix is not None
+    rows: list[list[float]] = []
+    for y in range(h):
+        row: list[float] = []
+        for x in range(w):
+            r, g, b = cast('tuple[int, int, int]', pix[x, y])[:3]
+            elev = -10000.0 + (r * 256 * 256 + g * 256 + b) * 0.1
+            row.append(elev)
+        rows.append(row)
+    return rows
+
+
+def assemble_dem(
+    tiles_data: list[list[list[float]]],
+    tiles_x: int,
+    tiles_y: int,
+    eff_tile_px: int,
+    crop_rect: tuple[int, int, int, int],
+) -> list[list[float]]:
+    """
+    Сшивает список DEM тайлов (в порядке строк) в единый DEM и применяет crop_rect.
+
+    Возвращает 2D список float метров.
+    """
+    full_w = tiles_x * eff_tile_px
+    full_h = tiles_y * eff_tile_px
+    # Инициализация полотна
+    canvas: list[list[float]] = [[0.0] * full_w for _ in range(full_h)]
+
+    # Размещение тайлов
+    idx = 0
+    for ty in range(tiles_y):
+        for tx in range(tiles_x):
+            tile = tiles_data[idx]
+            idx += 1
+            # Копируем по строкам
+            base_y = ty * eff_tile_px
+            base_x = tx * eff_tile_px
+            for y in range(eff_tile_px):
+                row_src = tile[y]
+                row_dst = canvas[base_y + y]
+                row_dst[base_x : base_x + eff_tile_px] = row_src[:eff_tile_px]
+
+    cx, cy, cw, ch = crop_rect
+    # Обрезка
+    cropped: list[list[float]] = [row[cx : cx + cw] for row in canvas[cy : cy + ch]]
+    # Освободить полотно
+    canvas.clear()
+    return cropped
+
+
+def compute_percentiles(
+    values: Sequence[float], p_lo: float, p_hi: float
+) -> tuple[float, float]:
+    """Простая перцентильная оценка без numpy (O(n log n))."""
+    vals = sorted(values)
+    n = len(vals)
+    if n == 0:
+        return 0.0, 1.0
+
+    def idx_of(p: float) -> int:
+        p = max(0.0, min(100.0, p))
+        k = round((p / 100.0) * (n - 1))
+        return max(0, min(n - 1, k))
+
+    return vals[idx_of(p_lo)], vals[idx_of(p_hi)]
+
+
+def colorize_dem_to_image(
+    dem: list[list[float]],
+    p_lo: float = ELEV_PCTL_LO,
+    p_hi: float = ELEV_PCTL_HI,
+    min_range_m: float = ELEV_MIN_RANGE_M,
+) -> Image.Image:
+    """Преобразует DEM в цветное изображение по заданной палитре с перцентильной нормализацией."""
+    h = len(dem)
+    w = len(dem[0]) if h else 0
+    # Выборка для перцентилей: используем равномерную подвыборку, чтобы не хранить всё
+    samples: list[float] = []
+    if h and w:
+        step_y = max(1, h // 200)
+        step_x = max(1, w // 200)
+        for y in range(0, h, step_y):
+            row = dem[y]
+            for x in range(0, w, step_x):
+                samples.append(row[x])
+    lo, hi = compute_percentiles(
+        samples or [v for row in dem for v in row][:10000], p_lo, p_hi
+    )
+    if hi - lo < min_range_m:
+        mid = (lo + hi) / 2.0
+        lo = mid - min_range_m / 2.0
+        hi = mid + min_range_m / 2.0
+    inv = 1.0 / (hi - lo) if hi > lo else 0.0
+
+    def lerp(a: float, b: float, t: float) -> float:
+        return a + (b - a) * t
+
+    # Build LUT once per image for fast palette mapping
+    lut_size = 2048
+    _lut: list[tuple[int, int, int]] = []
+    ramp = ELEVATION_COLOR_RAMP
+    for i in range(lut_size):
+        tt = i / (lut_size - 1)
+        for j in range(1, len(ramp)):
+            t0, c0 = ramp[j - 1]
+            t1, c1 = ramp[j]
+            if tt <= t1 or j == len(ramp) - 1:
+                local = 0.0 if t1 == t0 else (tt - t0) / (t1 - t0)
+                r = round(lerp(c0[0], c1[0], local))
+                g = round(lerp(c0[1], c1[1], local))
+                b = round(lerp(c0[2], c1[2], local))
+                _lut.append((r, g, b))
+                break
+
+    def color_at(t: float) -> tuple[int, int, int]:
+        if t <= 0.0:
+            return _lut[0]
+        if t >= 1.0:
+            return _lut[-1]
+        idx = int(t * (lut_size - 1))
+        return _lut[idx]
+
+    # Build entire image buffer as bytes (scanlines) and create Image from bytes
+    buf = bytearray(w * h * 3)
+    k = 0
+    for y in range(h):
+        row = dem[y]
+        for x in range(w):
+            t = (row[x] - lo) * inv
+            r, g, b = color_at(t)
+            buf[k] = r
+            buf[k + 1] = g
+            buf[k + 2] = b
+            k += 3
+    return Image.frombytes('RGB', (w, h), bytes(buf))
 
 
 def latlng_to_final_pixel(

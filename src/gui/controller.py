@@ -29,6 +29,25 @@ class MilMapperController:
         self._load_api_key()
         logger.info('MilMapperController initialized')
 
+    def update_settings_bulk(self, **kwargs: Any) -> None:
+        """
+        Пакетное обновление нескольких настроек за один вызов модели.
+
+        Обновляет модель одним вызовом update_settings, чтобы сгенерировать
+        только одно событие SETTINGS_CHANGED и избежать гонок между View и Model.
+        """
+        try:
+            if kwargs:
+                self._model.update_settings(**kwargs)
+                logger.debug(f'Обновлены настройки (bulk): {list(kwargs.keys())}')
+        except Exception as e:
+            error_msg = f'Не удалось обновить настройки (bulk): {e}'
+            logger.exception(error_msg)
+            self._model.notify_observers(
+                ModelEvent.WARNING_OCCURRED,
+                {'warning': error_msg},
+            )
+
     def _load_api_key(self) -> None:
         """Загрузка API-ключа из переменных окружения (.env/.secrets.env) для разных сценариев запуска."""
         try:
@@ -135,7 +154,35 @@ class MilMapperController:
     def save_current_profile(self, profile_name: str) -> None:
         """Сохранение текущих настроек в файл профиля."""
         try:
-            save_profile(profile_name, self._model.settings)
+            s = self._model.settings
+            # Подробный лог перед сохранением, чтобы отловить проблемы «не те значения сохраняются»
+            try:
+                logger.info(
+                    (
+                        "Saving profile '%s' with coords: from(xH=%s,xL=%s,yH=%s,yL=%s) → BL(%.3f, %.3f); "
+                        'to(xH=%s,xL=%s,yH=%s,yL=%s) → TR(%.3f, %.3f); control_point(en=%s, X=%.3f, Y=%.3f)'
+                    ),
+                    profile_name,
+                    getattr(s, 'from_x_high', None),
+                    getattr(s, 'from_x_low', None),
+                    getattr(s, 'from_y_high', None),
+                    getattr(s, 'from_y_low', None),
+                    getattr(s, 'bottom_left_x_sk42_gk', 0.0),
+                    getattr(s, 'bottom_left_y_sk42_gk', 0.0),
+                    getattr(s, 'to_x_high', None),
+                    getattr(s, 'to_x_low', None),
+                    getattr(s, 'to_y_high', None),
+                    getattr(s, 'to_y_low', None),
+                    getattr(s, 'top_right_x_sk42_gk', 0.0),
+                    getattr(s, 'top_right_y_sk42_gk', 0.0),
+                    getattr(s, 'control_point_enabled', False),
+                    getattr(s, 'control_point_x_sk42_gk', 0.0),
+                    getattr(s, 'control_point_y_sk42_gk', 0.0),
+                )
+            except Exception:
+                logger.debug('Failed to log detailed settings before save')
+
+            save_profile(profile_name, s)
             self._model.save_profile(profile_name)
             logger.info(f'Профиль сохранён: {profile_name}')
         except Exception as e:
@@ -149,20 +196,51 @@ class MilMapperController:
     def save_current_profile_as(self, file_path: str) -> str | None:
         """Сохранение текущих настроек в новый файл профиля по заданному пути."""
         try:
-            profile_path = Path(file_path)
-            if profile_path.suffix.lower() != '.toml':
-                profile_path = profile_path.with_suffix('.toml')
-
-            profile_name = profile_path.stem
+            dest_path = Path(file_path)
+            if dest_path.suffix.lower() != '.toml':
+                dest_path = dest_path.with_suffix('.toml')
 
             profiles_dir = ensure_profiles_dir()
-
-            if not profile_path.is_absolute() and profile_path.parent == Path('..'):
-                final_path = profiles_dir / profile_path.name
+            # Любой относительный путь сохраняем в каталог профилей пользователя
+            if not dest_path.is_absolute():
+                final_path = profiles_dir / dest_path.name
             else:
-                final_path = profile_path
+                final_path = dest_path
 
-            data = self._model.settings.model_dump()
+            # Гарантируем существование каталога
+            final_path.parent.mkdir(parents=True, exist_ok=True)
+            profile_name = final_path.stem
+
+            s = self._model.settings
+            # Подробный лог перед сохранением
+            try:
+                logger.info(
+                    (
+                        "Saving profile as '%s' → %s with coords: from(xH=%s,xL=%s,yH=%s,yL=%s) → BL(%.3f, %.3f); "
+                        'to(xH=%s,xL=%s,yH=%s,yL=%s) → TR(%.3f, %.3f); control_point(en=%s, X=%.3f, Y=%.3f)'
+                    ),
+                    profile_name,
+                    str(final_path),
+                    getattr(s, 'from_x_high', None),
+                    getattr(s, 'from_x_low', None),
+                    getattr(s, 'from_y_high', None),
+                    getattr(s, 'from_y_low', None),
+                    getattr(s, 'bottom_left_x_sk42_gk', 0.0),
+                    getattr(s, 'bottom_left_y_sk42_gk', 0.0),
+                    getattr(s, 'to_x_high', None),
+                    getattr(s, 'to_x_low', None),
+                    getattr(s, 'to_y_high', None),
+                    getattr(s, 'to_y_low', None),
+                    getattr(s, 'top_right_x_sk42_gk', 0.0),
+                    getattr(s, 'top_right_y_sk42_gk', 0.0),
+                    getattr(s, 'control_point_enabled', False),
+                    getattr(s, 'control_point_x_sk42_gk', 0.0),
+                    getattr(s, 'control_point_y_sk42_gk', 0.0),
+                )
+            except Exception:
+                logger.debug('Failed to log detailed settings before save-as')
+
+            data = s.model_dump()
             text = tomlkit.dumps(data)
             final_path.write_text(text, encoding='utf-8')
 
@@ -188,14 +266,24 @@ class MilMapperController:
         if not self.validate_api_key():
             error_msg = 'API-ключ недоступен для загрузки'
             logger.error(error_msg)
-            self._model.notify_observers(
-                ModelEvent.ERROR_OCCURRED,
-                {'error': error_msg},
-            )
-            return
+            # Передаём ошибку наверх, чтобы центрально обработать в GUI-потоке
+            raise RuntimeError(error_msg)
 
         with ResourceMonitor('MAP_DOWNLOAD'):
             try:
+                # Глубокая проверка перед стартом
+                from diagnostics import run_deep_verification
+
+                try:
+                    await run_deep_verification(
+                        api_key=self._api_key or '', settings=self._model.settings
+                    )
+                except Exception as e:
+                    error_msg = f'Проверка перед запуском не пройдена: {e}'
+                    logger.exception(error_msg)
+                    # Пробрасываем ошибку, чтобы обработать единообразно в GUI-потоке
+                    raise RuntimeError(error_msg) from e
+
                 self._model.start_download()
                 settings = self._model.settings
 
@@ -211,6 +299,22 @@ class MilMapperController:
                 logger.info(
                     f'Starting download: center=({center_x}, {center_y}), size=({width_m}x{height_m})',
                 )
+                try:
+                    # Military notation in logs: X=northing (GK Y), Y=easting (GK X)
+                    logger.info(
+                        'Starting download with control point (СК-42 ГК): enabled=%s, X(север)=%.3f, Y(восток)=%.3f; raw Xn=%s, raw Ye=%s',
+                        getattr(settings, 'control_point_enabled', False),
+                        getattr(settings, 'control_point_y_sk42_gk', 0.0),  # northing
+                        getattr(settings, 'control_point_x_sk42_gk', 0.0),  # easting
+                        getattr(
+                            settings, 'control_point_y', None
+                        ),  # historically stored northing
+                        getattr(
+                            settings, 'control_point_x', None
+                        ),  # historically stored easting
+                    )
+                except Exception:
+                    logger.debug('Failed to log control point settings at start')
                 log_memory_usage('before download start')
 
                 # Start download
@@ -231,8 +335,10 @@ class MilMapperController:
             except Exception as e:
                 error_msg = f'Не удалось выполнить загрузку: {e}'
                 logger.exception(error_msg)
+                # Акуратный откат состояния модели
                 self._model.complete_download(success=False, error_msg=error_msg)
-                raise
+                # Пробрасываем ошибку для централизованной обработки в GUI-потоке (DownloadWorker.finished)
+                raise RuntimeError(error_msg) from e
 
     def start_map_download_sync(self) -> None:
         """Запуск загрузки карты в синхронном контексте (обёртка над async)."""

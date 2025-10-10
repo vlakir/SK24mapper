@@ -18,3 +18,15 @@ contrast = 1.0
 saturation = 1.0
 
 map_type = "SATELLITE"
+# Параметры датум-трансформации СК-42 → WGS84 (Helmert, м / угл. сек / ppm)
+helmert_dx = -50.956566
+helmert_dy = -39.724002
+helmert_dz = -76.876563
+helmert_rx_as = 2.332951
+helmert_ry_as = 2.139868
+helmert_rz_as = -2.030055
+helmert_ds_ppm = -1.430651
+# Контрольная точка
+control_point_enabled = false
+control_point_x = 5415000
+control_point_y = 7440000

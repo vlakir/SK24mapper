@@ -13,16 +13,12 @@ from PySide6.QtCore import QObject, QSignalBlocker, Qt, QThread, QTimer, Signal,
 from PySide6.QtGui import QAction, QPixmapCache
 from PySide6.QtWidgets import (
     QApplication,
-    QCheckBox,
     QComboBox,
-    QDoubleSpinBox,
     QFileDialog,
     QFrame,
     QGridLayout,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QMainWindow,
     QMessageBox,
     QProgressDialog,
@@ -35,6 +31,9 @@ from PySide6.QtWidgets import (
     QStatusBar,
     QVBoxLayout,
     QWidget,
+    QCheckBox,
+    QDoubleSpinBox,
+    QGroupBox,
 )
 
 from constants import (
@@ -42,6 +41,7 @@ from constants import (
     BYTES_TO_KB_THRESHOLD,
     FLOAT_COMPARISON_TOLERANCE,
     MAP_TYPE_LABELS_RU,
+    PROFILES_DIR,
     MapType,
 )
 from diagnostics import (
@@ -52,7 +52,6 @@ from diagnostics import (
 from gui.controller import MilMapperController
 from gui.model import EventData, MilMapperModel, ModelEvent, Observer
 from gui.preview_window import OptimizedImageView
-from profiles import ensure_profiles_dir
 from progress import (
     cleanup_all_progress_resources,
     set_preview_image_callback,
@@ -64,9 +63,6 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
-
-# Constant for decimal precision threshold
-MIN_DECIMALS_FOR_SMALL_STEP = 2
 
 
 class DownloadWorker(QThread):
@@ -106,13 +102,10 @@ class DownloadWorker(QThread):
                 lambda label: None,
             )
             set_preview_image_callback(preview_callback)
-
+            
             # Import and set progress callback for ConsoleProgress updates
             from progress import set_progress_callback
-
-            set_progress_callback(
-                lambda done, total, label: self.progress_update.emit(done, total, label)
-            )
+            set_progress_callback(lambda done, total, label: self.progress_update.emit(done, total, label))
 
             # Run the actual download
             log_memory_usage('before download sync call')
@@ -175,16 +168,19 @@ class OldCoordinateInputWidget(QWidget):
 
 
 class CoordinateInputWidget(QWidget):
-    """Widget for coordinate input with simple QLineEdit (0-9999999)."""
+    """Widget for coordinate input with 7-digit format."""
 
     def __init__(self, label: str, high_value: int = 0, low_value: int = 0) -> None:
         super().__init__()
-        # Convert high/low format to coordinate value for initial display
+        # Convert old high/low format to 7-digit format
         coordinate_value = high_value * 100000 + low_value * 1000
         self._setup_ui(label, coordinate_value)
 
     def _setup_ui(self, label: str, coordinate_value: int) -> None:
         """Setup coordinate input UI."""
+        from PySide6.QtWidgets import QLineEdit
+        from PySide6.QtGui import QIntValidator
+        
         layout = QHBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
 
@@ -193,37 +189,31 @@ class CoordinateInputWidget(QWidget):
         label_widget.setMinimumWidth(80)
         layout.addWidget(label_widget)
 
-        # Simple coordinate input using QLineEdit
+        # 7-digit coordinate input
         self.coordinate_edit = QLineEdit()
-        self.coordinate_edit.setText(str(coordinate_value))
-        self.coordinate_edit.setToolTip(f'Координата для {label} (0-9999999)')
+        self.coordinate_edit.setMaxLength(7)
+        validator = QIntValidator(0, 9999999)
+        self.coordinate_edit.setValidator(validator)
+        self.coordinate_edit.setText(f"{coordinate_value:07d}")
+        self.coordinate_edit.setToolTip(f'7-значный формат координаты для {label}')
         layout.addWidget(self.coordinate_edit)
 
         self.setLayout(layout)
 
-    def get_coordinate(self) -> int:
-        """Get the current coordinate value as entered by user."""
-        try:
-            text = self.coordinate_edit.text().strip()
-            return int(text) if text else 0
-        except ValueError:
-            return 0
-
-    def set_coordinate(self, coordinate: int) -> None:
-        """Set the coordinate value directly."""
-        self.coordinate_edit.setText(str(coordinate))
-
     def get_values(self) -> tuple[int, int]:
         """Get high and low values for backward compatibility."""
-        coordinate = self.get_coordinate()
-        high = coordinate // 100000
-        low = (coordinate % 100000) // 1000
-        return high, low
+        try:
+            coordinate = int(self.coordinate_edit.text() or "0")
+            high = coordinate // 100000
+            low = (coordinate % 100000) // 1000
+            return high, low
+        except ValueError:
+            return 0, 0
 
     def set_values(self, high: int, low: int) -> None:
         """Set high and low values for backward compatibility."""
         coordinate_value = high * 100000 + low * 1000
-        self.set_coordinate(coordinate_value)
+        self.coordinate_edit.setText(f"{coordinate_value:07d}")
 
 
 class GridSettingsWidget(QWidget):
@@ -326,7 +316,7 @@ class OutputSettingsWidget(QWidget):
         # Яркость
         self.brightness_label = QLabel('Яркость: 100%')
         self.brightness_slider = QSlider(Qt.Orientation.Horizontal)
-        self.brightness_slider.setRange(0, 400)
+        self.brightness_slider.setRange(0, 200)
         self.brightness_slider.setValue(100)
         layout.addWidget(self.brightness_label, 2, 0)
         layout.addWidget(self.brightness_slider, 2, 1)
@@ -370,8 +360,8 @@ class OutputSettingsWidget(QWidget):
         b = float(settings.get('brightness', 1.0))
         c = float(settings.get('contrast', 1.0))
         s = float(settings.get('saturation', 1.0))
-        # Clamp within 0..4
-        b = 0.0 if b < 0.0 else (min(b, 4.0))
+        # Clamp within 0..2
+        b = 0.0 if b < 0.0 else (min(b, 2.0))
         c = 0.0 if c < 0.0 else (min(c, 2.0))
         s = 0.0 if s < 0.0 else (min(s, 2.0))
         self.brightness_slider.setValue(round(b * 100))
@@ -390,8 +380,7 @@ class _ViewObserver(Observer):
 
 
 class HelmertSettingsWidget(QWidget):
-    """
-    Widget for user to input Helmert transformation parameters.
+    """Widget for user to input Helmert transformation parameters.
 
     Provides enable checkbox and seven numeric fields with proper units:
     - dx, dy, dz (meters)
@@ -407,46 +396,40 @@ class HelmertSettingsWidget(QWidget):
         layout = QGridLayout()
         # Enable checkbox
         self.enable_cb = QCheckBox('Включить пользовательские параметры')
-        self.enable_cb.setToolTip(
-            'Включить использование заданных ниже параметров перехода СК-42 → WGS84'
-        )
+        self.enable_cb.setToolTip('Включить использование заданных ниже параметров перехода СК-42 → WGS84')
         layout.addWidget(self.enable_cb, 0, 0, 1, 4)
 
+        # dx, dy, dz (m)
         row = 1
         layout.addWidget(QLabel('dx (м):'), row, 0)
-        self.dx = QDoubleSpinBox()
-        self._cfg_spin(self.dx, -500.0, 500.0, 3, 0.0)
+        self.dx = QDoubleSpinBox(); self._cfg_spin(self.dx, -500.0, 500.0, 3, 0.0)
         layout.addWidget(self.dx, row, 1)
         layout.addWidget(QLabel('dy (м):'), row, 2)
-        self.dy = QDoubleSpinBox()
-        self._cfg_spin(self.dy, -500.0, 500.0, 3, 0.0)
+        self.dy = QDoubleSpinBox(); self._cfg_spin(self.dy, -500.0, 500.0, 3, 0.0)
         layout.addWidget(self.dy, row, 3)
 
         row += 1
         layout.addWidget(QLabel('dz (м):'), row, 0)
-        self.dz = QDoubleSpinBox()
-        self._cfg_spin(self.dz, -500.0, 500.0, 3, 0.0)
+        self.dz = QDoubleSpinBox(); self._cfg_spin(self.dz, -500.0, 500.0, 3, 0.0)
         layout.addWidget(self.dz, row, 1)
 
+        # rx, ry, rz (arcsec)
         layout.addWidget(QLabel('rx (угл. сек):'), row, 2)
-        self.rx = QDoubleSpinBox()
-        self._cfg_spin(self.rx, -60.0, 60.0, 5, 0.0)
+        self.rx = QDoubleSpinBox(); self._cfg_spin(self.rx, -60.0, 60.0, 5, 0.0)
         layout.addWidget(self.rx, row, 3)
 
         row += 1
         layout.addWidget(QLabel('ry (угл. сек):'), row, 0)
-        self.ry = QDoubleSpinBox()
-        self._cfg_spin(self.ry, -60.0, 60.0, 5, 0.0)
+        self.ry = QDoubleSpinBox(); self._cfg_spin(self.ry, -60.0, 60.0, 5, 0.0)
         layout.addWidget(self.ry, row, 1)
         layout.addWidget(QLabel('rz (угл. сек):'), row, 2)
-        self.rz = QDoubleSpinBox()
-        self._cfg_spin(self.rz, -60.0, 60.0, 5, 0.0)
+        self.rz = QDoubleSpinBox(); self._cfg_spin(self.rz, -60.0, 60.0, 5, 0.0)
         layout.addWidget(self.rz, row, 3)
 
+        # ds (ppm)
         row += 1
         layout.addWidget(QLabel('ds (ppm):'), row, 0)
-        self.ds = QDoubleSpinBox()
-        self._cfg_spin(self.ds, -10.0, 10.0, 5, 0.0)
+        self.ds = QDoubleSpinBox(); self._cfg_spin(self.ds, -10.0, 10.0, 5, 0.0)
         layout.addWidget(self.ds, row, 1)
 
         # Info label
@@ -459,17 +442,10 @@ class HelmertSettingsWidget(QWidget):
         self._update_enabled_state(False)
         self.enable_cb.toggled.connect(self._update_enabled_state)
 
-    def _cfg_spin(
-        self,
-        w: QDoubleSpinBox,
-        min_v: float,
-        max_v: float,
-        decimals: int,
-        default: float,
-    ) -> None:
+    def _cfg_spin(self, w: QDoubleSpinBox, min_v: float, max_v: float, decimals: int, default: float) -> None:
         w.setRange(min_v, max_v)
         w.setDecimals(decimals)
-        w.setSingleStep(0.01 if decimals >= MIN_DECIMALS_FOR_SMALL_STEP else 0.1)
+        w.setSingleStep(0.01 if decimals >= 2 else 0.1)
         w.setValue(default)
         w.setEnabled(False)
 
@@ -515,11 +491,7 @@ class HelmertSettingsWidget(QWidget):
         # Block signals during programmatic set
         with QSignalBlocker(self.enable_cb):
             self.enable_cb.setChecked(enabled)
-        for widget, val in zip(
-            (self.dx, self.dy, self.dz, self.rx, self.ry, self.rz, self.ds),
-            values,
-            strict=False,
-        ):
+        for widget, val in zip((self.dx, self.dy, self.dz, self.rx, self.ry, self.rz, self.ds), values):
             with QSignalBlocker(widget):
                 if val is None:
                     # leave default if None
@@ -548,15 +520,18 @@ class MainWindow(QMainWindow):
                 self._preview_area.set_image(img_obj)
             except Exception as ex:
                 logger.exception(f'[ADJ] set_image failed: {ex}')
-        # After handling, drop heavy refs from sender (disconnect happens via deleteLater)
+        # After handling, proactively disconnect sender's signals and drop heavy refs
         try:
             sender_obj = self.sender()
             if isinstance(sender_obj, QObject):
+                with contextlib.suppress(Exception):
+                    sender_obj.disconnect()
                 # Drop potential heavy attributes captured in the worker
-                if hasattr(sender_obj, 'image'):
-                    delattr(sender_obj, 'image')
-                if hasattr(sender_obj, 'adj'):
-                    delattr(sender_obj, 'adj')
+                with contextlib.suppress(Exception):
+                    if hasattr(sender_obj, 'image'):
+                        setattr(sender_obj, 'image', None)
+                    if hasattr(sender_obj, 'adj'):
+                        setattr(sender_obj, 'adj', None)
         except Exception as e:
             logger.debug(f'Adjust slot cleanup failed: {e}')
 
@@ -623,9 +598,6 @@ class MainWindow(QMainWindow):
         self._estimate_threads: list[QThread] = []
         self._estimate_workers: list[QObject] = []
 
-        # Guard flag to prevent model updates while UI is being populated programmatically
-        self._ui_sync_in_progress: bool = False
-
         self._setup_ui()
         self._setup_connections()
 
@@ -648,15 +620,21 @@ class MainWindow(QMainWindow):
             if self._download_worker is None:
                 return
             # Disconnect all signals from worker to UI
-            self._download_worker.finished.disconnect()
-            self._download_worker.progress_update.disconnect()
-            self._download_worker.preview_ready.disconnect()
+            with contextlib.suppress(Exception):
+                self._download_worker.finished.disconnect()
+            with contextlib.suppress(Exception):
+                self._download_worker.progress_update.disconnect()
+            with contextlib.suppress(Exception):
+                self._download_worker.preview_ready.disconnect()
             # Ensure the thread is stopped
             if self._download_worker.isRunning():
-                self._download_worker.quit()
-                self._download_worker.wait(1000)
+                with contextlib.suppress(Exception):
+                    self._download_worker.quit()
+                with contextlib.suppress(Exception):
+                    self._download_worker.wait(1000)
             # Delete later and drop reference
-            self._download_worker.deleteLater()
+            with contextlib.suppress(Exception):
+                self._download_worker.deleteLater()
         finally:
             self._download_worker = None
 
@@ -666,7 +644,7 @@ class MainWindow(QMainWindow):
         # Используем минимальный размер и возможность свободно менять размер окна
         self.setMinimumSize(900, 500)
         # Предпочитаемый стартовый размер (не фиксированный)
-        self.resize(1500, 950)
+        self.resize(1200, 1000)
 
         # Центральный виджет
         central_widget = QWidget()
@@ -759,24 +737,22 @@ class MainWindow(QMainWindow):
         control_point_group = QFrame()
         control_point_group.setFrameStyle(QFrame.Shape.StyledPanel)
         control_point_layout = QVBoxLayout()
-
+        
         self.control_point_checkbox = QCheckBox('Контрольная точка')
-        self.control_point_checkbox.setToolTip(
-            'Включить отображение контрольной точки на карте'
-        )
+        self.control_point_checkbox.setToolTip('Включить отображение контрольной точки на карте')
         control_point_layout.addWidget(self.control_point_checkbox)
-
+        
         self.control_point_x_widget = CoordinateInputWidget('X (вертикаль):', 54, 15)
         self.control_point_y_widget = CoordinateInputWidget('Y (горизонталь):', 74, 40)
-
+        
         control_point_layout.addWidget(self.control_point_x_widget)
         control_point_layout.addWidget(self.control_point_y_widget)
         control_point_group.setLayout(control_point_layout)
-
+        
         # По умолчанию контролы координат отключены
         self.control_point_x_widget.setEnabled(False)
         self.control_point_y_widget.setEnabled(False)
-
+        
         coords_layout.addWidget(control_point_group)
         left_container.addWidget(coords_frame)
 
@@ -806,22 +782,24 @@ class MainWindow(QMainWindow):
         self.map_type_combo.setCurrentIndex(0)
         # Чекбокс "Изолинии"
         self.contours_checkbox = QCheckBox('Изолинии')
-        self.contours_checkbox.setToolTip(
-            'Наложить изолинии поверх выбранного типа карты'
-        )
+        self.contours_checkbox.setToolTip('Наложить изолинии поверх выбранного типа карты')
         # Гарантируем кликабельность: резервируем место и фиксируем размер ползунка
-        self.contours_checkbox.setEnabled(True)
-        self.contours_checkbox.setMinimumWidth(110)
-        self.contours_checkbox.setSizePolicy(
-            QSizePolicy.Policy.Fixed,
-            QSizePolicy.Policy.Fixed,
-        )
+        try:
+            self.contours_checkbox.setEnabled(True)
+            self.contours_checkbox.setMinimumWidth(110)
+            self.contours_checkbox.setSizePolicy(
+                QSizePolicy.Policy.Fixed,
+                QSizePolicy.Policy.Fixed,
+            )
+        except Exception:
+            pass
         maptype_row.addWidget(maptype_label)
         maptype_row.addWidget(self.map_type_combo, 1)
         maptype_row.addSpacing(8)
         maptype_row.addWidget(self.contours_checkbox)
         settings_vertical_layout.addLayout(maptype_row)
 
+        # Датум-трансформация (Helmert)
         self.helmert_group = QGroupBox('Датум-трансформация СК-42 → WGS84 (Helmert)')
         helmert_group_layout = QVBoxLayout()
         self.helmert_widget = HelmertSettingsWidget()
@@ -1052,13 +1030,8 @@ class MainWindow(QMainWindow):
         # Control point
         self.control_point_checkbox.stateChanged.connect(self._on_control_point_toggled)
         self.control_point_checkbox.stateChanged.connect(self._on_settings_changed)
-        # Use editingFinished instead of textChanged to avoid cyclic updates during typing
-        self.control_point_x_widget.coordinate_edit.editingFinished.connect(
-            self._on_settings_changed
-        )
-        self.control_point_y_widget.coordinate_edit.editingFinished.connect(
-            self._on_settings_changed
-        )
+        self.control_point_x_widget.coordinate_edit.textChanged.connect(self._on_settings_changed)
+        self.control_point_y_widget.coordinate_edit.textChanged.connect(self._on_settings_changed)
 
         # Grid settings
         self.grid_widget.width_spin.valueChanged.connect(self._on_settings_changed)
@@ -1112,15 +1085,34 @@ class MainWindow(QMainWindow):
     @Slot()
     def _on_settings_changed(self) -> None:
         """Handle settings change from UI (bulk update without intermediate events)."""
-        if getattr(self, '_ui_sync_in_progress', False):
-            logging.getLogger(__name__).debug(
-                'Settings change ignored: UI sync in progress'
-            )
-            return
         # Clear any existing preview to avoid showing outdated imagery when coordinates or contours change
         self._clear_preview_ui()
-        # Use the same collection logic as forced sync
-        self._sync_ui_to_model_now()
+        
+        # Collect all current settings first to avoid races
+        coords = self._get_current_coordinates()
+        grid_settings = self.grid_widget.get_settings()
+        output_settings = self.output_widget.get_settings()
+        helmert_settings = self.helmert_widget.get_values()
+
+        # Map type from combo (stored as enum value string)
+        try:
+            idx = max(0, self.map_type_combo.currentIndex())
+            map_type_value = self.map_type_combo.itemData(idx)
+        except Exception:
+            map_type_value = MapType.SATELLITE.value
+
+        # Capture checkbox state before any model notifications
+        overlay_checked = bool(self.contours_checkbox.isChecked())
+
+        # Perform one bulk update to the model to emit a single SETTINGS_CHANGED
+        payload: dict[str, Any] = {}
+        payload.update(coords)
+        payload.update(grid_settings)
+        payload.update(output_settings)
+        payload.update(helmert_settings)
+        payload['map_type'] = map_type_value
+        payload['overlay_contours'] = overlay_checked
+        self._controller.update_settings_bulk(**payload)
 
     def _on_control_point_toggled(self) -> None:
         """Хендлер изменения состояния чекбокса контрольной точки."""
@@ -1136,46 +1128,15 @@ class MainWindow(QMainWindow):
         # Delegate to the common settings handler to store the new map type in the model
         self._on_settings_changed()
 
-    def _sync_ui_to_model_now(self) -> None:
-        """
-        Force-collect current UI settings and push them to the model without guards.
-
-        Does not clear preview or check _ui_sync_in_progress to avoid losing changes during Save/Save As.
-        """
-        # Collect all current settings
-        coords = self._get_current_coordinates()
-        grid_settings = self.grid_widget.get_settings()
-        output_settings = self.output_widget.get_settings()
-        helmert_settings = self.helmert_widget.get_values()
-
-        # Map type from combo (stored as enum value string)
-        try:
-            idx = max(0, self.map_type_combo.currentIndex())
-            map_type_value = self.map_type_combo.itemData(idx)
-        except Exception:
-            map_type_value = MapType.SATELLITE.value
-
-        overlay_checked = bool(self.contours_checkbox.isChecked())
-
-        payload: dict[str, Any] = {}
-        payload.update(coords)
-        payload.update(grid_settings)
-        payload.update(output_settings)
-        payload.update(helmert_settings)
-        payload['map_type'] = map_type_value
-        payload['overlay_contours'] = overlay_checked
-        self._controller.update_settings_bulk(**payload)
-
     def _get_current_coordinates(self) -> dict[str, int]:
         """Get current coordinate values from UI."""
         from_x_high, from_x_low = self.from_x_widget.get_values()
         from_y_high, from_y_low = self.from_y_widget.get_values()
         to_x_high, to_x_low = self.to_x_widget.get_values()
         to_y_high, to_y_low = self.to_y_widget.get_values()
-
-        # Get control point coordinates directly to preserve user input
-        control_point_x = self.control_point_x_widget.get_coordinate()
-        control_point_y = self.control_point_y_widget.get_coordinate()
+        
+        control_point_x_high, control_point_x_low = self.control_point_x_widget.get_values()
+        control_point_y_high, control_point_y_low = self.control_point_y_widget.get_values()
 
         return {
             'from_x_high': from_x_high,
@@ -1187,8 +1148,10 @@ class MainWindow(QMainWindow):
             'to_y_high': to_y_high,
             'to_y_low': to_y_low,
             'control_point_enabled': self.control_point_checkbox.isChecked(),
-            'control_point_x': control_point_x,
-            'control_point_y': control_point_y,
+            'control_point_x_high': control_point_x_high,
+            'control_point_x_low': control_point_x_low,
+            'control_point_y_high': control_point_y_high,
+            'control_point_y_low': control_point_y_low,
         }
 
     @Slot(int)
@@ -1215,14 +1178,6 @@ class MainWindow(QMainWindow):
     @Slot()
     def _save_current_profile(self) -> None:
         """Save current settings to profile."""
-        # 1) Ensure pending UI edits are committed (e.g., QLineEdit editingFinished)
-        w = QApplication.focusWidget()
-        if w is not None:
-            w.clearFocus()
-        QApplication.processEvents()
-        # 2) Force bulk sync UI -> Model before saving (bypass guards)
-        self._sync_ui_to_model_now()
-
         profile_name = self.profile_combo.currentText()
         if profile_name:
             self._controller.save_current_profile(profile_name)
@@ -1230,16 +1185,9 @@ class MainWindow(QMainWindow):
     @Slot()
     def _save_profile_as(self) -> None:
         """Save current settings to a new profile file."""
-        # 1) Ensure pending UI edits are committed (e.g., QLineEdit editingFinished)
-        w = QApplication.focusWidget()
-        if w is not None:
-            w.clearFocus()
-        QApplication.processEvents()
-        # 2) Force bulk sync UI -> Model before opening the dialog (bypass guards)
-        self._sync_ui_to_model_now()
-
-        # Get default directory (always user/resolved profiles dir)
-        default_dir = ensure_profiles_dir()
+        # Get default directory
+        project_root = Path(__file__).parent.parent.parent
+        default_dir = project_root / PROFILES_DIR
 
         # Show file dialog
         file_path, _ = QFileDialog.getSaveFileName(
@@ -1250,13 +1198,6 @@ class MainWindow(QMainWindow):
         )
 
         if file_path:
-            # 3) Just in case user changed something via shortcuts while dialog open
-            w = QApplication.focusWidget()
-            if w is not None:
-                w.clearFocus()
-            QApplication.processEvents()
-            self._sync_ui_to_model_now()
-
             # Check if profile already exists and show warning
             profile_path = Path(file_path)
             if profile_path.suffix.lower() != '.toml':
@@ -1283,25 +1224,13 @@ class MainWindow(QMainWindow):
             saved_profile_name = self._controller.save_current_profile_as(file_path)
             if saved_profile_name:
                 # Update profile combo if the file was saved in profiles directory
-                if Path(file_path).with_suffix('.toml').parent == ensure_profiles_dir():
+                if Path(file_path).parent == default_dir:
                     # Refresh profile list
                     self._load_initial_data()
                     # Select the newly saved profile safely (no extra load)
                     index = self.profile_combo.findText(saved_profile_name)
                     if index >= 0:
                         self._set_profile_selection_safely(index=index)
-                        # Explicitly load the newly saved profile to avoid reverting to default
-                        try:
-                            logger.info(
-                                'After Save As 								-> selecting and loading profile: %s',
-                                saved_profile_name,
-                            )
-                            self._controller.load_profile_by_name(saved_profile_name)
-                        except Exception:
-                            logger.exception(
-                                'Failed to load newly saved profile: %s',
-                                saved_profile_name,
-                            )
 
                 self._status_proxy.show_message(
                     f'Профиль сохранён как: {saved_profile_name}',
@@ -1316,10 +1245,16 @@ class MainWindow(QMainWindow):
             return
 
         # Clear previous preview and pixmap cache between runs
-        self._clear_preview_ui()
+        try:
+            self._clear_preview_ui()
+        except Exception:
+            pass
 
         # Cleanup any stale worker from previous run
-        self._cleanup_download_worker()
+        try:
+            self._cleanup_download_worker()
+        except Exception:
+            pass
 
         self._download_worker = DownloadWorker(self._controller)
         self._download_worker.finished.connect(self._on_download_finished)
@@ -1362,9 +1297,12 @@ class MainWindow(QMainWindow):
         try:
             set_preview_image_callback(None)
             set_spinner_callbacks(None, None)
-            from progress import set_progress_callback as _set_prog
+            try:
+                from progress import set_progress_callback as _set_prog
 
-            _set_prog(None)
+                _set_prog(None)
+            except Exception:
+                pass
         except Exception as e:
             logger.debug(f'Failed to reset progress callbacks: {e}')
 
@@ -1384,7 +1322,8 @@ class MainWindow(QMainWindow):
         elif event == ModelEvent.PROFILE_LOADED:
             # After loading a new profile, clear the preview and reset related UI
             try:
-                self._preview_area.clear()
+                with contextlib.suppress(Exception):
+                    self._preview_area.clear()
                 self._current_image = None
                 self._base_image = None
                 # Reset adjustments to defaults and sync labels (sliders stay disabled)
@@ -1396,7 +1335,8 @@ class MainWindow(QMainWindow):
                 # Disable adjustment sliders when no image
                 self._set_sliders_enabled(False)
                 # Reset size estimate
-                self.output_widget.size_estimate_value.setText('—')
+                with contextlib.suppress(Exception):
+                    self.output_widget.size_estimate_value.setText('—')
             except Exception as e:
                 logger.debug(f'Failed to clear preview on profile load: {e}')
             # Update the rest of the UI from profile settings
@@ -1431,9 +1371,6 @@ class MainWindow(QMainWindow):
         """Update UI controls from settings object."""
         if not settings:
             return
-
-        # Block feedback to model while we populate controls programmatically
-        self._ui_sync_in_progress = True
 
         # Update coordinates
         self.from_x_widget.set_values(settings.from_x_high, settings.from_x_low)
@@ -1500,37 +1437,22 @@ class MainWindow(QMainWindow):
         control_point_enabled = getattr(settings, 'control_point_enabled', False)
         with QSignalBlocker(self.control_point_checkbox):
             self.control_point_checkbox.setChecked(control_point_enabled)
-
-        # Programmatically set full control point coordinates without splitting to high/low
-        control_point_x = int(getattr(settings, 'control_point_x', 5415000))
-        control_point_y = int(getattr(settings, 'control_point_y', 7440000))
-
+        
+        # Блокируем сигналы при программном обновлении
         with QSignalBlocker(self.control_point_x_widget.coordinate_edit):
-            self.control_point_x_widget.set_coordinate(control_point_x)
-        with QSignalBlocker(self.control_point_y_widget.coordinate_edit):
-            self.control_point_y_widget.set_coordinate(control_point_y)
-
-        # Log the values to ensure no truncation occurs during UI update
-        try:
-            x_text = self.control_point_x_widget.coordinate_edit.text()
-            y_text = self.control_point_y_widget.coordinate_edit.text()
-            logger.info(
-                "UI control point set: enabled=%s, x_src=%d -> edit='%s', y_src=%d -> edit='%s'",
-                control_point_enabled,
-                control_point_x,
-                x_text,
-                control_point_y,
-                y_text,
+            self.control_point_x_widget.set_values(
+                getattr(settings, 'control_point_x_high', 54),
+                getattr(settings, 'control_point_x_low', 15),
             )
-        except Exception:
-            logger.exception('Failed to log control point UI update')
-
+        with QSignalBlocker(self.control_point_y_widget.coordinate_edit):
+            self.control_point_y_widget.set_values(
+                getattr(settings, 'control_point_y_high', 74),
+                getattr(settings, 'control_point_y_low', 40),
+            )
+        
         # Enable/disable coordinate inputs based on checkbox state
         self.control_point_x_widget.setEnabled(control_point_enabled)
         self.control_point_y_widget.setEnabled(control_point_enabled)
-
-        # Unblock settings propagation after UI is fully synced
-        self._ui_sync_in_progress = False
 
     def _ensure_busy_dialog(self) -> QProgressDialog:
         """Create BusyDialog lazily to prevent it from showing at startup."""
@@ -1623,27 +1545,26 @@ class MainWindow(QMainWindow):
     def _clear_preview_ui(self) -> None:
         """Clear preview image, drop pixmap cache, and disable related controls."""
         try:
-            self._preview_area.clear()
+            with contextlib.suppress(Exception):
+                self._preview_area.clear()
             # Reset images
             self._current_image = None
             self._base_image = None
-            # ИСПРАВЛЕНИЕ: Сохраняем текущие значения слайдеров вместо сброса
-            # Обновляем self._adj из текущих позиций слайдеров
-            self._adj = {
-                'brightness': self.brightness_slider.value() / 100.0,
-                'contrast': self.contrast_slider.value() / 100.0,
-                'saturation': self.saturation_slider.value() / 100.0,
-            }
-            # НЕ вызываем _sync_adj_ui_from_state(), чтобы слайдеры остались на своих местах
+            # Reset adjustments to defaults and sync labels
+            self._adj = {'brightness': 1.0, 'contrast': 1.0, 'saturation': 1.0}
+            self._sync_adj_ui_from_state()
             # Disable save controls
-            self.save_map_btn.setEnabled(False)
-            self.save_map_action.setEnabled(False)
+            with contextlib.suppress(Exception):
+                self.save_map_btn.setEnabled(False)
+                self.save_map_action.setEnabled(False)
             # Disable sliders
             self._set_sliders_enabled(False)
             # Reset size estimate label if present
-            self.output_widget.size_estimate_value.setText('—')
+            with contextlib.suppress(Exception):
+                self.output_widget.size_estimate_value.setText('—')
             # Aggressively clear global QPixmap cache between runs
-            QPixmapCache.clear()
+            with contextlib.suppress(Exception):
+                QPixmapCache.clear()
         except Exception as e:
             logger.debug(f'Failed to clear preview UI: {e}')
 
@@ -1841,7 +1762,8 @@ class MainWindow(QMainWindow):
         self._adj['saturation'] = self.saturation_slider.value() / 100.0
         self._update_adj_labels()
         # Propagate adjustments to model settings so they are saved in profiles
-        self._controller.update_output_settings(self.output_widget.get_settings())
+        with contextlib.suppress(Exception):
+            self._controller.update_output_settings(self.output_widget.get_settings())
         # Request debounced adjust strictly via GUI signal
         self._sig_schedule_adjust.emit()
         # Also schedule size estimate (debounced)
@@ -1994,11 +1916,13 @@ class MainWindow(QMainWindow):
         try:
             # Proactively disconnect worker signals and drop heavy refs
             if self._save_worker is not None:
-                self._save_worker.disconnect()
-                if hasattr(self._save_worker, 'image'):
-                    delattr(self._save_worker, 'image')
-                if hasattr(self._save_worker, 'adj'):
-                    delattr(self._save_worker, 'adj')
+                with contextlib.suppress(Exception):
+                    self._save_worker.disconnect()
+                with contextlib.suppress(Exception):
+                    if hasattr(self._save_worker, 'image'):
+                        self._save_worker.image = None
+                    if hasattr(self._save_worker, 'adj'):
+                        self._save_worker.adj = None
             if self._save_thread is not None:
                 if self._save_thread.isRunning():
                     self._save_thread.quit()
@@ -2272,10 +2196,14 @@ class MainWindow(QMainWindow):
             worker.finished.connect(th.quit, Qt.ConnectionType.QueuedConnection)
 
             def _cleanup() -> None:
-                if hasattr(worker, 'image'):
-                    delattr(worker, 'image')
-                if hasattr(worker, 'adj'):
-                    delattr(worker, 'adj')
+                # Disconnect worker signals and drop heavy refs proactively
+                with contextlib.suppress(Exception):
+                    worker.disconnect()
+                with contextlib.suppress(Exception):
+                    if hasattr(worker, 'image'):
+                        worker.image = None
+                    if hasattr(worker, 'adj'):
+                        worker.adj = None
                 try:
                     if worker in self._estimate_workers:
                         self._estimate_workers.remove(worker)
@@ -2299,10 +2227,13 @@ class MainWindow(QMainWindow):
         logger.info('Application closing - cleaning up resources')
         log_comprehensive_diagnostics('CLEANUP_START')
         # Clear preview and drop pixmap cache to free GPU/Qt memory
-        self._clear_preview_ui()
-        QPixmapCache.clear()
+        with contextlib.suppress(Exception):
+            self._clear_preview_ui()
+        with contextlib.suppress(Exception):
+            QPixmapCache.clear()
         # Also cleanup any lingering download worker connections/callbacks
-        self._cleanup_download_worker()
+        with contextlib.suppress(Exception):
+            self._cleanup_download_worker()
 
         # Cleanup progress system resources first
         log_memory_usage('before progress cleanup')

@@ -133,7 +133,10 @@ class OptimizedImageView(QGraphicsView):
             self.fit_to_window()
 
     def clear(self) -> None:
-        """Clear the preview area."""
+        """Clear the preview area and release pixmap resources."""
+        # If there is an existing pixmap item, replace its pixmap with an empty one
+        if self._image_item is not None:
+            self._image_item.setPixmap(QPixmap())
         self._scene.clear()
         self._image_item = None
         self._original_image = None

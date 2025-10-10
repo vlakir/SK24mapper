@@ -1,0 +1,21 @@
+def load_profile(name_or_path: str) -> MapSettings:
+    """
+    Загрузка и валидация профиля TOML -> MapSettings.
+
+    Поддерживает как имя профиля (без .toml) из каталога profiles,
+    так и абсолютный/относительный путь до TOML файла.
+    """
+    p = Path(name_or_path)
+    path = (
+        p if p.suffix.lower() == '.toml' and p.exists() else profile_path(name_or_path)
+    )
+    if not path.exists():
+        msg = f'Профиль не найден: {path}'
+        raise FileNotFoundError(msg)
+    text = path.read_text(encoding='utf-8')
+    data = tomlkit.parse(text)
+    logger.info("Profile TOML data: control_point_enabled=%s", data.get("control_point_enabled", "NOT_FOUND"))
+
+    settings = MapSettings.model_validate(data)  # type: ignore[no-any-return]
+    logger.info("Profile MapSettings created: control_point_enabled=%s", getattr(settings, "control_point_enabled", "NOT_FOUND"))
+    return settings

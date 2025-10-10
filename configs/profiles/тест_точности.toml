@@ -2,23 +2,23 @@ from_x_high = 54
 from_y_high = 74
 to_x_high = 54
 to_y_high = 74
-from_x_low = 14
-from_y_low = 34
-to_x_low = 21
-to_y_low = 48
+from_x_low = 21
+from_y_low = 48
+to_x_low = 22
+to_y_low = 49
 output_path = "../maps/map.jpg"
-grid_width_px = 10
-grid_font_size = 86
+map_type = "SATELLITE"
+overlay_contours = false
+grid_width_px = 5
+grid_font_size = 120
 grid_text_margin = 43
 grid_label_bg_padding = 6
-mask_opacity = 0.24
+mask_opacity = 0.35
 jpeg_quality = 95
 brightness = 1.0
 contrast = 1.0
 saturation = 1.0
 
-map_type = "SATELLITE"
-# Параметры датум-трансформации СК-42 → WGS84 (Helmert, м / угл. сек / ppm)
 helmert_dx = -50.956566
 helmert_dy = -39.724002
 helmert_dz = -76.876563
@@ -26,7 +26,7 @@ helmert_rx_as = 2.332951
 helmert_ry_as = 2.139868
 helmert_rz_as = -2.030055
 helmert_ds_ppm = -1.430651
-# Контрольная точка
-control_point_enabled = false
-control_point_x = 5415000
-control_point_y = 7440000
+
+control_point_enabled = true
+control_point_x = 5421208
+control_point_y = 7448190

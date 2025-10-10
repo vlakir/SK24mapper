@@ -117,7 +117,7 @@ def center_crop(img: Image.Image, out_w: int, out_h: int) -> Image.Image:
         spinner.stop('Финальный центр-кроп: готово')
 
 
-def draw_text_with_outline(  # noqa: PLR0913
+def draw_text_with_outline(
     draw: ImageDraw.ImageDraw,
     xy: tuple[float, float],
     text: str,
@@ -144,7 +144,7 @@ def draw_text_with_outline(  # noqa: PLR0913
     draw.text((x, y), text, font=font, fill=fill, anchor=anchor)
 
 
-def draw_label_with_bg(  # noqa: PLR0913
+def draw_label_with_bg(
     draw: ImageDraw.ImageDraw,
     xy: tuple[float, float],
     text: str,
@@ -208,7 +208,7 @@ def load_grid_font(font_size: int = 86) -> ImageFont.FreeTypeFont | ImageFont.Im
     return ImageFont.load_default()
 
 
-def draw_axis_aligned_km_grid(  # noqa: PLR0913
+def draw_axis_aligned_km_grid(
     img: Image.Image,
     center_lat_sk42: float,
     center_lng_sk42: float,
@@ -240,6 +240,9 @@ def draw_axis_aligned_km_grid(  # noqa: PLR0913
 
     cx, cy = w / 2.0, h / 2.0
 
+    # Important: PROJ/pyproj uses (X, Y) = (easting, northing) when always_xy=True.
+    # Military notation in this app is X = northing (север), Y = easting (восток).
+    # Therefore, x0_gk is easting (восток), y0_gk is northing (север).
     t_sk42gk_from_sk42 = Transformer.from_crs(
         crs_sk42_geog,
         crs_sk42_gk,
