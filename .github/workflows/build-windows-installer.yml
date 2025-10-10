@@ -33,6 +33,7 @@ jobs:
         run: |
           echo "PIPX_HOME=${{ runner.temp }}/pipx" >> $GITHUB_ENV
           echo "PIPX_BIN_DIR=${{ runner.temp }}/pipx/bin" >> $GITHUB_ENV
+          echo "${{ runner.temp }}/pipx/bin" >> $GITHUB_PATH
 
       - name: Install Poetry
         run: pipx install poetry
