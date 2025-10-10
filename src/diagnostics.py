@@ -312,6 +312,11 @@ async def run_deep_verification(*, api_key: str, settings: Any) -> None:
     # 5) Network/source checks
     async def _check_styles(style_id: str) -> None:
         import asyncio
+        import ssl
+        import certifi
+
+        ssl_context = ssl.create_default_context(cafile=certifi.where())
+        connector = aiohttp.TCPConnector(ssl=ssl_context)
 
         path = f'{MAPBOX_STATIC_BASE}/{style_id}/tiles/256/0/0/0'
         url = f'{path}?access_token={api_key}'
@@ -322,7 +327,7 @@ async def run_deep_verification(*, api_key: str, settings: Any) -> None:
         for i in range(attempts):
             try:
                 async with (
-                    aiohttp.ClientSession() as client,
+                    aiohttp.ClientSession(connector=connector) as client,
                     client.get(url, timeout=timeout) as resp,
                 ):
                     from constants import HTTP_FORBIDDEN, HTTP_OK, HTTP_UNAUTHORIZED
@@ -356,6 +361,11 @@ async def run_deep_verification(*, api_key: str, settings: Any) -> None:
 
     async def _check_terrain_small() -> None:
         import asyncio
+        import ssl
+        import certifi
+
+        ssl_context = ssl.create_default_context(cafile=certifi.where())
+        connector = aiohttp.TCPConnector(ssl=ssl_context)
 
         # Try z=0/x=0/y=0
         path = f'{MAPBOX_TERRAIN_RGB_PATH}/0/0/0.pngraw'
@@ -368,7 +378,7 @@ async def run_deep_verification(*, api_key: str, settings: Any) -> None:
         for i in range(attempts):
             try:
                 async with (
-                    aiohttp.ClientSession() as client,
+                    aiohttp.ClientSession(connector=connector) as client,
                     client.get(url, timeout=timeout) as resp,
                 ):
                     from constants import HTTP_FORBIDDEN, HTTP_OK, HTTP_UNAUTHORIZED
@@ -455,6 +465,14 @@ async def _make_cached_session_for_diag() -> Any:
 
     Возвращает aiohttp.ClientSession, если кэш отключён или библиотека недоступна.
     """
+    import ssl
+    import certifi
+    import aiohttp
+    
+    # Создать SSL-контекст с сертификатами из certifi
+    ssl_context = ssl.create_default_context(cafile=certifi.where())
+    connector = aiohttp.TCPConnector(ssl=ssl_context)
+    
     from constants import (
         HTTP_CACHE_DIR,
         HTTP_CACHE_ENABLED,
@@ -466,7 +484,7 @@ async def _make_cached_session_for_diag() -> Any:
     if not HTTP_CACHE_ENABLED or not _AIOHTTP_CACHE_AVAILABLE:
         import aiohttp
 
-        return aiohttp.ClientSession()
+        return aiohttp.ClientSession(connector=connector)
 
     # Разрешаем каталог кэша аналогично service._resolve_cache_dir
     raw_dir = Path(HTTP_CACHE_DIR)
@@ -514,6 +532,7 @@ async def _make_cached_session_for_diag() -> Any:
         raise last_err  # type: ignore[misc]
     return CachedSession(
         cache=backend,
+        connector=connector,
         expire_after=expire_td,
         cache_control=bool(HTTP_CACHE_RESPECT_HEADERS),
         stale_if_error=stale_param,
