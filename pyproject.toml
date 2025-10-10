@@ -24,6 +24,7 @@ pyinstaller = "^6.15.0"
 pillow = "^11.3.0"
 numpy = "^2.3.3"
 pytest = "^8.4.2"
+certifi = "^2025.10.5"
 
 
 [build-system]

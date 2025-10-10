@@ -1,4 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
+import certifi
 
 a = Analysis(
     ['src/main.py'],
@@ -9,6 +10,7 @@ a = Analysis(
         ('configs', 'configs'),
         ('configs/profiles', 'configs/profiles'),
         ('img', 'img'),
+        (certifi.where(), 'certifi'),
     ],
     hiddenimports=[],
     hookspath=[],
