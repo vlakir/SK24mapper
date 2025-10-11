@@ -528,6 +528,36 @@ class HelmertSettingsWidget(QWidget):
         self._update_enabled_state(enabled)
 
 
+class ModalOverlay(QWidget):
+    """Semi-transparent overlay widget to shade parent window during modal operations."""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        # Make widget transparent for mouse events but visible
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        # Set dark semi-transparent background
+        self.setStyleSheet("background-color: rgba(0, 0, 0, 80);")
+        # Position at top-left of parent
+        self.move(0, 0)
+        self.hide()
+    
+    def showEvent(self, event):
+        """Resize overlay to cover entire parent on show."""
+        super().showEvent(event)
+        if self.parent():
+            # Cover entire parent widget
+            self.resize(self.parent().size())
+            # Ensure overlay is on top of all siblings
+            self.raise_()
+    
+    def resizeToParent(self):
+        """Manually resize to match parent (call when parent resizes)."""
+        if self.parent() and self.isVisible():
+            self.resize(self.parent().size())
+            self.raise_()
+
+
 class MainWindow(QMainWindow):
     _sig_schedule_adjust = Signal()
     _sig_run_adjust_now = Signal()
@@ -594,6 +624,7 @@ class MainWindow(QMainWindow):
         self._controller = controller
         self._download_worker: DownloadWorker | None = None
         self._busy_dialog: QProgressDialog | None = None
+        self._modal_overlay: ModalOverlay | None = None  # Will be created in _setup_ui
         self._current_image: Any = None  # Store current image for saving
         self._save_thread: Any = None
         self._save_worker: Any = None
@@ -671,6 +702,9 @@ class MainWindow(QMainWindow):
         # Центральный виджет
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
+
+        # Create modal overlay as child of central widget for proper stacking
+        self._modal_overlay = ModalOverlay(central_widget)
 
         # Главный горизонтальный лейаут
         main_layout = QHBoxLayout()
@@ -1345,6 +1379,12 @@ class MainWindow(QMainWindow):
         if self._busy_dialog is not None and self._busy_dialog.isVisible():
             self._busy_dialog.reset()
             self._busy_dialog.hide()
+            # Hide modal overlay
+            try:
+                if self._modal_overlay is not None:
+                    self._modal_overlay.hide()
+            except Exception as e:
+                logger.debug(f'Failed to hide modal overlay: {e}')
 
         if success:
             self._status_proxy.show_message('Карта успешно создана', 5000)
@@ -1541,7 +1581,12 @@ class MainWindow(QMainWindow):
             self._busy_dialog.setRange(0, 0)
             self._busy_dialog.setWindowTitle('Обработка')
             self._busy_dialog.setCancelButton(None)
+            # Set both window modality and explicit window flags for modal overlay
             self._busy_dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
+            # Add Dialog flag to ensure proper modal behavior
+            self._busy_dialog.setWindowFlags(
+                Qt.WindowType.Dialog | Qt.WindowType.CustomizeWindowHint | Qt.WindowType.WindowTitleHint
+            )
             self._busy_dialog.setMinimumDuration(0)
             self._busy_dialog.setAutoClose(False)
             self._busy_dialog.setAutoReset(False)
@@ -1557,7 +1602,23 @@ class MainWindow(QMainWindow):
         dlg = self._ensure_busy_dialog()
         if not dlg.isVisible():
             dlg.setRange(0, 0)
+            # Show custom modal overlay for visual shading
+            try:
+                if self._modal_overlay is not None:
+                    self._modal_overlay.resizeToParent()
+                    self._modal_overlay.show()
+                    self._modal_overlay.raise_()
+            except Exception as e:
+                logger.debug(f'Failed to show modal overlay: {e}')
+            
             dlg.show()
+            # Apply modal shading effect to main window
+            try:
+                dlg.raise_()  # Bring dialog to foreground
+                dlg.activateWindow()  # Activate and focus the dialog
+                QApplication.processEvents()  # Process events to apply modality immediately
+            except Exception as e:
+                logger.debug(f'Failed to apply modal effect to progress dialog: {e}')
         if label:
             dlg.setLabelText(label)
         # Optionally mirror the current stage in the status bar for context
@@ -1604,6 +1665,12 @@ class MainWindow(QMainWindow):
                 if isinstance(dlg, QProgressDialog) and dlg.isVisible():
                     dlg.reset()
                     dlg.hide()
+                    # Hide modal overlay
+                    try:
+                        if self._modal_overlay is not None:
+                            self._modal_overlay.hide()
+                    except Exception as e:
+                        logger.debug(f'Failed to hide modal overlay: {e}')
             except Exception as _e:
                 logger.debug(f'Failed to hide busy dialog on preview: {_e}')
 
@@ -2293,6 +2360,15 @@ class MainWindow(QMainWindow):
             th.start()
         except Exception:
             self.output_widget.size_estimate_value.setText('—')
+
+    def resizeEvent(self, event) -> None:
+        """Handle window resize to update overlay size."""
+        super().resizeEvent(event)
+        # Update overlay when central widget is resized
+        if (hasattr(self, '_modal_overlay') and 
+            self._modal_overlay is not None and 
+            self._modal_overlay.isVisible()):
+            self._modal_overlay.resizeToParent()
 
     def closeEvent(self, event) -> None:
         """Handle window close event."""

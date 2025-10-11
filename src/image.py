@@ -12,6 +12,7 @@ from constants import (
     GRID_FONT_PATH_BOLD,
     GRID_LABEL_BG_COLOR,
     GRID_LABEL_MOD,
+    GRID_LABEL_OFFSET_FRACTION,
     GRID_LABEL_THOUSAND_DIV,
     GRID_STEP_M,
     GRID_TEXT_COLOR,
@@ -208,6 +209,43 @@ def load_grid_font(font_size: int = 86) -> ImageFont.FreeTypeFont | ImageFont.Im
     return ImageFont.load_default()
 
 
+def calculate_adaptive_grid_font_size(mpp: float) -> int:
+    """
+    Вычисляет адаптивный размер шрифта для подписей сетки.
+    
+    Args:
+        mpp: meters per pixel (масштаб карты)
+        
+    Returns:
+        Размер шрифта в пикселях, ограниченный диапазоном
+    """
+    from constants import (
+        GRID_LABEL_FONT_KM,
+        GRID_LABEL_FONT_MIN_PX,
+        GRID_LABEL_FONT_MAX_PX,
+    )
+    
+    try:
+        # Целевой физический размер в метрах → размер в пикселях
+        px = round((GRID_LABEL_FONT_KM * 1000.0) / max(1e-9, mpp))
+    except Exception:
+        px = 86  # Fallback на старое значение по умолчанию
+    
+    # Ограничиваем диапазон для читаемости
+    px = max(GRID_LABEL_FONT_MIN_PX, min(px, GRID_LABEL_FONT_MAX_PX))
+    
+    logger.info(
+        'Адаптивный размер шрифта сетки: %d px (mpp=%.6f, target=%.3f km, range=[%d,%d])',
+        px,
+        mpp,
+        GRID_LABEL_FONT_KM,
+        GRID_LABEL_FONT_MIN_PX,
+        GRID_LABEL_FONT_MAX_PX,
+    )
+    
+    return px
+
+
 def draw_axis_aligned_km_grid(
     img: Image.Image,
     center_lat_sk42: float,
@@ -232,10 +270,12 @@ def draw_axis_aligned_km_grid(
     # Аргумент предусмотрен для возможных будущих преобразований
     _ = t_sk42_to_wgs
     draw = ImageDraw.Draw(img)
-    font = load_grid_font(grid_font_size)
     w, h = img.size
 
     mpp = meters_per_pixel(center_lat_wgs, zoom, scale=scale)
+    # Вычисляем адаптивный размер шрифта на основе масштаба карты
+    adaptive_font_size = calculate_adaptive_grid_font_size(mpp)
+    font = load_grid_font(adaptive_font_size)
     ppm = 1.0 / mpp
 
     cx, cy = w / 2.0, h / 2.0
@@ -280,13 +320,13 @@ def draw_axis_aligned_km_grid(
         x_digits = math.floor(x_label_m / GRID_LABEL_THOUSAND_DIV) % GRID_LABEL_MOD
         x_label = f'{x_digits:02d}'
 
-        # Сдвиг подписей вправо на половину шага сетки (к центру квадрата справа)
-        half_step_px = (step_m / 2) * ppm
+        # Сдвиг подписей вправо на заданную долю шага сетки
+        label_offset_px = (step_m * GRID_LABEL_OFFSET_FRACTION) * ppm
 
         # Верх - сдвигаем вправо
         draw_label_with_bg(
             draw,
-            (x_px + half_step_px, grid_text_margin),
+            (x_px + label_offset_px, grid_text_margin),
             x_label,
             font=font,
             anchor='ma',
@@ -298,7 +338,7 @@ def draw_axis_aligned_km_grid(
         # Низ - сдвигаем вправо
         draw_label_with_bg(
             draw,
-            (x_px + half_step_px, h - grid_text_margin),
+            (x_px + label_offset_px, h - grid_text_margin),
             x_label,
             font=font,
             anchor='ms',
@@ -322,13 +362,13 @@ def draw_axis_aligned_km_grid(
         y_digits = math.floor(y_label_m / GRID_LABEL_THOUSAND_DIV) % GRID_LABEL_MOD
         y_label = f'{y_digits:02d}'
 
-        # Сдвиг подписей вверх на половину шага сетки (к центру квадрата выше)
-        half_step_px = (step_m / 2) * ppm
+        # Сдвиг подписей вверх на заданную долю шага сетки
+        label_offset_px = (step_m * GRID_LABEL_OFFSET_FRACTION) * ppm
 
         # Лево - сдвигаем вверх
         draw_label_with_bg(
             draw,
-            (grid_text_margin, y_px - half_step_px),
+            (grid_text_margin, y_px - label_offset_px),
             y_label,
             font=font,
             anchor='lm',
@@ -340,7 +380,7 @@ def draw_axis_aligned_km_grid(
         # Право - сдвигаем вверх
         draw_label_with_bg(
             draw,
-            (w - grid_text_margin, y_px - half_step_px),
+            (w - grid_text_margin, y_px - label_offset_px),
             y_label,
             font=font,
             anchor='rm',

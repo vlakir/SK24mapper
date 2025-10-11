@@ -12,7 +12,7 @@ STATIC_SCALE = 2
 
 # Максимальный уровень приближения
 # (переменная, подбирается автоматически вниз при больших размерах)
-MAX_ZOOM = 18
+MAX_ZOOM = 20
 
 # Радиус Земли для Web Mercator (метры)
 EARTH_RADIUS_M = 6378137.0
@@ -32,7 +32,7 @@ MAX_GK_ZONE = 60
 ASYNC_MAX_CONCURRENCY = 20
 
 # Ограничение на итоговое число пикселей результирующего кадра (без припуска)
-MAX_OUTPUT_PIXELS = 150_000_000
+MAX_OUTPUT_PIXELS = 300_000_000
 
 # Отключить защиту Pillow от «бомб декомпрессии» (используйте с осторожностью)
 PIL_DISABLE_LIMIT = True
@@ -69,6 +69,12 @@ GRID_FONT_PATH = None
 
 # Путь к жирному шрифту TTF/OTF (если None — DejaVuSans-Bold.ttf)
 GRID_FONT_PATH_BOLD = None
+
+# Адаптивный размер шрифта подписей сетки (в километрах)
+GRID_LABEL_FONT_KM = 0.05  # 50 метров на карте
+# Диапазон клампа в пикселях для подписей сетки
+GRID_LABEL_FONT_MIN_PX = 12
+GRID_LABEL_FONT_MAX_PX = 120
 
 # Включить наложение белой маски поверх карты
 
@@ -224,9 +230,13 @@ ELEVATION_COLOR_RAMP = [
 # Интервал между изогипсами (метры)
 CONTOUR_INTERVAL_M = 10.0
 # Downsample factor for global low-res DEM seed (integer >= 2)
-CONTOUR_SEED_DOWNSAMPLE = 4
+CONTOUR_SEED_DOWNSAMPLE = 12
 # Optional spline smoothing for seed polylines (not mandatory for MVP)
-CONTOUR_SEED_SMOOTHING = False
+CONTOUR_SEED_SMOOTHING = True
+# Параметры сглаживания изолиний
+CONTOUR_SMOOTHING_FACTOR = 3  # Множитель точек (2-7, больше = плавнее)
+CONTOUR_SMOOTHING_STRENGTH = 1.5  # Параметр s для splprep (0.5-3.0, больше = агрессивнее)
+CONTOUR_SMOOTHING_ITERATIONS = 2  # Итерации для fallback-метода (1-3)
 # Цвет обычных изогипс (RGB)
 CONTOUR_COLOR = (30, 30, 30)
 # Толщина обычных изогипс в пикселях (задаётся здесь)
@@ -261,10 +271,10 @@ CONTOUR_LABEL_GAP_PADDING = 5
 CONTOUR_LABEL_FONT_SIZE = 18
 # Новый масштабируемый размер шрифта в долях километра
 # Одинаковый размер для всех изолиний (обычных и индексных)
-CONTOUR_LABEL_FONT_KM = 0.04
+CONTOUR_LABEL_FONT_KM = 0.06
 # Диапазон клампа в пикселях, чтобы подписи оставались читаемыми
-CONTOUR_LABEL_FONT_MIN_PX = 8
-CONTOUR_LABEL_FONT_MAX_PX = 64
+CONTOUR_LABEL_FONT_MIN_PX = 16
+CONTOUR_LABEL_FONT_MAX_PX = 128
 CONTOUR_LABEL_FONT_PATH = None
 CONTOUR_LABEL_FONT_BOLD = True
 CONTOUR_LABEL_FORMAT = '{:.0f}'
@@ -276,6 +286,8 @@ EAST_VECTOR_SAMPLE_M = 200.0
 # --- Вспомогательные константы для подписей сетки
 GRID_LABEL_THOUSAND_DIV = 1000
 GRID_LABEL_MOD = 100
+# Доля шага сетки для смещения подписей от линий сетки (0.0 - на линии, 0.5 - в центре квадрата)
+GRID_LABEL_OFFSET_FRACTION = 0.125  # 1/8 шага сетки
 
 # --- Общие константы для валидаторов/обработчиков GUI
 # Минимальное число аргументов команды скролла (tk Scrollbar callback)

@@ -35,6 +35,7 @@ from constants import (
     CONTOUR_LOG_MEMORY_EVERY_TILES,
     CONTOUR_PASS2_QUEUE_MAXSIZE,
     CONTOUR_SEED_DOWNSAMPLE,
+    CONTOUR_SEED_SMOOTHING,
     CONTOUR_WIDTH,
     CONTROL_POINT_CROSS_COLOR,
     CONTROL_POINT_CROSS_LENGTH_PX,
@@ -1125,10 +1126,18 @@ async def download_satellite_rectangle(
             _cleanup_sqlite_cache(cache_dir_resolved)
 
     # Перед поворотом: при необходимости наложим изолинии поверх основы
+    logger.info(
+        'Проверка overlay_contours: overlay_contours=%s, is_elev_contours=%s',
+        overlay_contours,
+        is_elev_contours,
+    )
     if overlay_contours and not is_elev_contours:
+        logger.info('=== НАЧАЛО ПОСТРОЕНИЯ OVERLAY ИЗОЛИНИЙ ===')
         try:
             # Быстрая проверка доступности Terrain-RGB перед началом фазы оверлея
+            logger.info('Изолинии: проверка доступности Terrain-RGB API')
             await _validate_terrain_api(api_key)
+            logger.info('Изолинии: Terrain-RGB API доступен')
 
             # Строим Terrain-RGB оверлей изолиний независимо, затем масштабируем к размеру основы
             eff_scale_cont = effective_scale_for_xyz(
@@ -1263,13 +1272,17 @@ async def download_satellite_rectangle(
             except Exception:
                 logger.info('Изолинии: завершён проход 1/2')
 
-            if samples:
-                mn = min(samples)
-                mx = max(samples)
+            logger.info('Изолинии: вычисление диапазона высот для overlay')
+            if samples_overlay:
+                mn = min(samples_overlay)
+                mx = max(samples_overlay)
+                logger.info('Изолинии overlay: диапазон высот min=%.2f, max=%.2f', mn, mx)
             else:
                 mn, mx = 0.0, 1.0
+                logger.warning('Изолинии overlay: нет данных высот, используются значения по умолчанию')
             if mx < mn:
                 mn, mx = mx, mn
+                logger.warning('Изолинии overlay: min > max, значения переставлены')
 
             seed_dem_c: list[list[float]] = [[0.0] * seed_w for _ in range(seed_h)]
             for sy in range(seed_h):
@@ -1409,10 +1422,13 @@ async def download_satellite_rectangle(
 
             from contours.seeds import build_seed_polylines as _build_seeds
 
+            logger.info('Изолинии: построение seed polylines для %d уровней', len(levels_c))
             seed_polylines = _build_seeds(seed_dem_c, levels_c)
+            total_polylines = sum(len(polys) for polys in seed_polylines.values())
+            logger.info('Изолинии: создано %d полилиний', total_polylines)
 
             # Draw overlay RGBA with transparent background
-
+            logger.info('Изолинии: создание overlay изображения размером %dx%d', crop_rect_c[2], crop_rect_c[3])
             overlay = Image.new('RGBA', (crop_rect_c[2], crop_rect_c[3]), (0, 0, 0, 0))
             overlay_progress_b = ConsoleProgress(
                 total=len(levels_c),
@@ -1424,6 +1440,11 @@ async def download_satellite_rectangle(
                 color = CONTOUR_INDEX_COLOR if is_index else CONTOUR_COLOR
                 width = int(CONTOUR_INDEX_WIDTH if is_index else CONTOUR_WIDTH)
                 for poly in seed_polylines.get(li, []):
+                    # Применяем сглаживание если включено
+                    if CONTOUR_SEED_SMOOTHING and len(poly) >= 3:
+                        from contours.seeds import smooth_polyline
+                        poly = smooth_polyline(poly)
+                    
                     # draw full polylines; block optimization skipped for simplicity
                     pts_crop = [
                         (int(p[0] * seed_ds), int(p[1] * seed_ds)) for p in poly
@@ -1530,14 +1551,19 @@ async def download_satellite_rectangle(
             composite_start_time = time.monotonic()
             logger.info('Изолинии: компоновка overlay на базу — старт')
             try:
+                logger.info('Изолинии: размер overlay=%s, размер базы=%s', overlay.size, (crop_rect[2], crop_rect[3]))
                 if overlay.size != (crop_rect[2], crop_rect[3]):
+                    logger.info('Изолинии: масштабирование overlay до размера базы')
                     overlay = overlay.resize(
                         (crop_rect[2], crop_rect[3]), Image.Resampling.BICUBIC
                     )
                 # Convert base to RGBA, composite overlay, then convert back to RGB
                 prev_result = result
+                logger.info('Изолинии: конвертация базы в RGBA')
                 base_rgba = prev_result.convert('RGBA')
+                logger.info('Изолинии: применение alpha_composite')
                 base_rgba.alpha_composite(overlay)
+                logger.info('Изолинии: конвертация результата обратно в RGB')
                 result = base_rgba.convert('RGB')
                 # Explicitly close large temporary images to free memory
                 with contextlib.suppress(Exception):
@@ -1546,16 +1572,18 @@ async def download_satellite_rectangle(
                     base_rgba.close()
                 with contextlib.suppress(Exception):
                     prev_result.close()
+                logger.info('Изолинии: наложение успешно завершено')
             except Exception as e:
-                logger.warning('Не удалось наложить изолинии: %s', e)
+                logger.error('Не удалось наложить изолинии: %s', e, exc_info=True)
             composite_elapsed = time.monotonic() - composite_start_time
             logger.info(
                 'Изолинии: компоновка overlay на базу — завершена (%.2fs)',
                 composite_elapsed,
             )
             log_memory_usage('after overlay composite')
+            logger.info('=== ЗАВЕРШЕНИЕ ПОСТРОЕНИЯ OVERLAY ИЗОЛИНИЙ ===')
         except Exception as e:
-            logger.warning('Построение оверлея изолиний не удалось: %s', e)
+            logger.error('Построение оверлея изолиний не удалось: %s', e, exc_info=True)
 
     # Image rotation
     rotation_start_time = time.monotonic()

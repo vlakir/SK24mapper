@@ -117,7 +117,7 @@ def main() -> int:
             app.setWindowIcon(QIcon(str(icon_path)))
 
         # Show main window
-        window.show()
+        window.showMaximized()
 
         logger.info('Application started successfully')
         log_comprehensive_diagnostics('APPLICATION_READY')
