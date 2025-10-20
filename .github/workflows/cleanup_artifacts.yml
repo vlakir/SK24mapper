@@ -1,0 +1,44 @@
+name: Cleanup all artifacts
+
+on:
+  workflow_dispatch: {}
+  # Uncomment to run regularly
+  # schedule:
+  #   - cron: '15 3 * * *'  # daily at 03:15 UTC
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete all repository artifacts
+        uses: actions/github-script@v7
+        with:
+          script: |
+            let total = 0;
+            for await (const { data } of github.paginate.iterator(
+              github.rest.actions.listArtifactsForRepo,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                per_page: 100,
+              }
+            )) {
+              for (const a of data) {
+                core.info(`Deleting artifact ${a.id} (${a.name}) created ${a.created_at}`);
+                try {
+                  await github.rest.actions.deleteArtifact({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    artifact_id: a.id,
+                  });
+                  total += 1;
+                } catch (e) {
+                  core.warning(`Failed to delete artifact ${a.id} (${a.name}): ${e.message}`);
+                }
+              }
+            }
+            core.info(`Cleanup finished. Deleted ${total} artifacts.`);
