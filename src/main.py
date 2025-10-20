@@ -3,6 +3,7 @@
 import argparse
 import contextlib
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -23,8 +24,6 @@ def setup_logging() -> tuple[Path, Path]:
         Tuple (appdata_base, local_base) for further use.
 
     """
-    import os
-
     # Determine user profile dirs
     appdata_base = (
         Path(os.getenv('APPDATA') or Path.home() / 'AppData' / 'Roaming') / 'SK42mapper'

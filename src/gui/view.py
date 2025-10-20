@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import contextlib
 import logging
-from io import BytesIO
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from PIL import Image
-from PySide6.QtCore import QObject, QSignalBlocker, Qt, QThread, QTimer, Signal, Slot
+from PySide6.QtCore import QObject, QSignalBlocker, Qt, QThread, Signal, Slot
 from PySide6.QtGui import QAction, QPixmapCache
 from PySide6.QtWidgets import (
     QApplication,
@@ -25,6 +23,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMainWindow,
     QMessageBox,
+    QProgressBar,
     QProgressDialog,
     QPushButton,
     QScrollArea,
@@ -38,9 +37,6 @@ from PySide6.QtWidgets import (
 )
 
 from constants import (
-    BYTES_CONVERSION_FACTOR,
-    BYTES_TO_KB_THRESHOLD,
-    FLOAT_COMPARISON_TOLERANCE,
     MAP_TYPE_LABELS_RU,
     MapType,
 )
@@ -237,55 +233,93 @@ class GridSettingsWidget(QWidget):
         """Setup grid settings UI."""
         layout = QGridLayout()
 
+        # Display grid checkbox - FIRST
+        self.display_grid_cb = QCheckBox('Выводить сетку')
+        self.display_grid_cb.setChecked(True)
+        self.display_grid_cb.setToolTip(
+            'Если включено: рисуются линии сетки и подписи.\n'
+            'Если выключено: рисуются только крестики в точках пересечения без подписей.'
+        )
+        layout.addWidget(self.display_grid_cb, 0, 0, 1, 2)  # Растянуть на 2 колонки
+
+        # Connect checkbox to enable/disable handler
+        self.display_grid_cb.toggled.connect(self._on_display_grid_toggled)
+
         # Grid width
-        layout.addWidget(QLabel('Толщина линий (px):'), 0, 0)
+        self.width_label = QLabel('Толщина линий (px):')
+        layout.addWidget(self.width_label, 1, 0)
         self.width_spin = QSpinBox()
         self.width_spin.setRange(1, 20)
         self.width_spin.setValue(4)
         self.width_spin.setToolTip('Толщина линий сетки в пикселях')
-        layout.addWidget(self.width_spin, 0, 1)
+        layout.addWidget(self.width_spin, 1, 1)
 
         # Font size
-        layout.addWidget(QLabel('Размер шрифта (px):'), 1, 0)
+        self.font_label = QLabel('Размер шрифта (px):')
+        layout.addWidget(self.font_label, 2, 0)
         self.font_spin = QSpinBox()
         self.font_spin.setRange(10, 200)
         self.font_spin.setValue(86)
         self.font_spin.setToolTip('Размер шрифта подписей координат')
-        layout.addWidget(self.font_spin, 1, 1)
+        layout.addWidget(self.font_spin, 2, 1)
 
         # Text margin
-        layout.addWidget(QLabel('Отступ текста (px):'), 2, 0)
+        self.margin_label = QLabel('Отступ текста (px):')
+        layout.addWidget(self.margin_label, 3, 0)
         self.margin_spin = QSpinBox()
         self.margin_spin.setRange(0, 100)
         self.margin_spin.setValue(43)
         self.margin_spin.setToolTip('Отступ подписи от края изображения')
-        layout.addWidget(self.margin_spin, 2, 1)
+        layout.addWidget(self.margin_spin, 3, 1)
 
         # Label background padding
-        layout.addWidget(QLabel('Отступ фона (px):'), 3, 0)
+        self.padding_label = QLabel('Отступ фона (px):')
+        layout.addWidget(self.padding_label, 4, 0)
         self.padding_spin = QSpinBox()
         self.padding_spin.setRange(0, 50)
         self.padding_spin.setValue(6)
         self.padding_spin.setToolTip('Внутренний отступ подложки вокруг текста')
-        layout.addWidget(self.padding_spin, 3, 1)
+        layout.addWidget(self.padding_spin, 4, 1)
 
         self.setLayout(layout)
 
-    def get_settings(self) -> dict[str, int]:
+    def _on_display_grid_toggled(self, checked: bool) -> None:
+        """Enable/disable grid parameters based on display_grid checkbox state."""
+        self.width_label.setEnabled(checked)
+        self.width_spin.setEnabled(checked)
+        self.font_label.setEnabled(checked)
+        self.font_spin.setEnabled(checked)
+        self.margin_label.setEnabled(checked)
+        self.margin_spin.setEnabled(checked)
+        self.padding_label.setEnabled(checked)
+        self.padding_spin.setEnabled(checked)
+
+    def get_settings(self) -> dict[str, int | bool]:
         """Get grid settings as dictionary."""
         return {
             'grid_width_px': self.width_spin.value(),
             'grid_font_size': self.font_spin.value(),
             'grid_text_margin': self.margin_spin.value(),
             'grid_label_bg_padding': self.padding_spin.value(),
+            'display_grid': self.display_grid_cb.isChecked(),
         }
 
-    def set_settings(self, settings: dict[str, int]) -> None:
+    def set_settings(self, settings: dict[str, int | bool]) -> None:
         """Set grid settings from dictionary."""
-        self.width_spin.setValue(settings.get('grid_width_px', 4))
-        self.font_spin.setValue(settings.get('grid_font_size', 86))
-        self.margin_spin.setValue(settings.get('grid_text_margin', 43))
-        self.padding_spin.setValue(settings.get('grid_label_bg_padding', 6))
+        # Block signals to prevent feedback loops when setting values programmatically
+        with QSignalBlocker(self.width_spin):
+            self.width_spin.setValue(settings.get('grid_width_px', 4))
+        with QSignalBlocker(self.font_spin):
+            self.font_spin.setValue(settings.get('grid_font_size', 86))
+        with QSignalBlocker(self.margin_spin):
+            self.margin_spin.setValue(settings.get('grid_text_margin', 43))
+        with QSignalBlocker(self.padding_spin):
+            self.padding_spin.setValue(settings.get('grid_label_bg_padding', 6))
+        with QSignalBlocker(self.display_grid_cb):
+            self.display_grid_cb.setChecked(bool(settings.get('display_grid', True)))
+
+        # Manually trigger enable/disable logic since signal was blocked
+        self._on_display_grid_toggled(self.display_grid_cb.isChecked())
 
 
 class OutputSettingsWidget(QWidget):
@@ -314,69 +348,7 @@ class OutputSettingsWidget(QWidget):
         )
         layout.addWidget(self.quality_label, 0, 2)
 
-        # Оценка размера
-        self.size_estimate_title = QLabel('Оценка размера:')
-        self.size_estimate_value = QLabel('—')
-        self.size_estimate_value.setToolTip(
-            'Приблизительный размер итогового JPEG при текущем качестве',
-        )
-        layout.addWidget(self.size_estimate_title, 1, 0)
-        layout.addWidget(self.size_estimate_value, 1, 1)
-
-        # Яркость
-        self.brightness_label = QLabel('Яркость: 100%')
-        self.brightness_slider = QSlider(Qt.Orientation.Horizontal)
-        self.brightness_slider.setRange(0, 400)
-        self.brightness_slider.setValue(100)
-        layout.addWidget(self.brightness_label, 2, 0)
-        layout.addWidget(self.brightness_slider, 2, 1)
-
-        # Контраст
-        self.contrast_label = QLabel('Контрастность: 100%')
-        self.contrast_slider = QSlider(Qt.Orientation.Horizontal)
-        self.contrast_slider.setRange(0, 200)
-        self.contrast_slider.setValue(100)
-        layout.addWidget(self.contrast_label, 3, 0)
-        layout.addWidget(self.contrast_slider, 3, 1)
-
-        # Насыщенность
-        self.saturation_label = QLabel('Насыщенность: 100%')
-        self.saturation_slider = QSlider(Qt.Orientation.Horizontal)
-        self.saturation_slider.setRange(0, 200)
-        self.saturation_slider.setValue(100)
-        layout.addWidget(self.saturation_label, 4, 0)
-        layout.addWidget(self.saturation_slider, 4, 1)
-
         self.setLayout(layout)
-
-    def get_settings(self) -> dict[str, Any]:
-        """Get output settings as dictionary."""
-        return {
-            'jpeg_quality': self.quality_slider.value(),
-            'brightness': self.brightness_slider.value() / 100.0,
-            'contrast': self.contrast_slider.value() / 100.0,
-            'saturation': self.saturation_slider.value() / 100.0,
-        }
-
-    def set_settings(self, settings: dict[str, Any]) -> None:
-        """Set output settings from dictionary."""
-        q = int(settings.get('jpeg_quality', 95))
-        q = max(q, 10)
-        q = min(q, 100)
-        self.quality_slider.setValue(q)
-        self.quality_label.setText(f'{q}')
-
-        # Adjustments
-        b = float(settings.get('brightness', 1.0))
-        c = float(settings.get('contrast', 1.0))
-        s = float(settings.get('saturation', 1.0))
-        # Clamp within 0..4
-        b = 0.0 if b < 0.0 else (min(b, 4.0))
-        c = 0.0 if c < 0.0 else (min(c, 2.0))
-        s = 0.0 if s < 0.0 else (min(s, 2.0))
-        self.brightness_slider.setValue(round(b * 100))
-        self.contrast_slider.setValue(round(c * 100))
-        self.saturation_slider.setValue(round(s * 100))
 
 
 class _ViewObserver(Observer):
@@ -530,92 +502,37 @@ class HelmertSettingsWidget(QWidget):
 
 class ModalOverlay(QWidget):
     """Semi-transparent overlay widget to shade parent window during modal operations."""
-    
+
     def __init__(self, parent=None):
         super().__init__(parent)
         # Make widget transparent for mouse events but visible
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         # Set dark semi-transparent background
-        self.setStyleSheet("background-color: rgba(0, 0, 0, 80);")
+        self.setStyleSheet('background-color: rgba(0, 0, 0, 80);')
         # Position at top-left of parent
         self.move(0, 0)
         self.hide()
-    
-    def showEvent(self, event):
+
+    def showEvent(self, event) -> None:
         """Resize overlay to cover entire parent on show."""
         super().showEvent(event)
-        if self.parent():
+        parent = self.parent()
+        if parent and isinstance(parent, QWidget):
             # Cover entire parent widget
-            self.resize(self.parent().size())
+            self.resize(parent.size())
             # Ensure overlay is on top of all siblings
             self.raise_()
-    
-    def resizeToParent(self):
+
+    def resizeToParent(self) -> None:
         """Manually resize to match parent (call when parent resizes)."""
-        if self.parent() and self.isVisible():
-            self.resize(self.parent().size())
+        parent = self.parent()
+        if parent and isinstance(parent, QWidget) and self.isVisible():
+            self.resize(parent.size())
             self.raise_()
 
 
 class MainWindow(QMainWindow):
-    _sig_schedule_adjust = Signal()
-    _sig_run_adjust_now = Signal()
-
-    # Slots to ensure results/cleanup run on GUI thread
-    @Slot(int, object, str)
-    def _on_adjust_done_slot(self, gen: int, img_obj: object, err: str) -> None:
-        # Always on GUI thread
-        self.save_map_btn.setEnabled(True)
-        self.save_map_action.setEnabled(True)
-        if gen != self._adj_generation:
-            return
-        if err:
-            logger.error(f'Adjustment error: {err}')
-            return
-        if isinstance(img_obj, Image.Image):
-            try:
-                self._preview_area.set_image(img_obj)
-            except Exception as ex:
-                logger.exception(f'[ADJ] set_image failed: {ex}')
-        # After handling, drop heavy refs from sender (disconnect happens via deleteLater)
-        try:
-            sender_obj = self.sender()
-            if isinstance(sender_obj, QObject):
-                # Drop potential heavy attributes captured in the worker
-                if hasattr(sender_obj, 'image'):
-                    delattr(sender_obj, 'image')
-                if hasattr(sender_obj, 'adj'):
-                    delattr(sender_obj, 'adj')
-        except Exception as e:
-            logger.debug(f'Adjust slot cleanup failed: {e}')
-
-    @Slot()
-    def _on_adjust_thread_finished_slot(self) -> None:
-        # Identify sender thread and cleanup mappings if present
-        sender = self.sender()
-        th = sender if isinstance(sender, QThread) else None
-        if th is None:
-            return
-        # Remove and delete associated worker if tracked via map
-        worker = (
-            getattr(self, '_adjust_map', {}).pop(th, None)
-            if hasattr(self, '_adjust_map')
-            else None
-        )
-        try:
-            if worker is not None and worker in self._adjust_workers:
-                self._adjust_workers.remove(worker)
-                worker.deleteLater()
-        except Exception as e:
-            logger.debug(f'Error cleaning up adjust worker: {e}')
-        try:
-            if th in self._adjust_threads:
-                self._adjust_threads.remove(th)
-            th.deleteLater()
-        except Exception as e:
-            logger.debug(f'Error cleaning up adjust thread: {e}')
-
     """Main application window implementing Observer pattern."""
 
     def __init__(self, model: MilMapperModel, controller: MilMapperController) -> None:
@@ -633,42 +550,14 @@ class MainWindow(QMainWindow):
         self._observer_adapter = _ViewObserver(self._handle_model_event)
         self._model.add_observer(self._observer_adapter)
 
-        # Adjustment state
+        # Image state
         self._base_image: Image.Image | None = None
-        self._adj = {'brightness': 1.0, 'contrast': 1.0, 'saturation': 1.0}
-        self._adj_generation: int = 0
-        # Keep strong references to all active adjustment threads/workers until they finish
-        self._adjust_threads: list[QThread] = []
-        self._adjust_workers: list[QObject] = []
-        self._adjust_map: dict[QThread, QObject] = {}
-        self._preview_update_timer = QTimer(self)
-        self._preview_update_timer.setSingleShot(True)
-        self._preview_update_timer.setInterval(130)
-
-        # Size estimate debounce timer
-        self._estimate_timer = QTimer(self)
-        self._estimate_timer.setSingleShot(True)
-        self._estimate_timer.setInterval(400)
-
-        # Storage for estimate workers
-        self._estimate_threads: list[QThread] = []
-        self._estimate_workers: list[QObject] = []
 
         # Guard flag to prevent model updates while UI is being populated programmatically
         self._ui_sync_in_progress: bool = False
 
         self._setup_ui()
         self._setup_connections()
-
-        # Connect internal signals to GUI-only slots (Queued)
-        self._sig_schedule_adjust.connect(
-            self._schedule_adjust_gui,
-            Qt.ConnectionType.QueuedConnection,
-        )
-        self._sig_run_adjust_now.connect(
-            self._run_adjust_now_gui,
-            Qt.ConnectionType.QueuedConnection,
-        )
 
         self._load_initial_data()
         logger.info('MainWindow initialized')
@@ -727,7 +616,18 @@ class MainWindow(QMainWindow):
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
         self._status_proxy = StatusBarProxy(self.status_bar)
-        self._status_proxy.show_message('Готов к работе')
+
+        # Прогресс-бар в левом нижнем углу (в статус-баре)
+        self._progress_bar = QProgressBar()
+        self._progress_bar.setMaximumWidth(200)
+        self._progress_bar.setMaximumHeight(20)
+        self._progress_bar.setVisible(False)
+        self._progress_bar.setRange(0, 0)  # Indeterminate mode by default
+        self._progress_label = QLabel()
+        self._progress_label.setVisible(False)
+        # Добавляем виджеты прогресса в левую часть статус-бара
+        self.status_bar.addWidget(self._progress_label)
+        self.status_bar.addWidget(self._progress_bar)
 
         # Блок профилей
         profile_layout = QHBoxLayout()
@@ -832,7 +732,7 @@ class MainWindow(QMainWindow):
             MapType.STREETS,
             MapType.OUTDOORS,
             MapType.ELEVATION_COLOR,
-            MapType.ELEVATION_HILLSHADE,
+            # MapType.ELEVATION_HILLSHADE,
         ]
         for mt in self._maptype_order:
             self.map_type_combo.addItem(MAP_TYPE_LABELS_RU[mt], userData=mt.value)
@@ -879,14 +779,8 @@ class MainWindow(QMainWindow):
         output_frame.setLayout(output_layout)
         self.output_widget = OutputSettingsWidget()
         output_layout.addWidget(self.output_widget)
-        # Алиасы слайдеров/лейблов для связки сигналов
+        # Alias for quality slider
         self.quality_slider = self.output_widget.quality_slider
-        self.brightness_slider = self.output_widget.brightness_slider
-        self.contrast_slider = self.output_widget.contrast_slider
-        self.saturation_slider = self.output_widget.saturation_slider
-        self.brightness_label = self.output_widget.brightness_label
-        self.contrast_label = self.output_widget.contrast_label
-        self.saturation_label = self.output_widget.saturation_label
 
         settings_horizontal_layout.addWidget(output_frame)
         settings_vertical_layout.addLayout(settings_horizontal_layout)
@@ -1031,26 +925,6 @@ class MainWindow(QMainWindow):
         # Save map
         self.save_map_btn.clicked.connect(self._save_map)
 
-        # Adjustment sliders
-        self.brightness_slider.valueChanged.connect(self._on_adj_slider_changed)
-        self.contrast_slider.valueChanged.connect(self._on_adj_slider_changed)
-        self.saturation_slider.valueChanged.connect(self._on_adj_slider_changed)
-        # Immediate update on release
-        self.brightness_slider.sliderReleased.connect(
-            self._start_fullres_adjustment_immediate,
-        )
-        self.contrast_slider.sliderReleased.connect(
-            self._start_fullres_adjustment_immediate,
-        )
-        self.saturation_slider.sliderReleased.connect(
-            self._start_fullres_adjustment_immediate,
-        )
-        # Debounce timer
-        self._preview_update_timer.timeout.connect(self._start_fullres_adjustment)
-
-        # Size estimate timer
-        self._estimate_timer.timeout.connect(self._start_size_estimate)
-
         # Settings change tracking
         self._connect_setting_changes()
         # Map type change triggers settings update and clears preview immediately
@@ -1099,15 +973,7 @@ class MainWindow(QMainWindow):
         self.grid_widget.font_spin.valueChanged.connect(self._on_settings_changed)
         self.grid_widget.margin_spin.valueChanged.connect(self._on_settings_changed)
         self.grid_widget.padding_spin.valueChanged.connect(self._on_settings_changed)
-
-        # Output settings
-        self.output_widget.quality_slider.valueChanged.connect(
-            self._on_settings_changed,
-        )
-        # Also schedule size estimate on quality changes
-        self.output_widget.quality_slider.valueChanged.connect(
-            self._schedule_size_estimate,
-        )
+        self.grid_widget.display_grid_cb.stateChanged.connect(self._on_settings_changed)
 
         # Helmert settings
         self.helmert_widget.enable_cb.toggled.connect(self._on_settings_changed)
@@ -1151,10 +1017,16 @@ class MainWindow(QMainWindow):
                 'Settings change ignored: UI sync in progress'
             )
             return
-        # Clear any existing preview to avoid showing outdated imagery when coordinates or contours change
-        self._clear_preview_ui()
-        # Use the same collection logic as forced sync
-        self._sync_ui_to_model_now()
+
+        # Set flag to prevent feedback loop when model emits SETTINGS_CHANGED
+        self._ui_sync_in_progress = True
+        try:
+            # Clear any existing preview to avoid showing outdated imagery when coordinates or contours change
+            self._clear_preview_ui()
+            # Use the same collection logic as forced sync
+            self._sync_ui_to_model_now()
+        finally:
+            self._ui_sync_in_progress = False
 
     def _on_control_point_toggled(self) -> None:
         """Хендлер изменения состояния чекбокса контрольной точки."""
@@ -1179,7 +1051,6 @@ class MainWindow(QMainWindow):
         # Collect all current settings
         coords = self._get_current_coordinates()
         grid_settings = self.grid_widget.get_settings()
-        output_settings = self.output_widget.get_settings()
         helmert_settings = self.helmert_widget.get_values()
 
         # Map type from combo (stored as enum value string)
@@ -1194,7 +1065,6 @@ class MainWindow(QMainWindow):
         payload: dict[str, Any] = {}
         payload.update(coords)
         payload.update(grid_settings)
-        payload.update(output_settings)
         payload.update(helmert_settings)
         payload['map_type'] = map_type_value
         payload['overlay_contours'] = overlay_checked
@@ -1362,29 +1232,26 @@ class MainWindow(QMainWindow):
         self._download_worker.start()
 
         # Update UI state
-        self.download_btn.setEnabled(False)
-        self._status_proxy.show_message('Загрузка карты...')
-        # Optionally show busy dialog immediately; label will update on spinner callback
-        dlg = self._ensure_busy_dialog()
-        dlg.setLabelText('Подготовка…')
-        dlg.setRange(0, 0)
-        dlg.show()
+        # Show progress bar in status bar (will be updated by progress callbacks)
+        self._progress_bar.setVisible(True)
+        self._progress_label.setVisible(True)
+        self._progress_label.setText('Подготовка…')
+        self._progress_bar.setRange(0, 0)  # Indeterminate mode initially
+        # Disable all UI controls during download
+        self._set_controls_enabled(False)
 
     @Slot(bool, str)
     def _on_download_finished(self, success: bool, error_msg: str) -> None:
         """Handle download completion."""
-        self.download_btn.setEnabled(True)
-
-        # Close busy dialog (spinner) if visible
-        if self._busy_dialog is not None and self._busy_dialog.isVisible():
-            self._busy_dialog.reset()
-            self._busy_dialog.hide()
-            # Hide modal overlay
-            try:
-                if self._modal_overlay is not None:
-                    self._modal_overlay.hide()
-            except Exception as e:
-                logger.debug(f'Failed to hide modal overlay: {e}')
+        # Hide progress widgets and re-enable controls
+        try:
+            if self._progress_bar.isVisible():
+                self._progress_bar.setVisible(False)
+                self._progress_label.setVisible(False)
+            # Re-enable all UI controls when download is finished
+            self._set_controls_enabled(True)
+        except Exception as e:
+            logger.debug(f'Failed to hide progress widgets: {e}')
 
         if success:
             self._status_proxy.show_message('Карта успешно создана', 5000)
@@ -1427,16 +1294,9 @@ class MainWindow(QMainWindow):
                 self._preview_area.clear()
                 self._current_image = None
                 self._base_image = None
-                # Reset adjustments to defaults and sync labels (sliders stay disabled)
-                self._adj = {'brightness': 1.0, 'contrast': 1.0, 'saturation': 1.0}
-                self._sync_adj_ui_from_state()
                 # Disable save controls as no image is present
                 self.save_map_btn.setEnabled(False)
                 self.save_map_action.setEnabled(False)
-                # Disable adjustment sliders when no image
-                self._set_sliders_enabled(False)
-                # Reset size estimate
-                self.output_widget.size_estimate_value.setText('—')
             except Exception as e:
                 logger.debug(f'Failed to clear preview on profile load: {e}')
             # Update the rest of the UI from profile settings
@@ -1487,18 +1347,9 @@ class MainWindow(QMainWindow):
             'grid_font_size': settings.grid_font_size,
             'grid_text_margin': settings.grid_text_margin,
             'grid_label_bg_padding': settings.grid_label_bg_padding,
+            'display_grid': settings.display_grid,
         }
         self.grid_widget.set_settings(grid_settings)
-
-        # Update output settings
-        output_settings = {
-            'output_path': settings.output_path,
-            'jpeg_quality': getattr(settings, 'jpeg_quality', 95),
-            'brightness': getattr(settings, 'brightness', 1.0),
-            'contrast': getattr(settings, 'contrast', 1.0),
-            'saturation': getattr(settings, 'saturation', 1.0),
-        }
-        self.output_widget.set_settings(output_settings)
 
         # Update map type combobox and overlay checkbox
         try:
@@ -1585,7 +1436,9 @@ class MainWindow(QMainWindow):
             self._busy_dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
             # Add Dialog flag to ensure proper modal behavior
             self._busy_dialog.setWindowFlags(
-                Qt.WindowType.Dialog | Qt.WindowType.CustomizeWindowHint | Qt.WindowType.WindowTitleHint
+                Qt.WindowType.Dialog
+                | Qt.WindowType.CustomizeWindowHint
+                | Qt.WindowType.WindowTitleHint
             )
             self._busy_dialog.setMinimumDuration(0)
             self._busy_dialog.setAutoClose(False)
@@ -1595,35 +1448,24 @@ class MainWindow(QMainWindow):
 
     def _update_progress(self, done: int, total: int, label: str) -> None:
         """
-        Update spinner BusyDialog text during long operations.
+        Update progress bar in status bar during long operations.
 
-        The old inline progress bar is removed; we always use the spinner.
+        Shows progress bar and label in the lower left corner of the main window.
+        Progress bar always operates in indeterminate (spinner) mode.
         """
-        dlg = self._ensure_busy_dialog()
-        if not dlg.isVisible():
-            dlg.setRange(0, 0)
-            # Show custom modal overlay for visual shading
-            try:
-                if self._modal_overlay is not None:
-                    self._modal_overlay.resizeToParent()
-                    self._modal_overlay.show()
-                    self._modal_overlay.raise_()
-            except Exception as e:
-                logger.debug(f'Failed to show modal overlay: {e}')
-            
-            dlg.show()
-            # Apply modal shading effect to main window
-            try:
-                dlg.raise_()  # Bring dialog to foreground
-                dlg.activateWindow()  # Activate and focus the dialog
-                QApplication.processEvents()  # Process events to apply modality immediately
-            except Exception as e:
-                logger.debug(f'Failed to apply modal effect to progress dialog: {e}')
+        # Show progress widgets if not visible
+        if not self._progress_bar.isVisible():
+            self._progress_bar.setVisible(True)
+            self._progress_label.setVisible(True)
+            # Disable all UI controls when showing progress
+            self._set_controls_enabled(False)
+
+        # Always use indeterminate progress (spinner mode) - no specific progress indication
+        self._progress_bar.setRange(0, 0)
+
+        # Update progress label text
         if label:
-            dlg.setLabelText(label)
-        # Optionally mirror the current stage in the status bar for context
-        if label:
-            self._status_proxy.show_message(label)
+            self._progress_label.setText(label)
 
     def _show_preview_in_main_window(self, image: Any) -> None:
         """Show preview image in the main window's integrated preview area."""
@@ -1632,53 +1474,28 @@ class MainWindow(QMainWindow):
                 logger.warning('Invalid image object for preview')
                 return
 
-            # Set base image (full size) and keep current adjustment sliders unchanged
+            # Set base image (full size)
             self._base_image = image.convert('RGB') if image.mode != 'RGB' else image
-            # Initialize adjustments from current model settings (preferred) or from sliders
-            try:
-                b = float(getattr(self._model.settings, 'brightness', 1.0))
-                c = float(getattr(self._model.settings, 'contrast', 1.0))
-                s = float(getattr(self._model.settings, 'saturation', 1.0))
-            except Exception:
-                b = self.brightness_slider.value() / 100.0
-                c = self.contrast_slider.value() / 100.0
-                s = self.saturation_slider.value() / 100.0
-            self._adj = {'brightness': b, 'contrast': c, 'saturation': s}
-            # Update only labels according to current sliders; do not move sliders here
-            self._update_adj_labels()
 
-            # Display original first
+            # Display image
             self._current_image = self._base_image
             self._preview_area.set_image(self._current_image)
-            # Show size estimate immediately after preview loading
-            self._start_size_estimate()
 
             # Enable save button and menu action
             self.save_map_btn.setEnabled(True)
             self.save_map_action.setEnabled(True)
-            # Enable adjustment sliders now that image is available
-            self._set_sliders_enabled(True)
 
-            # If a modal busy dialog is still visible, hide it to allow user interaction
+            # Hide progress bar and label when preview is ready
             try:
-                dlg = getattr(self, '_busy_dialog', None)
-                if isinstance(dlg, QProgressDialog) and dlg.isVisible():
-                    dlg.reset()
-                    dlg.hide()
-                    # Hide modal overlay
-                    try:
-                        if self._modal_overlay is not None:
-                            self._modal_overlay.hide()
-                    except Exception as e:
-                        logger.debug(f'Failed to hide modal overlay: {e}')
+                if self._progress_bar.isVisible():
+                    self._progress_bar.setVisible(False)
+                    self._progress_label.setVisible(False)
+                    # Re-enable all UI controls when hiding progress
+                    self._set_controls_enabled(True)
+                    # Explicitly enable quality slider
+                    self._set_sliders_enabled(True)
             except Exception as _e:
-                logger.debug(f'Failed to hide busy dialog on preview: {_e}')
-
-            # Apply profile adjustments immediately to the preview
-            try:
-                self._start_fullres_adjustment_immediate()
-            except Exception as e:
-                logger.debug(f'Failed to start immediate adjustment: {e}')
+                logger.debug(f'Failed to hide progress widgets on preview: {_e}')
 
             logger.info('Preview displayed in main window')
 
@@ -1694,21 +1511,11 @@ class MainWindow(QMainWindow):
             # Reset images
             self._current_image = None
             self._base_image = None
-            # ИСПРАВЛЕНИЕ: Сохраняем текущие значения слайдеров вместо сброса
-            # Обновляем self._adj из текущих позиций слайдеров
-            self._adj = {
-                'brightness': self.brightness_slider.value() / 100.0,
-                'contrast': self.contrast_slider.value() / 100.0,
-                'saturation': self.saturation_slider.value() / 100.0,
-            }
-            # НЕ вызываем _sync_adj_ui_from_state(), чтобы слайдеры остались на своих местах
             # Disable save controls
             self.save_map_btn.setEnabled(False)
             self.save_map_action.setEnabled(False)
-            # Disable sliders
+            # Disable quality slider when no image is loaded
             self._set_sliders_enabled(False)
-            # Reset size estimate label if present
-            self.output_widget.size_estimate_value.setText('—')
             # Aggressively clear global QPixmap cache between runs
             QPixmapCache.clear()
         except Exception as e:
@@ -1758,13 +1565,11 @@ class MainWindow(QMainWindow):
                     image,
                     path: Path,
                     quality: int,
-                    adj: dict[str, float],
                 ) -> None:
                     super().__init__()
                     self.image = image
                     self.path = path
                     self.quality = quality
-                    self.adj = adj
 
                 def run(self) -> None:
                     """Save the image in background thread."""
@@ -1772,52 +1577,27 @@ class MainWindow(QMainWindow):
                         img = self.image
                         if img.mode != 'RGB':
                             img = img.convert('RGB')
-                        # Apply same LUT adjustments
-                        b = float(self.adj.get('brightness', 1.0))
-                        c = float(self.adj.get('contrast', 1.0))
-                        s = float(self.adj.get('saturation', 1.0))
-                        if not (
-                            abs(b - 1.0) < FLOAT_COMPARISON_TOLERANCE
-                            and abs(c - 1.0) < FLOAT_COMPARISON_TOLERANCE
-                            and abs(s - 1.0) < FLOAT_COMPARISON_TOLERANCE
-                        ):
-
-                            def clamp(v: int) -> int:
-                                return 0 if v < 0 else (min(v, 255))
-
-                            lut_y = [0] * 256
-                            lut_c = [0] * 256
-                            for i in range(256):
-                                y_int = round(((i - 128) * c + 128) * b)
-                                lut_y[i] = clamp(y_int)
-                                cc = round(128 + (i - 128) * s)
-                                lut_c[i] = clamp(cc)
-                            ycbcr = img.convert('YCbCr')
-                            y, cb, cr = ycbcr.split()
-                            y = y.point(lut_y)
-                            cb = cb.point(lut_c)
-                            cr = cr.point(lut_c)
-                            img = Image.merge('YCbCr', (y, cb, cr)).convert('RGB')
 
                         img.save(
                             str(self.path),
                             'JPEG',
                             quality=self.quality,
                             optimize=True,
-                            subsampling='4:4:4',
+                            subsampling=0,
                         )
                         self.finished.emit(True, '')
                     except Exception as e:
                         self.finished.emit(False, str(e))
 
-            # Get current quality setting
-            quality = int(getattr(self._model.settings, 'jpeg_quality', 95))
+            # Read quality directly from slider at save time
+            quality = self.output_widget.quality_slider.value()
+            logger.info(f'Saving map with JPEG quality: {quality}%')
 
             # Create and setup worker thread
             th = QThread()
-            # Use base image to ensure full resolution; apply current adjustments in worker
+            # Use base image to ensure full resolution
             base_for_save = self._base_image or self._current_image
-            worker = _SaveWorker(base_for_save, out_path, quality, dict(self._adj))
+            worker = _SaveWorker(base_for_save, out_path, quality)
             worker.moveToThread(th)
 
             # Store references for cleanup
@@ -1841,21 +1621,8 @@ class MainWindow(QMainWindow):
                         f'Карта сохранена: {out_path.name}',
                         5000,
                     )
-                    # Clear preview area after successful save
-                    self._preview_area.clear()
-                    self._current_image = None
-                    self._base_image = None
-                    # Reset adjustments to defaults and sync labels (sliders stay disabled)
-                    self._adj = {'brightness': 1.0, 'contrast': 1.0, 'saturation': 1.0}
-                    self._sync_adj_ui_from_state()
-                    # Disable save controls as no image is present
-                    self.save_map_btn.setEnabled(False)
-                    self.save_map_action.setEnabled(False)
-                    # Disable adjustment sliders when no image
-                    self._set_sliders_enabled(False)
-                    # Reset size estimate
-                    with contextlib.suppress(Exception):
-                        self.output_widget.size_estimate_value.setText('—')
+                    # Preview remains visible, save button remains enabled
+                    # User can save again with different quality if needed
                 else:
                     logger.error(f'Failed to save image: {err}')
                     err_text = str(err)
@@ -1887,270 +1654,84 @@ class MainWindow(QMainWindow):
             logger.exception(error_msg)
             QMessageBox.critical(self, 'Ошибка', error_msg)
 
-    # ----- Adjustments (brightness/contrast/saturation) -----
-    def _sync_adj_ui_from_state(self) -> None:
-        self.brightness_slider.setValue(round(self._adj['brightness'] * 100))
-        self.contrast_slider.setValue(round(self._adj['contrast'] * 100))
-        self.saturation_slider.setValue(round(self._adj['saturation'] * 100))
-        self._update_adj_labels()
-
-    def _update_adj_labels(self) -> None:
-        self.brightness_label.setText(f'Яркость: {self.brightness_slider.value()}%')
-        self.contrast_label.setText(f'Контрастность: {self.contrast_slider.value()}%')
-        self.saturation_label.setText(
-            f'Насыщенность: {self.saturation_slider.value()}%',
-        )
-
-    def _on_adj_slider_changed(self, *args) -> None:
-        # Update state from sliders
-        self._adj['brightness'] = self.brightness_slider.value() / 100.0
-        self._adj['contrast'] = self.contrast_slider.value() / 100.0
-        self._adj['saturation'] = self.saturation_slider.value() / 100.0
-        self._update_adj_labels()
-        # Propagate adjustments to model settings so they are saved in profiles
-        self._controller.update_output_settings(self.output_widget.get_settings())
-        # Request debounced adjust strictly via GUI signal
-        self._sig_schedule_adjust.emit()
-        # Also schedule size estimate (debounced)
-        self._schedule_size_estimate()
-
-    def _start_fullres_adjustment_immediate(self) -> None:
-        # Immediate run strictly via GUI signal
-        self._sig_run_adjust_now.emit()
-
-    @Slot()
-    def _schedule_adjust_gui(self) -> None:
-        try:
-            logger.debug(
-                f'[ADJ] schedule_adjust_gui on_gui={QThread.currentThread() is self.thread()}',
-            )
-            self._preview_update_timer.start()
-        except Exception as e:
-            logger.warning(f'Debounce timer start failed: {e}')
-
-    @Slot()
-    def _run_adjust_now_gui(self) -> None:
-        try:
-            logger.debug(
-                f'[ADJ] run_adjust_now_gui on_gui={QThread.currentThread() is self.thread()}',
-            )
-            self._preview_update_timer.stop()
-        except Exception as e:
-            logger.debug(f'Error stopping preview update timer: {e}')
-        self._start_fullres_adjustment()
-
-    def _start_fullres_adjustment(self) -> None:
-        if self._base_image is None:
-            return
-        # Increment generation
-        self._adj_generation += 1
-        generation = self._adj_generation
-        adj = dict(self._adj)
-
-        # Disable save during processing
-        self.save_map_btn.setEnabled(False)
-        self.save_map_action.setEnabled(False)
-
-        # Stop previous thread if running (let it finish; we will ignore result)
-        # Create worker
-        class _AdjustWorker(QObject):
-            finished = Signal(int, object, str)  # generation, image or None, error
-
-            def __init__(
-                self,
-                image: Image.Image,
-                adj: dict[str, float],
-                gen: int,
-            ) -> None:
-                super().__init__()
-                self.image = image
-                self.adj = adj
-                self.gen = gen
-
-            @Slot()
-            def run(self) -> None:
-                try:
-                    img = self.image
-                    if img.mode != 'RGB':
-                        img = img.convert('RGB')
-                    # Build LUTs
-                    b = float(self.adj.get('brightness', 1.0))
-                    c = float(self.adj.get('contrast', 1.0))
-                    s = float(self.adj.get('saturation', 1.0))
-
-                    # Early out if identity
-                    if (
-                        abs(b - 1.0) < FLOAT_COMPARISON_TOLERANCE
-                        and abs(c - 1.0) < FLOAT_COMPARISON_TOLERANCE
-                        and abs(s - 1.0) < FLOAT_COMPARISON_TOLERANCE
-                    ):
-                        self.finished.emit(self.gen, img, '')
-                        return
-
-                    def clamp(v: int) -> int:
-                        return 0 if v < 0 else (min(v, 255))
-
-                    lut_y = [0] * 256
-                    lut_c = [0] * 256
-                    for i in range(256):
-                        y_int = round(((i - 128) * c + 128) * b)
-                        lut_y[i] = clamp(y_int)
-                        cc = round(128 + (i - 128) * s)
-                        lut_c[i] = clamp(cc)
-
-                    ycbcr = img.convert('YCbCr')
-                    y, cb, cr = ycbcr.split()
-                    y = y.point(lut_y)
-                    cb = cb.point(lut_c)
-                    cr = cr.point(lut_c)
-                    merged = Image.merge('YCbCr', (y, cb, cr)).convert('RGB')
-                    self.finished.emit(self.gen, merged, '')
-                except Exception as e:
-                    self.finished.emit(self.gen, None, str(e))
-
-        # Setup thread (canonical pattern: finished->quit, thread.finished->deleteLater)
-        th = QThread()
-        worker = _AdjustWorker(self._base_image, adj, generation)
-        worker.moveToThread(th)
-        # Store strong references until finished
-        self._adjust_threads.append(th)
-        self._adjust_workers.append(worker)
-
-        th.started.connect(worker.run)
-
-        def _on_done(gen: int, img_obj: object, err: str) -> None:
-            # Ensure this slot runs in GUI thread via QueuedConnection
-            self.save_map_btn.setEnabled(True)
-            self.save_map_action.setEnabled(True)
-            if gen != self._adj_generation:
-                return  # stale result
-            if err:
-                logger.error(f'Adjustment error: {err}')
-                return
-            if isinstance(img_obj, Image.Image):
-                logger.debug(
-                    f'[ADJ] Applying adjusted image gen={gen} matches current gen; size={getattr(img_obj, "size", None)}',
-                )
-                self._current_image = img_obj
-                try:
-                    self._preview_area.set_image(img_obj)
-                except Exception as ex:
-                    logger.exception(f'[ADJ] set_image failed: {ex}')
-
-        # Deliver result back to UI via class slot to guarantee GUI thread
-        worker.finished.connect(
-            self._on_adjust_done_slot,
-            Qt.ConnectionType.QueuedConnection,
-        )
-        # Stop the worker thread event loop when work is finished
-        worker.finished.connect(th.quit, Qt.ConnectionType.QueuedConnection)
-
-        # Track worker by thread for cleanup
-        self._adjust_map[th] = worker
-        # Cleanup in GUI slot when thread finishes
-        th.finished.connect(
-            self._on_adjust_thread_finished_slot,
-            Qt.ConnectionType.QueuedConnection,
-        )
-        th.start()
-        # After adjustment result, also schedule size estimate (image content changed)
-        self._schedule_size_estimate()
-
     def _cleanup_save_resources(self) -> None:
         """Clean up save operation resources."""
         try:
-            # Proactively disconnect worker signals and drop heavy refs
+            # Drop heavy image reference to free memory immediately
             if self._save_worker is not None:
-                self._save_worker.disconnect()
                 if hasattr(self._save_worker, 'image'):
                     delattr(self._save_worker, 'image')
-                if hasattr(self._save_worker, 'adj'):
-                    delattr(self._save_worker, 'adj')
-            if self._save_thread is not None:
-                if self._save_thread.isRunning():
-                    self._save_thread.quit()
-
-                    # Use QTimer to defer the wait call to avoid "wait on itself" error
-                    def _delayed_cleanup() -> None:
-                        try:
-                            if self._save_thread is not None:
-                                self._save_thread.wait(1000)
-                                self._save_thread.deleteLater()
-                                self._save_thread = None
-                        except Exception as e:
-                            logger.exception(f'Error in delayed thread cleanup: {e}')
-
-                    QTimer.singleShot(100, _delayed_cleanup)
-                else:
-                    self._save_thread.deleteLater()
-                    self._save_thread = None
-
-            if self._save_worker is not None:
                 self._save_worker.deleteLater()
                 self._save_worker = None
+
+            # Thread cleanup: since worker.finished is connected to thread.quit,
+            # the thread should already be stopped when this is called
+            if self._save_thread is not None:
+                # Thread should already be finished due to quit() signal
+                # Just schedule deletion without wait() to avoid issues
+                self._save_thread.deleteLater()
+                self._save_thread = None
 
         except Exception as e:
             logger.exception(f'Error cleaning up save resources: {e}')
 
     def _set_sliders_enabled(self, enabled: bool) -> None:
-        """Enable/disable sliders with enhanced fade effect."""
-        sliders = [
-            self.brightness_slider,
-            self.contrast_slider,
-            self.saturation_slider,
-            self.quality_slider,
-        ]
+        """Enable/disable quality slider."""
+        # Only quality slider remains, enable it based on parameter
+        self.quality_slider.setEnabled(enabled)
 
+    def _set_controls_enabled(self, enabled: bool) -> None:
+        """Enable/disable all UI controls when progress bar is shown/hidden."""
+        # Profile controls
+        self.profile_combo.setEnabled(enabled)
+        self.save_profile_btn.setEnabled(enabled)
+        self.save_profile_as_btn.setEnabled(enabled)
+
+        # Coordinate input widgets
+        self.from_x_widget.setEnabled(enabled)
+        self.from_y_widget.setEnabled(enabled)
+        self.to_x_widget.setEnabled(enabled)
+        self.to_y_widget.setEnabled(enabled)
+
+        # Control point checkbox and widgets
+        self.control_point_checkbox.setEnabled(enabled)
+        # Control point coordinate widgets should respect checkbox state
         if enabled:
-            # Активное состояние - оранжевые стили
-            slider_style = """
-            QSlider {
-                background: transparent;
-            }
-            QSlider::groove:horizontal {
-                border: 1px solid #cc6600;
-                height: 8px;
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #ff8800, stop:1 #ff9933);
-                margin: 2px 0;
-                border-radius: 4px;
-            }
-            QSlider::handle:horizontal {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #ff9933, stop:1 #cc6600);
-                border: 1px solid #994400;
-                width: 18px;
-                margin: -2px 0;
-                border-radius: 9px;
-            }
-            QSlider::handle:horizontal:hover {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #ffaa44, stop:1 #dd7711);
-            }
-            """
+            cp_enabled = self.control_point_checkbox.isChecked()
+            self.control_point_x_widget.setEnabled(cp_enabled)
+            self.control_point_y_widget.setEnabled(cp_enabled)
         else:
-            # Неактивное состояние - сильно приглушенные стили
-            slider_style = """
-            QSlider {
-                background: transparent;
-                opacity: 0.3;
-            }
-            QSlider::groove:horizontal {
-                border: 1px solid #e0e0e0;
-                height: 8px;
-                background: #f5f5f5;
-                margin: 2px 0;
-                border-radius: 4px;
-            }
-            QSlider::handle:horizontal {
-                background: #e0e0e0;
-                border: 1px solid #d0d0d0;
-                width: 18px;
-                margin: -2px 0;
-                border-radius: 9px;
-            }
-            """
+            self.control_point_x_widget.setEnabled(False)
+            self.control_point_y_widget.setEnabled(False)
 
-        for slider in sliders:
-            slider.setEnabled(enabled)
-            slider.setStyleSheet(slider_style)
+        # Map type and contours
+        self.map_type_combo.setEnabled(enabled)
+        self.contours_checkbox.setEnabled(enabled)
+
+        # Settings widgets
+        self.helmert_widget.setEnabled(enabled)
+        self.grid_widget.setEnabled(enabled)
+        self.output_widget.setEnabled(enabled)
+
+        # Main action buttons
+        self.download_btn.setEnabled(enabled)
+        # Save button availability depends on whether image is loaded
+        if enabled and self._base_image is not None:
+            self.save_map_btn.setEnabled(True)
+            self.save_map_action.setEnabled(True)
+        else:
+            self.save_map_btn.setEnabled(False)
+            self.save_map_action.setEnabled(False)
+
+        # Menu actions
+        if hasattr(self, 'new_profile_action'):
+            self.new_profile_action.setEnabled(enabled)
+        if hasattr(self, 'open_profile_action'):
+            self.open_profile_action.setEnabled(enabled)
+        if hasattr(self, 'save_profile_action'):
+            self.save_profile_action.setEnabled(enabled)
+        if hasattr(self, 'save_profile_as_action'):
+            self.save_profile_as_action.setEnabled(enabled)
 
     @Slot()
     def _new_profile(self) -> None:
@@ -2202,172 +1783,15 @@ class MainWindow(QMainWindow):
             'SK42mapper v0.2\n\nПриложение для создания карт в системе Гаусса-Крюгера\n',
         )
 
-    # ----- Size estimate helpers -----
-    def _schedule_size_estimate(self) -> None:
-        try:
-            self._estimate_timer.start()
-        except Exception:
-            # Fallback: run immediately
-            self._start_size_estimate()
-
-    @staticmethod
-    def _format_bytes(num: int) -> str:
-        try:
-            if num < BYTES_TO_KB_THRESHOLD:
-                return f'{num} Б'
-            num_float = float(num)
-            for unit in ['КБ', 'МБ', 'ГБ', 'ТБ']:
-                num_float /= BYTES_CONVERSION_FACTOR
-                if num_float < BYTES_CONVERSION_FACTOR:
-                    return f'{num_float:.1f} {unit}'
-            return f'{num_float:.1f} ПБ'
-        except Exception:
-            return '—'
-
-    def _start_size_estimate(self) -> None:
-        # Preconditions
-        base = self._base_image
-        if base is None:
-            self.output_widget.size_estimate_value.setText('—')
-            return
-        try:
-
-            class _EstimateWorker(QObject):
-                finished = Signal(int, str)  # estimate_bytes, error
-
-                def __init__(
-                    self,
-                    img: Image.Image,
-                    adj: dict[str, float],
-                    quality: int,
-                ) -> None:
-                    super().__init__()
-                    self.image = img
-                    self.adj = adj
-                    self.quality = int(max(10, min(100, quality)))
-
-                @Slot()
-                def run(self) -> None:
-                    try:
-                        img = self.image
-                        if img.mode != 'RGB':
-                            img = img.convert('RGB')
-                        # Apply LUT same as elsewhere
-                        b = float(self.adj.get('brightness', 1.0))
-                        c = float(self.adj.get('contrast', 1.0))
-                        s = float(self.adj.get('saturation', 1.0))
-                        if not (
-                            abs(b - 1.0) < FLOAT_COMPARISON_TOLERANCE
-                            and abs(c - 1.0) < FLOAT_COMPARISON_TOLERANCE
-                            and abs(s - 1.0) < FLOAT_COMPARISON_TOLERANCE
-                        ):
-
-                            def clamp(v: int) -> int:
-                                return 0 if v < 0 else (min(v, 255))
-
-                            lut_y = [0] * 256
-                            lut_c = [0] * 256
-                            for i in range(256):
-                                y_int = round(((i - 128) * c + 128) * b)
-                                lut_y[i] = clamp(y_int)
-                                cc = round(128 + (i - 128) * s)
-                                lut_c[i] = clamp(cc)
-                            ycbcr = img.convert('YCbCr')
-                            y, cb, cr = ycbcr.split()
-                            y = y.point(lut_y)
-                            cb = cb.point(lut_c)
-                            cr = cr.point(lut_c)
-                            img = Image.merge('YCbCr', (y, cb, cr)).convert('RGB')
-
-                        # Downscale for fast estimation
-                        max_side = 1600
-                        w, h = img.size
-                        scale = 1.0
-                        if max(w, h) > max_side:
-                            scale = max_side / float(max(w, h))
-                            new_w = max(1, round(w * scale))
-                            new_h = max(1, round(h * scale))
-                            img_small = img.resize(
-                                (new_w, new_h),
-                                Image.Resampling.LANCZOS,
-                            )
-                        else:
-                            img_small = img
-                            new_w, new_h = w, h
-
-                        buf = BytesIO()
-                        img_small.save(
-                            buf,
-                            'JPEG',
-                            quality=self.quality,
-                            optimize=True,
-                            subsampling='4:4:4',
-                            progressive=False,
-                        )
-                        bytes_down = buf.tell()
-                        # Scale up by pixel count ratio and add small header constant
-                        k = (w * h) / float(new_w * new_h)
-                        estimate = int(bytes_down * k + 2048)
-                        self.finished.emit(estimate, '')
-                    except Exception as e:
-                        self.finished.emit(0, str(e))
-
-            th = QThread()
-            worker = _EstimateWorker(
-                base,
-                dict(self._adj),
-                int(getattr(self._model.settings, 'jpeg_quality', 95)),
-            )
-            worker.moveToThread(th)
-            self._estimate_threads.append(th)
-            self._estimate_workers.append(worker)
-
-            def _on_estimate_done(estimate: int, err: str) -> None:
-                if err or estimate <= 0:
-                    self.output_widget.size_estimate_value.setText('—')
-                else:
-                    self.output_widget.size_estimate_value.setText(
-                        f'≈ {self._format_bytes(estimate)}',
-                    )
-
-            th.started.connect(worker.run)
-            worker.finished.connect(
-                _on_estimate_done,
-                Qt.ConnectionType.QueuedConnection,
-            )
-            # Ensure prompt thread shutdown on finish
-            worker.finished.connect(th.quit, Qt.ConnectionType.QueuedConnection)
-
-            def _cleanup() -> None:
-                if hasattr(worker, 'image'):
-                    delattr(worker, 'image')
-                if hasattr(worker, 'adj'):
-                    delattr(worker, 'adj')
-                try:
-                    if worker in self._estimate_workers:
-                        self._estimate_workers.remove(worker)
-                        worker.deleteLater()
-                except Exception as e:
-                    logger.debug(f'Error cleaning up estimate worker: {e}')
-                try:
-                    if th in self._estimate_threads:
-                        self._estimate_threads.remove(th)
-                        th.deleteLater()
-                except Exception as e:
-                    logger.debug(f'Error cleaning up estimate thread: {e}')
-
-            th.finished.connect(_cleanup, Qt.ConnectionType.QueuedConnection)
-            th.start()
-        except Exception:
-            self.output_widget.size_estimate_value.setText('—')
-
     def resizeEvent(self, event) -> None:
         """Handle window resize to update overlay size."""
         super().resizeEvent(event)
         # Update overlay when central widget is resized
-        if (hasattr(self, '_modal_overlay') and 
-            self._modal_overlay is not None and 
-            self._modal_overlay.isVisible()):
+        if (
+            hasattr(self, '_modal_overlay')
+            and self._modal_overlay is not None
+            and self._modal_overlay.isVisible()
+        ):
             self._modal_overlay.resizeToParent()
 
     def closeEvent(self, event) -> None:
@@ -2413,20 +1837,6 @@ class MainWindow(QMainWindow):
         # Cleanup save resources
         self._cleanup_save_resources()
         log_memory_usage('after save resources cleanup')
-
-        # Stop and cleanup any adjustment threads
-        try:
-            for th in list(self._adjust_threads):
-                try:
-                    th.quit()
-                    th.wait(5000)
-                except Exception as e:
-                    logger.debug(f'Error stopping adjustment thread on close: {e}')
-            # deleteLater scheduled already in their cleanup, but ensure lists are cleared
-            self._adjust_threads.clear()
-            self._adjust_workers.clear()
-        except Exception as e:
-            logger.warning(f'Error cleaning adjustment threads on close: {e}')
 
         # Remove observer
         self._model.remove_observer(self._observer_adapter)

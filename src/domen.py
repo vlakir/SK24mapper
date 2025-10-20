@@ -41,10 +41,10 @@ class MapSettings(BaseModel):
     grid_text_margin: int
     # Внутренний отступ подложки вокруг текста (px)
     grid_label_bg_padding: int
+    # Отображать полную сетку (True) или только крестики в точках пересечения (False)
+    display_grid: bool = True
     # Прозрачность белой маски (0.0 — прозрачная, 1.0 — непрозрачная)
     mask_opacity: float
-    # Качество JPEG (10–100). По умолчанию — 95.
-    jpeg_quality: int = 95
 
     # Коррекция изображения
     brightness: float = 1.0
@@ -74,13 +74,6 @@ class MapSettings(BaseModel):
             msg = 'mask_opacity должен быть в диапазоне [0.0, 1.0]'
             raise ValueError(msg)
         return v
-
-    @field_validator('jpeg_quality')
-    @classmethod
-    def validate_jpeg_quality(cls, v: int | str) -> int:
-        iv = int(v)
-        iv = max(iv, 10)
-        return min(iv, 100)
 
     @field_validator('contrast', 'saturation')
     @classmethod

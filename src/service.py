@@ -48,6 +48,7 @@ from constants import (
     MARCHING_SQUARES_CENTER_WEIGHT,
     MAX_OUTPUT_PIXELS,
     MAX_ZOOM,
+    MIN_POINTS_FOR_SMOOTHING,
     MS_AMBIGUOUS_CASES,
     MS_CONNECT_LEFT_BOTTOM,
     MS_CONNECT_LEFT_RIGHT,
@@ -89,6 +90,7 @@ from image import (
     assemble_and_crop,
     center_crop,
     draw_axis_aligned_km_grid,
+    draw_elevation_legend,
     rotate_keep_size,
 )
 from image_io import build_save_kwargs as _build_save_kwargs
@@ -205,6 +207,10 @@ async def download_satellite_rectangle(
 
     # Флаг оверлея изолиний поверх выбранного типа карты
     overlay_contours = bool(getattr(settings, 'overlay_contours', False))
+
+    # Переменные для хранения диапазона высот (для легенды)
+    elev_min_m: float | None = None
+    elev_max_m: float | None = None
 
     if is_elev_color or is_elev_contours:
         # Для Terrain-RGB базовый тайл 256px; @2x даёт 512
@@ -440,6 +446,9 @@ async def download_satellite_rectangle(
                     min_range_m=ELEV_MIN_RANGE_M,
                 )
                 inv = 1.0 / (hi - lo) if hi > lo else 0.0
+                # Сохраняем диапазон высот для легенды
+                elev_min_m = lo
+                elev_max_m = hi
 
                 # Pass B: render directly to output image using producer–consumer (I/O vs CPU)
                 result = Image.new('RGB', (crop_rect[2], crop_rect[3]))
@@ -1276,10 +1285,14 @@ async def download_satellite_rectangle(
             if samples_overlay:
                 mn = min(samples_overlay)
                 mx = max(samples_overlay)
-                logger.info('Изолинии overlay: диапазон высот min=%.2f, max=%.2f', mn, mx)
+                logger.info(
+                    'Изолинии overlay: диапазон высот min=%.2f, max=%.2f', mn, mx
+                )
             else:
                 mn, mx = 0.0, 1.0
-                logger.warning('Изолинии overlay: нет данных высот, используются значения по умолчанию')
+                logger.warning(
+                    'Изолинии overlay: нет данных высот, используются значения по умолчанию'
+                )
             if mx < mn:
                 mn, mx = mx, mn
                 logger.warning('Изолинии overlay: min > max, значения переставлены')
@@ -1422,13 +1435,19 @@ async def download_satellite_rectangle(
 
             from contours.seeds import build_seed_polylines as _build_seeds
 
-            logger.info('Изолинии: построение seed polylines для %d уровней', len(levels_c))
+            logger.info(
+                'Изолинии: построение seed polylines для %d уровней', len(levels_c)
+            )
             seed_polylines = _build_seeds(seed_dem_c, levels_c)
             total_polylines = sum(len(polys) for polys in seed_polylines.values())
             logger.info('Изолинии: создано %d полилиний', total_polylines)
 
             # Draw overlay RGBA with transparent background
-            logger.info('Изолинии: создание overlay изображения размером %dx%d', crop_rect_c[2], crop_rect_c[3])
+            logger.info(
+                'Изолинии: создание overlay изображения размером %dx%d',
+                crop_rect_c[2],
+                crop_rect_c[3],
+            )
             overlay = Image.new('RGBA', (crop_rect_c[2], crop_rect_c[3]), (0, 0, 0, 0))
             overlay_progress_b = ConsoleProgress(
                 total=len(levels_c),
@@ -1441,13 +1460,17 @@ async def download_satellite_rectangle(
                 width = int(CONTOUR_INDEX_WIDTH if is_index else CONTOUR_WIDTH)
                 for poly in seed_polylines.get(li, []):
                     # Применяем сглаживание если включено
-                    if CONTOUR_SEED_SMOOTHING and len(poly) >= 3:
+                    if CONTOUR_SEED_SMOOTHING and len(poly) >= MIN_POINTS_FOR_SMOOTHING:
                         from contours.seeds import smooth_polyline
-                        poly = smooth_polyline(poly)
-                    
+
+                        smoothed_poly = smooth_polyline(poly)
+                    else:
+                        smoothed_poly = poly
+
                     # draw full polylines; block optimization skipped for simplicity
                     pts_crop = [
-                        (int(p[0] * seed_ds), int(p[1] * seed_ds)) for p in poly
+                        (int(p[0] * seed_ds), int(p[1] * seed_ds))
+                        for p in smoothed_poly
                     ]
                     if len(pts_crop) < 2:  # noqa: PLR2004
                         continue
@@ -1551,7 +1574,11 @@ async def download_satellite_rectangle(
             composite_start_time = time.monotonic()
             logger.info('Изолинии: компоновка overlay на базу — старт')
             try:
-                logger.info('Изолинии: размер overlay=%s, размер базы=%s', overlay.size, (crop_rect[2], crop_rect[3]))
+                logger.info(
+                    'Изолинии: размер overlay=%s, размер базы=%s',
+                    overlay.size,
+                    (crop_rect[2], crop_rect[3]),
+                )
                 if overlay.size != (crop_rect[2], crop_rect[3]):
                     logger.info('Изолинии: масштабирование overlay до размера базы')
                     overlay = overlay.resize(
@@ -1619,7 +1646,28 @@ async def download_satellite_rectangle(
     logger.info('Обрезка к целевому размеру — завершена (%.2fs)', crop_elapsed)
     log_memory_usage('after cropping')
 
-    # Grid drawing
+    # Draw elevation legend first (if needed) to get bounds for grid line breaking
+    legend_bounds: tuple[int, int, int, int] | None = None
+    if is_elev_color and elev_min_m is not None and elev_max_m is not None:
+        legend_start_time = time.monotonic()
+        logger.info('Рисование легенды высот — старт')
+        try:
+            legend_bounds = draw_elevation_legend(
+                img=result,
+                color_ramp=ELEVATION_COLOR_RAMP,
+                min_elevation_m=elev_min_m,
+                max_elevation_m=elev_max_m,
+                center_lat_wgs=center_lat_wgs,
+                zoom=zoom,
+                scale=eff_scale,
+            )
+            legend_elapsed = time.monotonic() - legend_start_time
+            logger.info('Рисование легенды высот — завершено (%.2fs)', legend_elapsed)
+        except Exception as e:
+            logger.warning('Не удалось нарисовать легенду высот: %s', e)
+            legend_bounds = None
+
+    # Grid drawing (with legend bounds for line breaking if legend was drawn)
     grid_start_time = time.monotonic()
     logger.info('Рисование км-сетки — старт')
     draw_axis_aligned_km_grid(
@@ -1637,6 +1685,8 @@ async def download_satellite_rectangle(
         grid_font_size=settings.grid_font_size,
         grid_text_margin=settings.grid_text_margin,
         grid_label_bg_padding=settings.grid_label_bg_padding,
+        legend_bounds=legend_bounds,
+        display_grid=settings.display_grid,
     )
     grid_elapsed = time.monotonic() - grid_start_time
     logger.info('Рисование км-сетки — завершено (%.2fs)', grid_elapsed)
@@ -1782,7 +1832,8 @@ async def download_satellite_rectangle(
         if out_path.suffix.lower() not in ('.jpg', '.jpeg'):
             out_path = out_path.with_suffix('.jpg')
         out_path.resolve().parent.mkdir(parents=True, exist_ok=True)
-        save_kwargs = _build_save_kwargs(out_path, settings)
+        # Use default quality (95%) for automatic saves in CLI/preview mode
+        save_kwargs = _build_save_kwargs(out_path, quality=95)
 
         _save_jpeg(result, out_path, save_kwargs)
 

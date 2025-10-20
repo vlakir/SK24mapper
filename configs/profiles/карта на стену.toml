@@ -11,6 +11,7 @@ grid_width_px = 10
 grid_font_size = 86
 grid_text_margin = 43
 grid_label_bg_padding = 6
+display_grid = true
 mask_opacity = 0.24
 jpeg_quality = 100
 brightness = 1.0
