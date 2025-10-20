@@ -313,6 +313,7 @@ async def run_deep_verification(*, api_key: str, settings: Any) -> None:
     async def _check_styles(style_id: str) -> None:
         import asyncio
         import ssl
+
         import certifi
 
         ssl_context = ssl.create_default_context(cafile=certifi.where())
@@ -362,6 +363,7 @@ async def run_deep_verification(*, api_key: str, settings: Any) -> None:
     async def _check_terrain_small() -> None:
         import asyncio
         import ssl
+
         import certifi
 
         ssl_context = ssl.create_default_context(cafile=certifi.where())
@@ -466,13 +468,14 @@ async def _make_cached_session_for_diag() -> Any:
     Возвращает aiohttp.ClientSession, если кэш отключён или библиотека недоступна.
     """
     import ssl
-    import certifi
+
     import aiohttp
-    
+    import certifi
+
     # Создать SSL-контекст с сертификатами из certifi
     ssl_context = ssl.create_default_context(cafile=certifi.where())
     connector = aiohttp.TCPConnector(ssl=ssl_context)
-    
+
     from constants import (
         HTTP_CACHE_DIR,
         HTTP_CACHE_ENABLED,

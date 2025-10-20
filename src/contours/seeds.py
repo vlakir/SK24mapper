@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 from constants import (
     MARCHING_SQUARES_CENTER_WEIGHT,
+    MIN_POINTS_FOR_SMOOTHING,
     MS_AMBIGUOUS_CASES,
     MS_CONNECT_LEFT_BOTTOM,
     MS_CONNECT_LEFT_RIGHT,
@@ -17,6 +18,18 @@ from constants import (
     MS_NO_CONTOUR_CASES,
     SEED_POLYLINE_QUANT_FACTOR,
 )
+
+# Импорт с дефолтами для обратной совместимости
+try:
+    from constants import (
+        CONTOUR_SMOOTHING_FACTOR,
+        CONTOUR_SMOOTHING_ITERATIONS,
+        CONTOUR_SMOOTHING_STRENGTH,
+    )
+except ImportError:
+    CONTOUR_SMOOTHING_FACTOR = 5
+    CONTOUR_SMOOTHING_STRENGTH = 2.0
+    CONTOUR_SMOOTHING_ITERATIONS = 2
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -170,3 +183,76 @@ def build_seed_polylines(
                 polylines.append(poly)
         polylines_by_level[li] = polylines
     return polylines_by_level
+
+
+def smooth_polyline(
+    points: list[tuple[float, float]],
+    smoothing_factor: int | None = None,
+    smoothing_strength: float | None = None,
+) -> list[tuple[float, float]]:
+    """
+    Сглаживание полилинии с помощью B-spline интерполяции.
+
+    Args:
+        points: Исходные точки полилинии
+        smoothing_factor: Фактор увеличения количества точек (None = из constants)
+        smoothing_strength: Параметр сглаживания s (None = из constants)
+
+    Returns:
+        Сглаженная полилиния с большим количеством точек
+
+    """
+    if len(points) < MIN_POINTS_FOR_SMOOTHING:
+        return points
+
+    if smoothing_factor is None:
+        smoothing_factor = CONTOUR_SMOOTHING_FACTOR
+    if smoothing_strength is None:
+        smoothing_strength = CONTOUR_SMOOTHING_STRENGTH
+
+    try:
+        import numpy as np
+        from scipy.interpolate import splev, splprep
+
+        # Разделяем x и y координаты
+        x = [p[0] for p in points]
+        y = [p[1] for p in points]
+
+        # Параметр s контролирует агрессивность сглаживания:
+        # s=0 → точная интерполяция через все точки
+        # s>0 → аппроксимация с допустимым отклонением
+        s_param = len(points) * smoothing_strength
+        tck, u = splprep([x, y], s=s_param, k=min(3, len(points) - 1))
+
+        # Генерация новых точек
+        u_new = np.linspace(0, 1, len(points) * smoothing_factor)
+        x_new, y_new = splev(u_new, tck)
+
+        return list(zip(x_new, y_new, strict=False))
+    except Exception:
+        # Fallback: если scipy недоступна, используем простое усреднение
+        return simple_smooth_polyline(points, iterations=CONTOUR_SMOOTHING_ITERATIONS)
+
+
+def simple_smooth_polyline(
+    points: list[tuple[float, float]], iterations: int | None = None
+) -> list[tuple[float, float]]:
+    """Простое сглаживание методом скользящего среднего (не требует scipy)."""
+    if len(points) < MIN_POINTS_FOR_SMOOTHING:
+        return points
+
+    if iterations is None:
+        iterations = CONTOUR_SMOOTHING_ITERATIONS
+
+    smoothed = points[:]
+    for _ in range(iterations):
+        new_points = [smoothed[0]]  # Сохраняем первую точку
+        for i in range(1, len(smoothed) - 1):
+            # Усредняем с соседними точками
+            x = (smoothed[i - 1][0] + smoothed[i][0] + smoothed[i + 1][0]) / 3.0
+            y = (smoothed[i - 1][1] + smoothed[i][1] + smoothed[i + 1][1]) / 3.0
+            new_points.append((x, y))
+        new_points.append(smoothed[-1])  # Сохраняем последнюю точку
+        smoothed = new_points
+
+    return smoothed

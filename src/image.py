@@ -7,16 +7,34 @@ from pyproj import CRS, Transformer
 
 from constants import (
     GRID_COLOR,
+    GRID_CROSS_LENGTH_PX,
     GRID_FONT_BOLD,
     GRID_FONT_PATH,
     GRID_FONT_PATH_BOLD,
     GRID_LABEL_BG_COLOR,
     GRID_LABEL_MOD,
+    GRID_LABEL_OFFSET_FRACTION,
     GRID_LABEL_THOUSAND_DIV,
     GRID_STEP_M,
     GRID_TEXT_COLOR,
     GRID_TEXT_OUTLINE_COLOR,
     GRID_TEXT_OUTLINE_WIDTH,
+    LEGEND_BACKGROUND_COLOR,
+    LEGEND_BORDER_WIDTH_PX,
+    LEGEND_GRID_GAP_PADDING_PX,
+    LEGEND_HEIGHT_RATIO,
+    LEGEND_HORIZONTAL_POSITION_RATIO,
+    LEGEND_LABEL_FONT_MAX_PX,
+    LEGEND_LABEL_FONT_MIN_PX,
+    LEGEND_LABEL_FONT_RATIO,
+    LEGEND_MARGIN_RATIO,
+    LEGEND_MIN_HEIGHT_GRID_SQUARES,
+    LEGEND_MIN_MAP_HEIGHT_KM_FOR_RATIO,
+    LEGEND_NUM_LABELS,
+    LEGEND_TEXT_OFFSET_PX,
+    LEGEND_TEXT_OUTLINE_WIDTH_PX,
+    LEGEND_VERTICAL_OFFSET_RATIO,
+    LEGEND_WIDTH_TO_HEIGHT_RATIO,
     STATIC_SCALE,
 )
 from progress import ConsoleProgress, LiveSpinner
@@ -208,6 +226,44 @@ def load_grid_font(font_size: int = 86) -> ImageFont.FreeTypeFont | ImageFont.Im
     return ImageFont.load_default()
 
 
+def calculate_adaptive_grid_font_size(mpp: float) -> int:
+    """
+    Вычисляет адаптивный размер шрифта для подписей сетки.
+
+    Args:
+        mpp: meters per pixel (масштаб карты)
+
+    Returns:
+        Размер шрифта в пикселях, ограниченный диапазоном
+
+    """
+    from constants import (
+        GRID_LABEL_FONT_KM,
+        GRID_LABEL_FONT_MAX_PX,
+        GRID_LABEL_FONT_MIN_PX,
+    )
+
+    try:
+        # Целевой физический размер в метрах → размер в пикселях
+        px = round((GRID_LABEL_FONT_KM * 1000.0) / max(1e-9, mpp))
+    except Exception:
+        px = 86  # Fallback на старое значение по умолчанию
+
+    # Ограничиваем диапазон для читаемости
+    px = max(GRID_LABEL_FONT_MIN_PX, min(px, GRID_LABEL_FONT_MAX_PX))
+
+    logger.info(
+        'Адаптивный размер шрифта сетки: %d px (mpp=%.6f, target=%.3f km, range=[%d,%d])',
+        px,
+        mpp,
+        GRID_LABEL_FONT_KM,
+        GRID_LABEL_FONT_MIN_PX,
+        GRID_LABEL_FONT_MAX_PX,
+    )
+
+    return px
+
+
 def draw_axis_aligned_km_grid(
     img: Image.Image,
     center_lat_sk42: float,
@@ -223,19 +279,59 @@ def draw_axis_aligned_km_grid(
     grid_font_size: int = 86,
     grid_text_margin: int = 43,
     grid_label_bg_padding: int = 6,
+    legend_bounds: tuple[int, int, int, int] | None = None,
+    *,
+    display_grid: bool = True,
 ) -> None:
     """
-    Рисует сетку 1 км (СК‑42/Гаусса–Крюгера) строго по осям экрана и подписывает.
+    Рисует километровую сетку (СК‑42/Гаусса–Крюгера) строго по осям изображения.
 
-    только 4-й и 5-й младшие знаки (две последние цифры тысяч метров).
+    Линии сетки прерываются в местах пересечения с легендой высот (если она была
+    отрисована и переданы её границы через ``legend_bounds``). При отключённой
+    опции отображения сетки (``display_grid=False``) линии и подписи не рисуются —
+    вместо них выводятся крестики толщиной 1 пиксель в точках пересечений бывших
+    линий сетки.
+
+    Args:
+        img: Изображение (Pillow Image), на котором выполняется рисование.
+        center_lat_sk42: Широта центра карты в СК‑42 (градусы), используется для
+            вычисления положения сетки в проекции Гаусса–Крюгера.
+        center_lng_sk42: Долгота центра карты в СК‑42 (градусы), используется для
+            вычисления положения сетки в проекции Гаусса–Крюгера.
+        center_lat_wgs: Широта центра карты в WGS‑84 (градусы), используется для
+            расчёта метры-на‑пиксель (масштаба).
+        zoom: Уровень масштабирования карты (число тайлов Web Mercator по оси).
+        crs_sk42_gk: Объект CRS (pyproj.CRS) для СК‑42 в зоне Гаусса–Крюгера,
+            в которой находится карта.
+        t_sk42_to_wgs: Трансформер (pyproj.Transformer) для преобразования
+            координат СК‑42 → WGS‑84 (учитывает параметры Хельмерта).
+        step_m: Шаг сетки в метрах; по умолчанию 1000 (GRID_STEP_M).
+        color: Цвет линий/крестиков сетки в формате RGB.
+        width_px: Толщина линий сетки в пикселях (игнорируется, если display_grid=False
+            и рисуются крестики).
+        scale: Масштабный коэффициент рендеринга тайлов (обычно 1 или 2 для retina).
+        grid_font_size: Базовый размер шрифта для подписей сетки (px); фактически
+            может быть переопределён адаптивным расчётом.
+        grid_text_margin: Отступ подписей от краёв изображения (px).
+        grid_label_bg_padding: Внутренний отступ подложки под подписью (px).
+        legend_bounds: Опциональные границы легенды высот (x1, y1, x2, y2) — в этой
+            области линии сетки прерываются, крестики не рисуются.
+        display_grid: Признак полного отображения сетки. Если True — рисуются линии
+            и подписи; если False — рисуются только крестики на пересечениях.
+
+    Returns:
+        None: Функция изменяет переданное изображение на месте, ничего не возвращает.
+
     """
     # Аргумент предусмотрен для возможных будущих преобразований
     _ = t_sk42_to_wgs
     draw = ImageDraw.Draw(img)
-    font = load_grid_font(grid_font_size)
     w, h = img.size
 
     mpp = meters_per_pixel(center_lat_wgs, zoom, scale=scale)
+    # Вычисляем адаптивный размер шрифта на основе масштаба карты
+    adaptive_font_size = calculate_adaptive_grid_font_size(mpp)
+    font = load_grid_font(adaptive_font_size)
     ppm = 1.0 / mpp
 
     cx, cy = w / 2.0, h / 2.0
@@ -253,6 +349,70 @@ def draw_axis_aligned_km_grid(
     def floor_to_step(v: float, step: float) -> int:
         return int(math.floor(v / step) * step)
 
+    def draw_cross_at_intersection(x_px: float, y_px: float) -> None:
+        """Рисует крестик в точке пересечения линий сетки."""
+        half = GRID_CROSS_LENGTH_PX // 2
+        cross_width = 1  # Толщина крестика всегда 1 пиксель
+        # Вертикальная линия крестика
+        draw.line(
+            [(x_px, y_px - half), (x_px, y_px + half)], fill=color, width=cross_width
+        )
+        # Горизонтальная линия крестика
+        draw.line(
+            [(x_px - half, y_px), (x_px + half, y_px)], fill=color, width=cross_width
+        )
+
+    def draw_line_with_gap(
+        x1: float,
+        y1: float,
+        x2: float,
+        y2: float,
+        gap_rect: tuple[int, int, int, int] | None,
+    ) -> None:
+        """Рисует линию с разрывом в области gap_rect (если указана)."""
+        if gap_rect is None:
+            draw.line([(x1, y1), (x2, y2)], fill=color, width=width_px)
+            return
+
+        gx1, gy1, gx2, gy2 = gap_rect
+
+        # Вертикальная линия (x постоянна)
+        if abs(x2 - x1) < 1:
+            x = x1
+            # Проверяем пересечение с gap_rect
+            if gx1 <= x <= gx2:
+                # Линия проходит через область легенды по X
+                # Рисуем сегменты до и после легенды
+                if y1 < gy1:
+                    # Сегмент сверху до легенды
+                    draw.line([(x, y1), (x, gy1)], fill=color, width=width_px)
+                if y2 > gy2:
+                    # Сегмент снизу от легенды
+                    draw.line([(x, gy2), (x, y2)], fill=color, width=width_px)
+            else:
+                # Нет пересечения - рисуем полностью
+                draw.line([(x1, y1), (x2, y2)], fill=color, width=width_px)
+
+        # Горизонтальная линия (y постоянна)
+        elif abs(y2 - y1) < 1:
+            y = y1
+            # Проверяем пересечение с gap_rect
+            if gy1 <= y <= gy2:
+                # Линия проходит через область легенды по Y
+                # Рисуем сегменты до и после легенды
+                if x1 < gx1:
+                    # Сегмент слева до легенды
+                    draw.line([(x1, y), (gx1, y)], fill=color, width=width_px)
+                if x2 > gx2:
+                    # Сегмент справа от легенды
+                    draw.line([(gx2, y), (x2, y)], fill=color, width=width_px)
+            else:
+                # Нет пересечения - рисуем полностью
+                draw.line([(x1, y1), (x2, y2)], fill=color, width=width_px)
+        else:
+            # Диагональная линия - рисуем полностью (не применимо для сетки)
+            draw.line([(x1, y1), (x2, y2)], fill=color, width=width_px)
+
     half_w_m = (w / 2.0) / ppm
     half_h_m = (h / 2.0) / ppm
 
@@ -264,92 +424,123 @@ def draw_axis_aligned_km_grid(
     # Прогресс: линии + подписи (верх+низ на вертикалях, лево+право на горизонталях)
     n_vert = int((gx_right_m - gx_left_m) / step_m) + 1
     n_horz = int((gy_up_m - gy_down_m) / step_m) + 1
-    total_units = n_vert + n_horz + n_vert * 2 + n_horz * 2
+
+    if display_grid:
+        total_units = n_vert + n_horz + n_vert * 2 + n_horz * 2
+    else:
+        total_units = n_vert * n_horz  # Только крестики на пересечениях
+
     grid_progress = ConsoleProgress(total=max(1, total_units), label='Сетка и подписи')
 
-    # Вертикальные линии и подписи X
-    x_m = gx_left_m
-    while x_m <= gx_right_m:
-        dx_m = x_m - x0_gk
-        x_px = cx + dx_m * ppm
-        draw.line([(x_px, 0), (x_px, h)], fill=color, width=width_px)
-        grid_progress.step_sync(1)
+    if display_grid:
+        # Текущая логика отрисовки полной сетки (линии + подписи)
+        # Вертикальные линии и подписи X
+        x_m = gx_left_m
+        while x_m <= gx_right_m:
+            dx_m = x_m - x0_gk
+            x_px = cx + dx_m * ppm
+            draw_line_with_gap(x_px, 0, x_px, h, legend_bounds)
+            grid_progress.step_sync(1)
 
-        # Подписываем квадрат справа от вертикали: берём центр правого квадрата
-        x_label_m = x_m + step_m / 2.0
-        x_digits = math.floor(x_label_m / GRID_LABEL_THOUSAND_DIV) % GRID_LABEL_MOD
-        x_label = f'{x_digits:02d}'
+            # Подписываем квадрат справа от вертикали: берём центр правого квадрата
+            x_label_m = x_m + step_m / 2.0
+            x_digits = math.floor(x_label_m / GRID_LABEL_THOUSAND_DIV) % GRID_LABEL_MOD
+            x_label = f'{x_digits:02d}'
 
-        # Сдвиг подписей вправо на половину шага сетки (к центру квадрата справа)
-        half_step_px = (step_m / 2) * ppm
+            # Сдвиг подписей вправо на заданную долю шага сетки
+            label_offset_px = (step_m * GRID_LABEL_OFFSET_FRACTION) * ppm
 
-        # Верх - сдвигаем вправо
-        draw_label_with_bg(
-            draw,
-            (x_px + half_step_px, grid_text_margin),
-            x_label,
-            font=font,
-            anchor='ma',
-            img_size=(w, h),
-            bg_color=GRID_LABEL_BG_COLOR,
-            padding=grid_label_bg_padding,
-        )
-        grid_progress.step_sync(1)
-        # Низ - сдвигаем вправо
-        draw_label_with_bg(
-            draw,
-            (x_px + half_step_px, h - grid_text_margin),
-            x_label,
-            font=font,
-            anchor='ms',
-            img_size=(w, h),
-            bg_color=GRID_LABEL_BG_COLOR,
-            padding=grid_label_bg_padding,
-        )
-        grid_progress.step_sync(1)
-        x_m += step_m
+            # Верх - сдвигаем вправо
+            draw_label_with_bg(
+                draw,
+                (x_px + label_offset_px, grid_text_margin),
+                x_label,
+                font=font,
+                anchor='ma',
+                img_size=(w, h),
+                bg_color=GRID_LABEL_BG_COLOR,
+                padding=grid_label_bg_padding,
+            )
+            grid_progress.step_sync(1)
+            # Низ - сдвигаем вправо
+            draw_label_with_bg(
+                draw,
+                (x_px + label_offset_px, h - grid_text_margin),
+                x_label,
+                font=font,
+                anchor='ms',
+                img_size=(w, h),
+                bg_color=GRID_LABEL_BG_COLOR,
+                padding=grid_label_bg_padding,
+            )
+            grid_progress.step_sync(1)
+            x_m += step_m
 
-    # Горизонтальные линии и подписи Y
-    y_m = gy_down_m
-    while y_m <= gy_up_m:
-        dy_m = y_m - y0_gk
-        y_px = cy - dy_m * ppm
-        draw.line([(0, y_px), (w, y_px)], fill=color, width=width_px)
-        grid_progress.step_sync(1)
+        # Горизонтальные линии и подписи Y
+        y_m = gy_down_m
+        while y_m <= gy_up_m:
+            dy_m = y_m - y0_gk
+            y_px = cy - dy_m * ppm
+            draw_line_with_gap(0, y_px, w, y_px, legend_bounds)
+            grid_progress.step_sync(1)
 
-        # Подписываем квадрат выше горизонтали: берём центр верхнего квадрата
-        y_label_m = y_m + step_m / 2.0
-        y_digits = math.floor(y_label_m / GRID_LABEL_THOUSAND_DIV) % GRID_LABEL_MOD
-        y_label = f'{y_digits:02d}'
+            # Подписываем квадрат выше горизонтали: берём центр верхнего квадрата
+            y_label_m = y_m + step_m / 2.0
+            y_digits = math.floor(y_label_m / GRID_LABEL_THOUSAND_DIV) % GRID_LABEL_MOD
+            y_label = f'{y_digits:02d}'
 
-        # Сдвиг подписей вверх на половину шага сетки (к центру квадрата выше)
-        half_step_px = (step_m / 2) * ppm
+            # Сдвиг подписей вверх на заданную долю шага сетки
+            label_offset_px = (step_m * GRID_LABEL_OFFSET_FRACTION) * ppm
 
-        # Лево - сдвигаем вверх
-        draw_label_with_bg(
-            draw,
-            (grid_text_margin, y_px - half_step_px),
-            y_label,
-            font=font,
-            anchor='lm',
-            img_size=(w, h),
-            bg_color=GRID_LABEL_BG_COLOR,
-            padding=grid_label_bg_padding,
-        )
-        grid_progress.step_sync(1)
-        # Право - сдвигаем вверх
-        draw_label_with_bg(
-            draw,
-            (w - grid_text_margin, y_px - half_step_px),
-            y_label,
-            font=font,
-            anchor='rm',
-            img_size=(w, h),
-            bg_color=GRID_LABEL_BG_COLOR,
-            padding=grid_label_bg_padding,
-        )
-        grid_progress.step_sync(1)
-        y_m += step_m
+            # Лево - сдвигаем вверх
+            draw_label_with_bg(
+                draw,
+                (grid_text_margin, y_px - label_offset_px),
+                y_label,
+                font=font,
+                anchor='lm',
+                img_size=(w, h),
+                bg_color=GRID_LABEL_BG_COLOR,
+                padding=grid_label_bg_padding,
+            )
+            grid_progress.step_sync(1)
+            # Право - сдвигаем вверх
+            draw_label_with_bg(
+                draw,
+                (w - grid_text_margin, y_px - label_offset_px),
+                y_label,
+                font=font,
+                anchor='rm',
+                img_size=(w, h),
+                bg_color=GRID_LABEL_BG_COLOR,
+                padding=grid_label_bg_padding,
+            )
+            grid_progress.step_sync(1)
+            y_m += step_m
+    else:
+        # Новая логика: рисуем только крестики в точках пересечения
+        x_m = gx_left_m
+        while x_m <= gx_right_m:
+            dx_m = x_m - x0_gk
+            x_px = cx + dx_m * ppm
+
+            y_m = gy_down_m
+            while y_m <= gy_up_m:
+                dy_m = y_m - y0_gk
+                y_px = cy - dy_m * ppm
+
+                # Рисуем крестик только если он не в области легенды
+                if legend_bounds is None:
+                    draw_cross_at_intersection(x_px, y_px)
+                else:
+                    gx1, gy1, gx2, gy2 = legend_bounds
+                    if not (gx1 <= x_px <= gx2 and gy1 <= y_px <= gy2):
+                        draw_cross_at_intersection(x_px, y_px)
+
+                y_m += step_m
+                grid_progress.step_sync(1)
+
+            x_m += step_m
 
     grid_progress.close()
 
@@ -368,3 +559,193 @@ def apply_white_mask(img: Image.Image, opacity: float) -> Image.Image:
         return composited.convert('RGB')
     finally:
         spinner.stop('Наложение маски: готово')
+
+
+def draw_elevation_legend(
+    img: Image.Image,
+    color_ramp: list[tuple[float, tuple[int, int, int]]],
+    min_elevation_m: float,
+    max_elevation_m: float,
+    center_lat_wgs: float,
+    zoom: int,
+    scale: int = STATIC_SCALE,
+) -> tuple[int, int, int, int]:
+    """
+    Рисует адаптивную легенду высот в правом нижнем углу карты.
+
+    Высота легенды составляет ~10% от высоты карты, но не менее 1 километрового
+    квадрата для карт высотой < 10 км. Все размеры масштабируются пропорционально.
+
+    Args:
+        img: Изображение для рисования
+        color_ramp: Цветовая палитра [(t, (R, G, B)), ...] где t in [0, 1]
+        min_elevation_m: Минимальная высота в метрах
+        max_elevation_m: Максимальная высота в метрах
+        center_lat_wgs: Широта центра карты в WGS84 (для расчёта пикселей на метр)
+        zoom: Уровень масштаба карты
+        scale: Масштабный коэффициент (обычно 1 или 2 для retina)
+
+    Returns:
+        Кортеж (x1, y1, x2, y2) - границы легенды с отступом для разрыва сетки
+
+    """
+    draw = ImageDraw.Draw(img)
+    w, h = img.size
+
+    # Рассчитываем метры на пиксель и пиксели на метр
+    mpp = meters_per_pixel(center_lat_wgs, zoom, scale=scale)
+    ppm = 1.0 / mpp if mpp > 0 else 0.0
+
+    # Рассчитываем высоту карты в километрах
+    map_height_km = (h * mpp) / 1000.0
+
+    # Определяем высоту легенды: 10% от высоты карты, но не менее 1 км квадрата
+    if map_height_km < LEGEND_MIN_MAP_HEIGHT_KM_FOR_RATIO:
+        # Для малых карт: минимум 1 километровый квадрат
+        legend_height = int(LEGEND_MIN_HEIGHT_GRID_SQUARES * GRID_STEP_M * ppm)
+    else:
+        # Для больших карт: 10% от высоты
+        legend_height = int(h * LEGEND_HEIGHT_RATIO)
+
+    # Обеспечиваем минимальную читаемость
+    legend_height = max(legend_height, 100)
+
+    # Рассчитываем остальные размеры пропорционально высоте легенды
+    legend_width = int(legend_height * LEGEND_WIDTH_TO_HEIGHT_RATIO)
+    margin = int(legend_height * LEGEND_MARGIN_RATIO)
+
+    # Рассчитываем адаптивный размер шрифта
+    font_size = int(legend_height * LEGEND_LABEL_FONT_RATIO)
+    font_size = max(LEGEND_LABEL_FONT_MIN_PX, min(font_size, LEGEND_LABEL_FONT_MAX_PX))
+
+    # Рассчитываем размер одного квадрата сетки в пикселях
+    grid_square_px = GRID_STEP_M * ppm
+
+    # Новая позиция легенды:
+    # Горизонтально: в середине последнего полного километрового квадрата
+    # Находим правую границу последнего полного квадрата (с учётом margin)
+    last_square_right = w - margin
+    # Центр последнего квадрата находится на расстоянии (0.5 * grid_square) от правого края
+    legend_center_x = (
+        last_square_right - grid_square_px * LEGEND_HORIZONTAL_POSITION_RATIO
+    )
+    # Позиция левого края легенды
+    legend_x = int(legend_center_x - legend_width / 2.0)
+
+    # Вертикально: нижняя граница легенды немного выше первой горизонтальной линии сетки
+    # Первая горизонтальная линия снизу находится на высоте grid_square_px от нижнего края
+    first_grid_line_y = h - grid_square_px
+    # Поднимаем легенду на заданную долю от шага сетки
+    legend_y = int(
+        first_grid_line_y
+        - legend_height
+        - grid_square_px * LEGEND_VERTICAL_OFFSET_RATIO
+    )
+
+    # Рассчитываем оценку ширины текста для границ легенды
+    text_width_estimate = font_size * 6  # примерно "1234 м"
+
+    # Рисуем фон легенды (полупрозрачный белый прямоугольник)
+    # Фон на 20% больше легенды в обоих направлениях, легенда по центру фона
+    legend_total_width = legend_width + LEGEND_TEXT_OFFSET_PX + text_width_estimate
+    legend_total_height = legend_height
+
+    # Увеличиваем фон на 20% (коэффициент 1.2), добавляя по 10% с каждой стороны
+    bg_padding_x = int(legend_total_width * 0.10)
+    bg_padding_y = int(legend_total_height * 0.10)
+
+    bg_x1 = legend_x - bg_padding_x
+    bg_y1 = legend_y - bg_padding_y
+    bg_x2 = legend_x + legend_total_width + bg_padding_x
+    bg_y2 = legend_y + legend_height + bg_padding_y
+
+    # Рисуем фон через альфа-композитинг
+    if img.mode != 'RGBA':
+        # Создаём временное RGBA изображение для наложения фона
+        temp_rgba = img.convert('RGBA')
+        # Создаём слой с фоном
+        bg_overlay = Image.new('RGBA', img.size, (0, 0, 0, 0))
+        bg_draw = ImageDraw.Draw(bg_overlay)
+        bg_draw.rectangle(
+            [bg_x1, bg_y1, bg_x2, bg_y2],
+            fill=LEGEND_BACKGROUND_COLOR,
+        )
+        # Накладываем фон
+        temp_rgba = Image.alpha_composite(temp_rgba, bg_overlay)
+        # Конвертируем обратно в RGB и обновляем исходное изображение
+        img_rgb = temp_rgba.convert('RGB')
+        img.paste(img_rgb)
+        # Обновляем draw object для дальнейшего рисования
+        draw = ImageDraw.Draw(img)
+
+    # Рисуем цветовую полосу (снизу вверх: от низких высот к высоким)
+    for i in range(legend_height):
+        # t идёт от 1.0 (вверху) до 0.0 (внизу) - высокие высоты сверху
+        t = 1.0 - (i / (legend_height - 1)) if legend_height > 1 else 0.0
+
+        # Найти цвет в палитре для данного t
+        color = None
+        for j in range(1, len(color_ramp)):
+            t0, c0 = color_ramp[j - 1]
+            t1, c1 = color_ramp[j]
+            if t <= t1 or j == len(color_ramp) - 1:
+                # Линейная интерполяция
+                local = 0.0 if t1 == t0 else (t - t0) / (t1 - t0)
+                r = int(c0[0] + (c1[0] - c0[0]) * local)
+                g = int(c0[1] + (c1[1] - c0[1]) * local)
+                b = int(c0[2] + (c1[2] - c0[2]) * local)
+                color = (r, g, b)
+                break
+
+        if color:
+            y_pos = legend_y + i
+            draw.line(
+                [(legend_x, y_pos), (legend_x + legend_width, y_pos)],
+                fill=color,
+                width=1,
+            )
+
+    # Рисуем рамку вокруг цветовой полосы
+    draw.rectangle(
+        [legend_x, legend_y, legend_x + legend_width, legend_y + legend_height],
+        outline=(0, 0, 0),
+        width=LEGEND_BORDER_WIDTH_PX,
+    )
+
+    # Добавляем подписи высот
+    try:
+        font = load_grid_font(font_size)
+    except Exception:
+        font = ImageFont.load_default()
+
+    # Рисуем метки высоты
+    for i in range(LEGEND_NUM_LABELS):
+        t = i / (LEGEND_NUM_LABELS - 1) if LEGEND_NUM_LABELS > 1 else 0.0
+        elevation = min_elevation_m + (max_elevation_m - min_elevation_m) * t
+        label_text = f'{int(elevation)} м'
+
+        # Позиция метки (снизу вверх)
+        label_y = legend_y + legend_height - int(t * legend_height)
+
+        # Рисуем текст справа от цветовой полосы с обводкой для читаемости
+        text_x = legend_x + legend_width + LEGEND_TEXT_OFFSET_PX
+        draw_text_with_outline(
+            draw,
+            (text_x, label_y),
+            label_text,
+            font=font,
+            fill=(0, 0, 0),
+            outline=(255, 255, 255),
+            outline_width=LEGEND_TEXT_OUTLINE_WIDTH_PX,
+            anchor='lm',
+        )
+
+    # Возвращаем границы легенды с отступом для разрыва линий сетки
+    # Используем увеличенные размеры фона плюс дополнительный отступ
+    gap_padding = LEGEND_GRID_GAP_PADDING_PX
+    return (
+        bg_x1 - gap_padding,
+        bg_y1 - gap_padding,
+        bg_x2 + gap_padding,
+        bg_y2 + gap_padding,
+    )

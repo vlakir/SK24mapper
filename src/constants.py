@@ -12,7 +12,7 @@ STATIC_SCALE = 2
 
 # Максимальный уровень приближения
 # (переменная, подбирается автоматически вниз при больших размерах)
-MAX_ZOOM = 18
+MAX_ZOOM = 20
 
 # Радиус Земли для Web Mercator (метры)
 EARTH_RADIUS_M = 6378137.0
@@ -32,7 +32,7 @@ MAX_GK_ZONE = 60
 ASYNC_MAX_CONCURRENCY = 20
 
 # Ограничение на итоговое число пикселей результирующего кадра (без припуска)
-MAX_OUTPUT_PIXELS = 150_000_000
+MAX_OUTPUT_PIXELS = 300_000_000
 
 # Отключить защиту Pillow от «бомб декомпрессии» (используйте с осторожностью)
 PIL_DISABLE_LIMIT = True
@@ -48,6 +48,9 @@ ADDITIVE_RATIO = 0.3
 
 # Шаг километровой сетки (метры)
 GRID_STEP_M = 1000
+
+# Длина линий крестиков при отключенной сетке (пиксели)
+GRID_CROSS_LENGTH_PX = 50
 
 # Цвет линий сетки (RGB)
 GRID_COLOR = (0, 0, 0)
@@ -69,6 +72,12 @@ GRID_FONT_PATH = None
 
 # Путь к жирному шрифту TTF/OTF (если None — DejaVuSans-Bold.ttf)
 GRID_FONT_PATH_BOLD = None
+
+# Адаптивный размер шрифта подписей сетки (в километрах)
+GRID_LABEL_FONT_KM = 0.05  # 50 метров на карте
+# Диапазон клампа в пикселях для подписей сетки
+GRID_LABEL_FONT_MIN_PX = 12
+GRID_LABEL_FONT_MAX_PX = 120
 
 # Включить наложение белой маски поверх карты
 
@@ -224,9 +233,17 @@ ELEVATION_COLOR_RAMP = [
 # Интервал между изогипсами (метры)
 CONTOUR_INTERVAL_M = 10.0
 # Downsample factor for global low-res DEM seed (integer >= 2)
-CONTOUR_SEED_DOWNSAMPLE = 4
+CONTOUR_SEED_DOWNSAMPLE = 12
 # Optional spline smoothing for seed polylines (not mandatory for MVP)
-CONTOUR_SEED_SMOOTHING = False
+CONTOUR_SEED_SMOOTHING = True
+# Параметры сглаживания изолиний
+CONTOUR_SMOOTHING_FACTOR = 3  # Множитель точек (2-7, больше = плавнее)
+CONTOUR_SMOOTHING_STRENGTH = (
+    1.5  # Параметр s для splprep (0.5-3.0, больше = агрессивнее)
+)
+CONTOUR_SMOOTHING_ITERATIONS = 2  # Итерации для fallback-метода (1-3)
+# Минимальное количество точек для применения сглаживания
+MIN_POINTS_FOR_SMOOTHING = 3
 # Цвет обычных изогипс (RGB)
 CONTOUR_COLOR = (30, 30, 30)
 # Толщина обычных изогипс в пикселях (задаётся здесь)
@@ -261,10 +278,10 @@ CONTOUR_LABEL_GAP_PADDING = 5
 CONTOUR_LABEL_FONT_SIZE = 18
 # Новый масштабируемый размер шрифта в долях километра
 # Одинаковый размер для всех изолиний (обычных и индексных)
-CONTOUR_LABEL_FONT_KM = 0.04
+CONTOUR_LABEL_FONT_KM = 0.06
 # Диапазон клампа в пикселях, чтобы подписи оставались читаемыми
-CONTOUR_LABEL_FONT_MIN_PX = 8
-CONTOUR_LABEL_FONT_MAX_PX = 64
+CONTOUR_LABEL_FONT_MIN_PX = 16
+CONTOUR_LABEL_FONT_MAX_PX = 128
 CONTOUR_LABEL_FONT_PATH = None
 CONTOUR_LABEL_FONT_BOLD = True
 CONTOUR_LABEL_FORMAT = '{:.0f}'
@@ -276,6 +293,8 @@ EAST_VECTOR_SAMPLE_M = 200.0
 # --- Вспомогательные константы для подписей сетки
 GRID_LABEL_THOUSAND_DIV = 1000
 GRID_LABEL_MOD = 100
+# Доля шага сетки для смещения подписей от линий сетки (0.0 - на линии, 0.5 - в центре квадрата)
+GRID_LABEL_OFFSET_FRACTION = 0.125  # 1/8 шага сетки
 
 # --- Общие константы для валидаторов/обработчиков GUI
 # Минимальное число аргументов команды скролла (tk Scrollbar callback)
@@ -373,3 +392,39 @@ CONTOUR_BLOCK_EDGE_PAD_PX = 1
 CONTOUR_PASS2_QUEUE_MAXSIZE = 4
 # Периодичность логирования использования памяти (каждые N тайлов)
 CONTOUR_LOG_MEMORY_EVERY_TILES = 50
+
+# --- Легенда высот на карте (elevation legend)
+# Желаемая высота легенды как доля от высоты карты (10%)
+LEGEND_HEIGHT_RATIO = 0.10
+# Минимальная высота легенды в километровых квадратах (для карт ниже порога высоты)
+LEGEND_MIN_HEIGHT_GRID_SQUARES = 1.0
+# Порог высоты карты (в километрах), ниже которого легенда занимает минимум 1 км-квадрат
+# Используется вместо «магического» числа 10.0 в коде для читаемости и единообразия
+LEGEND_MIN_MAP_HEIGHT_KM_FOR_RATIO = 10.0
+# Отношение ширины легенды к её высоте
+LEGEND_WIDTH_TO_HEIGHT_RATIO = 0.133  # ширина = высота * 0.133
+# Отступ легенды от краёв карты как доля от высоты легенды
+LEGEND_MARGIN_RATIO = 0.067  # margin = высота_легенды * 0.067
+# Количество меток высоты на легенде (мин, макс и промежуточные)
+LEGEND_NUM_LABELS = 5
+# Отступ текста от цветовой полосы легенды в пикселях
+LEGEND_TEXT_OFFSET_PX = 5
+# Толщина рамки вокруг цветовой полосы легенды в пикселях
+LEGEND_BORDER_WIDTH_PX = 2
+# Размер шрифта для подписей легенды как доля от высоты легенды (увеличено на 30%)
+LEGEND_LABEL_FONT_RATIO = 0.13  # размер_шрифта = высота_легенды * 0.13
+# Диапазон размера шрифта подписей легенды в пикселях (мин и макс)
+LEGEND_LABEL_FONT_MIN_PX = 12
+LEGEND_LABEL_FONT_MAX_PX = 48
+# Толщина обводки текста легенды в пикселях
+LEGEND_TEXT_OUTLINE_WIDTH_PX = 2
+# Дополнительный отступ вокруг легенды для разрыва линий сетки (пиксели)
+LEGEND_GRID_GAP_PADDING_PX = 10
+# Цвет фона легенды (RGBA): белый полупрозрачный для визуального выделения
+LEGEND_BACKGROUND_COLOR = (255, 255, 255, 230)
+# Отступ фона легенды от краёв цветовой полосы (пиксели)
+LEGEND_BACKGROUND_PADDING_PX = 8
+# Горизонтальная позиция легенды: доля от ширины последнего километрового квадрата (0.5 = середина)
+LEGEND_HORIZONTAL_POSITION_RATIO = 0.5
+# Вертикальный отступ нижней границы легенды от первой горизонтальной линии сетки (в долях от шага сетки)
+LEGEND_VERTICAL_OFFSET_RATIO = 0.15

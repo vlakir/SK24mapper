@@ -51,12 +51,13 @@ def cleanup_sqlite_cache(cache_dir: Path) -> None:
 
 def make_http_session(cache_dir: Path | None) -> aiohttp.ClientSession:
     import ssl
+
     import certifi
-    
+
     # Создать SSL-контекст с сертификатами из certifi
     ssl_context = ssl.create_default_context(cafile=certifi.where())
     connector = aiohttp.TCPConnector(ssl=ssl_context)
-    
+
     use_cache = HTTP_CACHE_ENABLED
     if use_cache and cache_dir is not None:
         cache_dir.mkdir(parents=True, exist_ok=True)
@@ -85,11 +86,12 @@ def make_http_session(cache_dir: Path | None) -> aiohttp.ClientSession:
 async def validate_style_api(api_key: str, style_id: str) -> None:
     """Проверяет доступность стилей Mapbox (Styles API tiles endpoint)."""
     import ssl
+
     import certifi
-    
+
     ssl_context = ssl.create_default_context(cafile=certifi.where())
     connector = aiohttp.TCPConnector(ssl=ssl_context)
-    
+
     test_path = f'{MAPBOX_STATIC_BASE}/{style_id}/tiles/256/0/0/0'
     test_url = f'{test_path}?access_token={api_key}'
     timeout = aiohttp.ClientTimeout(total=10, connect=10, sock_connect=10, sock_read=10)
@@ -116,11 +118,12 @@ async def validate_style_api(api_key: str, style_id: str) -> None:
 async def validate_terrain_api(api_key: str) -> None:
     """Быстрая проверка доступности Terrain-RGB источника."""
     import ssl
+
     import certifi
-    
+
     ssl_context = ssl.create_default_context(cafile=certifi.where())
     connector = aiohttp.TCPConnector(ssl=ssl_context)
-    
+
     test_path = f'{MAPBOX_TERRAIN_RGB_PATH}/0/0/0.pngraw'
     test_url = f'{test_path}?access_token={api_key}'
     timeout = aiohttp.ClientTimeout(total=10, connect=10, sock_connect=10, sock_read=10)
