@@ -38,7 +38,7 @@ from constants import (
     STATIC_SCALE,
 )
 from progress import ConsoleProgress, LiveSpinner
-from topography import crs_sk42_geog, meters_per_pixel
+from topography import crs_sk42_geog, latlng_to_pixel_xy, meters_per_pixel
 
 logger = logging.getLogger(__name__)
 
@@ -269,6 +269,7 @@ def draw_axis_aligned_km_grid(
     center_lat_sk42: float,
     center_lng_sk42: float,
     center_lat_wgs: float,
+    center_lng_wgs: float,
     zoom: int,
     crs_sk42_gk: CRS,
     t_sk42_to_wgs: Transformer,
@@ -282,6 +283,7 @@ def draw_axis_aligned_km_grid(
     legend_bounds: tuple[int, int, int, int] | None = None,
     *,
     display_grid: bool = True,
+    rotation_deg: float = 0.0,
 ) -> None:
     """
     Рисует километровую сетку (СК‑42/Гаусса–Крюгера) строго по осям изображения.
@@ -300,6 +302,8 @@ def draw_axis_aligned_km_grid(
             вычисления положения сетки в проекции Гаусса–Крюгера.
         center_lat_wgs: Широта центра карты в WGS‑84 (градусы), используется для
             расчёта метры-на‑пиксель (масштаба).
+        center_lng_wgs: Долгота центра карты в WGS‑84 (градусы), используется для
+            точного преобразования координат сетки в пиксели.
         zoom: Уровень масштабирования карты (число тайлов Web Mercator по оси).
         crs_sk42_gk: Объект CRS (pyproj.CRS) для СК‑42 в зоне Гаусса–Крюгера,
             в которой находится карта.
@@ -323,8 +327,6 @@ def draw_axis_aligned_km_grid(
         None: Функция изменяет переданное изображение на месте, ничего не возвращает.
 
     """
-    # Аргумент предусмотрен для возможных будущих преобразований
-    _ = t_sk42_to_wgs
     draw = ImageDraw.Draw(img)
     w, h = img.size
 
@@ -336,6 +338,12 @@ def draw_axis_aligned_km_grid(
 
     cx, cy = w / 2.0, h / 2.0
 
+    # Предвычисляем sin/cos для поворота (изображение было повёрнуто на rotation_deg)
+    # PIL rotate() работает в системе координат с Y вниз, поэтому используем отрицательный угол
+    rotation_rad = math.radians(-rotation_deg)
+    cos_rot = math.cos(rotation_rad)
+    sin_rot = math.sin(rotation_rad)
+
     # Important: PROJ/pyproj uses (X, Y) = (easting, northing) when always_xy=True.
     # Military notation in this app is X = northing (север), Y = easting (восток).
     # Therefore, x0_gk is easting (восток), y0_gk is northing (север).
@@ -344,7 +352,39 @@ def draw_axis_aligned_km_grid(
         crs_sk42_gk,
         always_xy=True,
     )
+    t_sk42gk_to_sk42 = Transformer.from_crs(
+        crs_sk42_gk,
+        crs_sk42_geog,
+        always_xy=True,
+    )
     x0_gk, y0_gk = t_sk42gk_from_sk42.transform(center_lng_sk42, center_lat_sk42)
+
+    # Вычисляем "мировые" пиксельные координаты центра карты для точного преобразования
+    cx_world, cy_world = latlng_to_pixel_xy(center_lat_wgs, center_lng_wgs, zoom)
+
+    def gk_to_pixel(x_gk: float, y_gk: float) -> tuple[float, float]:
+        """
+        Преобразует координаты СК-42 ГК (метры) в пиксели изображения.
+
+        Выполняет полную цепочку преобразований:
+        СК-42 ГК → СК-42 географические → WGS-84 → Web Mercator пиксели → пиксели изображения
+        После этого применяется поворот на угол rotation_deg вокруг центра изображения.
+        """
+        # СК-42 ГК (метры) → СК-42 географические (градусы)
+        lng_sk42, lat_sk42 = t_sk42gk_to_sk42.transform(x_gk, y_gk)
+        # СК-42 географические → WGS-84
+        lng_wgs, lat_wgs = t_sk42_to_wgs.transform(lng_sk42, lat_sk42)
+        # WGS-84 → "мировые" пиксели Web Mercator
+        x_world, y_world = latlng_to_pixel_xy(lat_wgs, lng_wgs, zoom)
+        # "Мировые" пиксели → пиксели изображения (относительно центра, до поворота)
+        x_pre = cx + (x_world - cx_world) * scale
+        y_pre = cy + (y_world - cy_world) * scale
+        # Применяем поворот вокруг центра изображения
+        dx = x_pre - cx
+        dy = y_pre - cy
+        x_px = cx + dx * cos_rot - dy * sin_rot
+        y_px = cy + dx * sin_rot + dy * cos_rot
+        return x_px, y_px
 
     def floor_to_step(v: float, step: float) -> int:
         return int(math.floor(v / step) * step)
@@ -432,14 +472,25 @@ def draw_axis_aligned_km_grid(
 
     grid_progress = ConsoleProgress(total=max(1, total_units), label='Сетка и подписи')
 
+    # Количество сегментов для отрисовки линий сетки как ломаных
+    # Это позволяет точно отобразить кривизну линий на больших картах
+    grid_line_segments = max(10, int((gy_up_m - gy_down_m) / step_m) + 1)
+
     if display_grid:
         # Текущая логика отрисовки полной сетки (линии + подписи)
         # Вертикальные линии и подписи X
         x_m = gx_left_m
         while x_m <= gx_right_m:
-            dx_m = x_m - x0_gk
-            x_px = cx + dx_m * ppm
-            draw_line_with_gap(x_px, 0, x_px, h, legend_bounds)
+            # Строим ломаную линию из множества точек для точного отображения кривизны
+            line_points: list[tuple[float, float]] = []
+            for i in range(grid_line_segments + 1):
+                y_seg = gy_down_m + (gy_up_m - gy_down_m) * i / grid_line_segments
+                px, py = gk_to_pixel(x_m, y_seg)
+                line_points.append((px, py))
+
+            # Рисуем ломаную линию
+            if len(line_points) >= 2:
+                draw.line(line_points, fill=color, width=width_px)
             grid_progress.step_sync(1)
 
             # Подписываем квадрат справа от вертикали: берём центр правого квадрата
@@ -447,13 +498,12 @@ def draw_axis_aligned_km_grid(
             x_digits = math.floor(x_label_m / GRID_LABEL_THOUSAND_DIV) % GRID_LABEL_MOD
             x_label = f'{x_digits:02d}'
 
-            # Сдвиг подписей вправо на заданную долю шага сетки
-            label_offset_px = (step_m * GRID_LABEL_OFFSET_FRACTION) * ppm
-
-            # Верх - сдвигаем вправо
+            # Вычисляем точную позицию центра квадрата через gk_to_pixel
+            # Верх - центр квадрата на уровне верхней границы карты
+            label_x_top, _ = gk_to_pixel(x_label_m, gy_up_m)
             draw_label_with_bg(
                 draw,
-                (x_px + label_offset_px, grid_text_margin),
+                (label_x_top, grid_text_margin),
                 x_label,
                 font=font,
                 anchor='ma',
@@ -462,10 +512,11 @@ def draw_axis_aligned_km_grid(
                 padding=grid_label_bg_padding,
             )
             grid_progress.step_sync(1)
-            # Низ - сдвигаем вправо
+            # Низ - центр квадрата на уровне нижней границы карты
+            label_x_bot, _ = gk_to_pixel(x_label_m, gy_down_m)
             draw_label_with_bg(
                 draw,
-                (x_px + label_offset_px, h - grid_text_margin),
+                (label_x_bot, h - grid_text_margin),
                 x_label,
                 font=font,
                 anchor='ms',
@@ -477,11 +528,21 @@ def draw_axis_aligned_km_grid(
             x_m += step_m
 
         # Горизонтальные линии и подписи Y
+        # Количество сегментов для горизонтальных линий
+        grid_line_segments_h = max(10, int((gx_right_m - gx_left_m) / step_m) + 1)
+
         y_m = gy_down_m
         while y_m <= gy_up_m:
-            dy_m = y_m - y0_gk
-            y_px = cy - dy_m * ppm
-            draw_line_with_gap(0, y_px, w, y_px, legend_bounds)
+            # Строим ломаную линию из множества точек для точного отображения кривизны
+            line_points_h: list[tuple[float, float]] = []
+            for i in range(grid_line_segments_h + 1):
+                x_seg = gx_left_m + (gx_right_m - gx_left_m) * i / grid_line_segments_h
+                px, py = gk_to_pixel(x_seg, y_m)
+                line_points_h.append((px, py))
+
+            # Рисуем ломаную линию
+            if len(line_points_h) >= 2:
+                draw.line(line_points_h, fill=color, width=width_px)
             grid_progress.step_sync(1)
 
             # Подписываем квадрат выше горизонтали: берём центр верхнего квадрата
@@ -489,13 +550,12 @@ def draw_axis_aligned_km_grid(
             y_digits = math.floor(y_label_m / GRID_LABEL_THOUSAND_DIV) % GRID_LABEL_MOD
             y_label = f'{y_digits:02d}'
 
-            # Сдвиг подписей вверх на заданную долю шага сетки
-            label_offset_px = (step_m * GRID_LABEL_OFFSET_FRACTION) * ppm
-
-            # Лево - сдвигаем вверх
+            # Вычисляем точную позицию центра квадрата через gk_to_pixel
+            # Лево - центр квадрата на уровне левой границы карты
+            _, label_y_left = gk_to_pixel(gx_left_m, y_label_m)
             draw_label_with_bg(
                 draw,
-                (grid_text_margin, y_px - label_offset_px),
+                (grid_text_margin, label_y_left),
                 y_label,
                 font=font,
                 anchor='lm',
@@ -504,10 +564,11 @@ def draw_axis_aligned_km_grid(
                 padding=grid_label_bg_padding,
             )
             grid_progress.step_sync(1)
-            # Право - сдвигаем вверх
+            # Право - центр квадрата на уровне правой границы карты
+            _, label_y_right = gk_to_pixel(gx_right_m, y_label_m)
             draw_label_with_bg(
                 draw,
-                (w - grid_text_margin, y_px - label_offset_px),
+                (w - grid_text_margin, label_y_right),
                 y_label,
                 font=font,
                 anchor='rm',
@@ -521,13 +582,10 @@ def draw_axis_aligned_km_grid(
         # Новая логика: рисуем только крестики в точках пересечения
         x_m = gx_left_m
         while x_m <= gx_right_m:
-            dx_m = x_m - x0_gk
-            x_px = cx + dx_m * ppm
-
             y_m = gy_down_m
             while y_m <= gy_up_m:
-                dy_m = y_m - y0_gk
-                y_px = cy - dy_m * ppm
+                # Используем точное преобразование для каждой точки пересечения
+                x_px, y_px = gk_to_pixel(x_m, y_m)
 
                 # Рисуем крестик только если он не в области легенды
                 if legend_bounds is None:

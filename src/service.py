@@ -1615,20 +1615,15 @@ async def download_satellite_rectangle(
     # Image rotation
     rotation_start_time = time.monotonic()
     logger.info('Поворот изображения — старт')
-    angle_rad = math.radians(
-        compute_rotation_deg_for_east_axis(
-            center_lat_sk42=center_lat_sk42,
-            center_lng_sk42=center_lng_sk42,
-            map_params=map_params,
-            crs_sk42_gk=crs_sk42_gk,
-            t_sk42_to_wgs=t_sk42_to_wgs,
-        )
+    rotation_deg = compute_rotation_deg_for_east_axis(
+        center_lat_sk42=center_lat_sk42,
+        center_lng_sk42=center_lng_sk42,
+        map_params=map_params,
+        crs_sk42_gk=crs_sk42_gk,
+        t_sk42_to_wgs=t_sk42_to_wgs,
     )
     prev_result = result
-    # rotate_keep_size expects degrees; convert from radians at the boundary
-    result = rotate_keep_size(
-        prev_result, math.degrees(angle_rad), fill=(255, 255, 255)
-    )
+    result = rotate_keep_size(prev_result, rotation_deg, fill=(255, 255, 255))
     with contextlib.suppress(Exception):
         prev_result.close()
     rotation_elapsed = time.monotonic() - rotation_start_time
@@ -1675,6 +1670,7 @@ async def download_satellite_rectangle(
         center_lat_sk42=center_lat_sk42,
         center_lng_sk42=center_lng_sk42,
         center_lat_wgs=center_lat_wgs,
+        center_lng_wgs=center_lng_wgs,
         zoom=zoom,
         crs_sk42_gk=crs_sk42_gk,
         t_sk42_to_wgs=t_sk42_to_wgs,
@@ -1687,6 +1683,7 @@ async def download_satellite_rectangle(
         grid_label_bg_padding=settings.grid_label_bg_padding,
         legend_bounds=legend_bounds,
         display_grid=settings.display_grid,
+        rotation_deg=rotation_deg,
     )
     grid_elapsed = time.monotonic() - grid_start_time
     logger.info('Рисование км-сетки — завершено (%.2fs)', grid_elapsed)
