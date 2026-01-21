@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QSplitter,
     QStatusBar,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -245,40 +246,52 @@ class GridSettingsWidget(QWidget):
         # Connect checkbox to enable/disable handler
         self.display_grid_cb.toggled.connect(self._on_display_grid_toggled)
 
-        # Grid width
-        self.width_label = QLabel('Толщина линий (px):')
+        # Grid width (in meters)
+        self.width_label = QLabel('Толщина линий (м):')
         layout.addWidget(self.width_label, 1, 0)
-        self.width_spin = QSpinBox()
-        self.width_spin.setRange(1, 20)
-        self.width_spin.setValue(4)
-        self.width_spin.setToolTip('Толщина линий сетки в пикселях')
+        self.width_spin = QDoubleSpinBox()
+        self.width_spin.setRange(1.0, 50.0)
+        self.width_spin.setValue(5.0)
+        self.width_spin.setSingleStep(1.0)
+        self.width_spin.setDecimals(1)
+        self.width_spin.setToolTip(
+            'Толщина линий сетки в метрах (пересчитывается в пиксели по масштабу карты)'
+        )
         layout.addWidget(self.width_spin, 1, 1)
 
-        # Font size
-        self.font_label = QLabel('Размер шрифта (px):')
+        # Font size (in meters)
+        self.font_label = QLabel('Размер шрифта (м):')
         layout.addWidget(self.font_label, 2, 0)
-        self.font_spin = QSpinBox()
-        self.font_spin.setRange(10, 200)
-        self.font_spin.setValue(86)
-        self.font_spin.setToolTip('Размер шрифта подписей координат')
+        self.font_spin = QDoubleSpinBox()
+        self.font_spin.setRange(10.0, 500.0)
+        self.font_spin.setValue(100.0)
+        self.font_spin.setSingleStep(10.0)
+        self.font_spin.setDecimals(1)
+        self.font_spin.setToolTip('Размер шрифта подписей координат в метрах')
         layout.addWidget(self.font_spin, 2, 1)
 
-        # Text margin
-        self.margin_label = QLabel('Отступ текста (px):')
+        # Text margin (in meters)
+        self.margin_label = QLabel('Отступ текста (м):')
         layout.addWidget(self.margin_label, 3, 0)
-        self.margin_spin = QSpinBox()
-        self.margin_spin.setRange(0, 100)
-        self.margin_spin.setValue(43)
-        self.margin_spin.setToolTip('Отступ подписи от края изображения')
+        self.margin_spin = QDoubleSpinBox()
+        self.margin_spin.setRange(0.0, 200.0)
+        self.margin_spin.setValue(50.0)
+        self.margin_spin.setSingleStep(5.0)
+        self.margin_spin.setDecimals(1)
+        self.margin_spin.setToolTip('Отступ подписи от края изображения в метрах')
         layout.addWidget(self.margin_spin, 3, 1)
 
-        # Label background padding
-        self.padding_label = QLabel('Отступ фона (px):')
+        # Label background padding (in meters)
+        self.padding_label = QLabel('Отступ фона (м):')
         layout.addWidget(self.padding_label, 4, 0)
-        self.padding_spin = QSpinBox()
-        self.padding_spin.setRange(0, 50)
-        self.padding_spin.setValue(6)
-        self.padding_spin.setToolTip('Внутренний отступ подложки вокруг текста')
+        self.padding_spin = QDoubleSpinBox()
+        self.padding_spin.setRange(0.0, 100.0)
+        self.padding_spin.setValue(10.0)
+        self.padding_spin.setSingleStep(1.0)
+        self.padding_spin.setDecimals(1)
+        self.padding_spin.setToolTip(
+            'Внутренний отступ подложки вокруг текста в метрах'
+        )
         layout.addWidget(self.padding_spin, 4, 1)
 
         self.setLayout(layout)
@@ -294,27 +307,29 @@ class GridSettingsWidget(QWidget):
         self.padding_label.setEnabled(checked)
         self.padding_spin.setEnabled(checked)
 
-    def get_settings(self) -> dict[str, int | bool]:
+    def get_settings(self) -> dict[str, float | bool]:
         """Get grid settings as dictionary."""
         return {
-            'grid_width_px': self.width_spin.value(),
-            'grid_font_size': self.font_spin.value(),
-            'grid_text_margin': self.margin_spin.value(),
-            'grid_label_bg_padding': self.padding_spin.value(),
+            'grid_width_m': self.width_spin.value(),
+            'grid_font_size_m': self.font_spin.value(),
+            'grid_text_margin_m': self.margin_spin.value(),
+            'grid_label_bg_padding_m': self.padding_spin.value(),
             'display_grid': self.display_grid_cb.isChecked(),
         }
 
-    def set_settings(self, settings: dict[str, int | bool]) -> None:
+    def set_settings(self, settings: dict[str, float | bool]) -> None:
         """Set grid settings from dictionary."""
         # Block signals to prevent feedback loops when setting values programmatically
         with QSignalBlocker(self.width_spin):
-            self.width_spin.setValue(settings.get('grid_width_px', 4))
+            self.width_spin.setValue(float(settings.get('grid_width_m', 5.0)))
         with QSignalBlocker(self.font_spin):
-            self.font_spin.setValue(settings.get('grid_font_size', 86))
+            self.font_spin.setValue(float(settings.get('grid_font_size_m', 100.0)))
         with QSignalBlocker(self.margin_spin):
-            self.margin_spin.setValue(settings.get('grid_text_margin', 43))
+            self.margin_spin.setValue(float(settings.get('grid_text_margin_m', 50.0)))
         with QSignalBlocker(self.padding_spin):
-            self.padding_spin.setValue(settings.get('grid_label_bg_padding', 6))
+            self.padding_spin.setValue(
+                float(settings.get('grid_label_bg_padding_m', 10.0))
+            )
         with QSignalBlocker(self.display_grid_cb):
             self.display_grid_cb.setChecked(bool(settings.get('display_grid', True)))
 
@@ -714,12 +729,18 @@ class MainWindow(QMainWindow):
         coords_layout.addWidget(control_point_group)
         left_container.addWidget(coords_frame)
 
-        # Настройки
+        # Настройки с вкладками
         settings_container = QFrame()
         settings_container.setFrameStyle(QFrame.Shape.StyledPanel)
-        settings_vertical_layout = QVBoxLayout()
+        settings_main_layout = QVBoxLayout()
+        settings_main_layout.addWidget(QLabel('Настройки'))
 
-        settings_vertical_layout.addWidget(QLabel('Настройки'))
+        # Создаём вкладки
+        settings_tabs = QTabWidget()
+
+        # === Вкладка "Основные" ===
+        main_tab = QWidget()
+        main_tab_layout = QVBoxLayout()
 
         # Тип карты и чекбокс изолиний
         maptype_row = QHBoxLayout()
@@ -754,14 +775,7 @@ class MainWindow(QMainWindow):
         maptype_row.addWidget(self.map_type_combo, 1)
         maptype_row.addSpacing(8)
         maptype_row.addWidget(self.contours_checkbox)
-        settings_vertical_layout.addLayout(maptype_row)
-
-        self.helmert_group = QGroupBox('Датум-трансформация СК-42 → WGS84 (Helmert)')
-        helmert_group_layout = QVBoxLayout()
-        self.helmert_widget = HelmertSettingsWidget()
-        helmert_group_layout.addWidget(self.helmert_widget)
-        self.helmert_group.setLayout(helmert_group_layout)
-        settings_vertical_layout.addWidget(self.helmert_group)
+        main_tab_layout.addLayout(maptype_row)
 
         settings_horizontal_layout = QHBoxLayout()
 
@@ -783,8 +797,28 @@ class MainWindow(QMainWindow):
         self.quality_slider = self.output_widget.quality_slider
 
         settings_horizontal_layout.addWidget(output_frame)
-        settings_vertical_layout.addLayout(settings_horizontal_layout)
-        settings_container.setLayout(settings_vertical_layout)
+        main_tab_layout.addLayout(settings_horizontal_layout)
+        main_tab_layout.addStretch()
+        main_tab.setLayout(main_tab_layout)
+        settings_tabs.addTab(main_tab, 'Основные')
+
+        # === Вкладка "Опции" ===
+        options_tab = QWidget()
+        options_tab_layout = QVBoxLayout()
+
+        self.helmert_group = QGroupBox('Датум-трансформация СК-42 → WGS84 (Helmert)')
+        helmert_group_layout = QVBoxLayout()
+        self.helmert_widget = HelmertSettingsWidget()
+        helmert_group_layout.addWidget(self.helmert_widget)
+        self.helmert_group.setLayout(helmert_group_layout)
+        options_tab_layout.addWidget(self.helmert_group)
+
+        options_tab_layout.addStretch()
+        options_tab.setLayout(options_tab_layout)
+        settings_tabs.addTab(options_tab, 'Опции')
+
+        settings_main_layout.addWidget(settings_tabs)
+        settings_container.setLayout(settings_main_layout)
         left_container.addWidget(settings_container)
 
         # Растяжка перед кнопкой создания карты
@@ -1343,10 +1377,10 @@ class MainWindow(QMainWindow):
 
         # Update grid settings
         grid_settings = {
-            'grid_width_px': settings.grid_width_px,
-            'grid_font_size': settings.grid_font_size,
-            'grid_text_margin': settings.grid_text_margin,
-            'grid_label_bg_padding': settings.grid_label_bg_padding,
+            'grid_width_m': settings.grid_width_m,
+            'grid_font_size_m': settings.grid_font_size_m,
+            'grid_text_margin_m': settings.grid_text_margin_m,
+            'grid_label_bg_padding_m': settings.grid_label_bg_padding_m,
             'display_grid': settings.display_grid,
         }
         self.grid_widget.set_settings(grid_settings)

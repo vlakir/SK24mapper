@@ -1,0 +1,848 @@
+
+tests/test_constants.py::TestMapType::test_all_map_types_exist PASSED    [  0%]
+tests/test_constants.py::TestMapType::test_map_type_values PASSED        [  0%]
+tests/test_constants.py::TestMapType::test_all_map_types_have_labels PASSED [
+0%]
+tests/test_constants.py::TestDefaultMapType::test_returns_satellite PASSED [  0
+%]
+tests/test_constants.py::TestDefaultMapType::test_returns_map_type_instance PAS
+SED [  1%]
+tests/test_constants.py::TestMapTypeToStyleId::test_satellite_style PASSED [  1
+%]
+tests/test_constants.py::TestMapTypeToStyleId::test_hybrid_style PASSED  [  1%]
+tests/test_constants.py::TestMapTypeToStyleId::test_streets_style PASSED [  1%]
+tests/test_constants.py::TestMapTypeToStyleId::test_outdoors_style PASSED [  1%
+]
+tests/test_constants.py::TestMapTypeToStyleId::test_elevation_returns_none PASS
+ED [  2%]
+tests/test_constants.py::TestMapTypeToStyleId::test_string_input PASSED  [  2%]
+tests/test_constants.py::TestMapTypeToStyleId::test_invalid_string_fallback PAS
+SED [  2%]
+tests/test_constants.py::TestNumericConstants::test_earth_radius PASSED  [  2%]
+tests/test_constants.py::TestNumericConstants::test_tile_sizes PASSED    [  2%]
+tests/test_constants.py::TestNumericConstants::test_retina_factor PASSED [  3%]
+tests/test_constants.py::TestNumericConstants::test_static_scale PASSED  [  3%]
+tests/test_constants.py::TestNumericConstants::test_desired_zoom PASSED  [  3%]
+tests/test_constants.py::TestNumericConstants::test_download_concurrency PASSED
+ [  3%]
+tests/test_constants.py::TestNumericConstants::test_grid_step PASSED     [  4%]
+tests/test_constants.py::TestNumericConstants::test_additive_ratio PASSED [  4%
+]
+tests/test_constants.py::TestNumericConstants::test_http_timeout PASSED  [  4%]
+tests/test_constants.py::TestNumericConstants::test_http_cache_enabled PASSED [
+  4%]
+tests/test_constants.py::TestNumericConstants::test_max_side_size PASSED [  4%]
+tests/test_constants.py::TestGKConstants::test_gk_zone_width PASSED      [  5%]
+tests/test_constants.py::TestGKConstants::test_gk_false_easting PASSED   [  5%]
+tests/test_constants.py::TestGKConstants::test_max_gk_zone PASSED        [  5%]
+tests/test_constants.py::TestGKConstants::test_epsg_base PASSED          [  5%]
+tests/test_constants.py::TestSK42Bounds::test_longitude_bounds PASSED    [  5%]
+tests/test_constants.py::TestSK42Bounds::test_latitude_bounds PASSED     [  6%]
+tests/test_constants.py::TestSK42Bounds::test_moscow_in_bounds PASSED    [  6%]
+tests/test_contours_builder.py::TestSeedGrid::test_create PASSED         [  6%]
+tests/test_contours_builder.py::TestContourLevels::test_create PASSED    [  6%]
+tests/test_contours_builder.py::TestSampling::test_create PASSED         [  6%]
+tests/test_contours_builder.py::TestCoordMap::test_create PASSED         [  7%]
+tests/test_contours_builder.py::TestBuildOpts::test_create PASSED        [  7%]
+tests/test_contours_builder.py::TestBuildSeedPolylines::test_not_implemented PA
+SSED [  7%]
+tests/test_contours_helpers.py::TestTileOverlapParams::test_create_params PASSE
+D [  7%]
+tests/test_contours_helpers.py::TestTileOverlapParams::test_create_params_with_
+crop_rect PASSED [  8%]
+tests/test_contours_helpers.py::TestTileOverlapRect::test_full_overlap PASSED [
+  8%]
+tests/test_contours_helpers.py::TestTileOverlapRect::test_partial_overlap PASSE
+D [  8%]
+tests/test_contours_helpers.py::TestTileOverlapRect::test_no_overlap PASSED [
+8%]
+tests/test_contours_helpers.py::TestTileOverlapRect::test_edge_touch_no_overlap
+ PASSED [  8%]
+tests/test_contours_helpers.py::TestTileOverlapRect::test_first_tile PASSED [
+9%]
+tests/test_contours_helpers.py::TestTxTyFromIndex::test_first_index PASSED [  9
+%]
+tests/test_contours_helpers.py::TestTxTyFromIndex::test_first_row PASSED [  9%]
+tests/test_contours_helpers.py::TestTxTyFromIndex::test_second_row PASSED [  9%
+]
+tests/test_contours_helpers.py::TestTxTyFromIndex::test_arbitrary_index PASSED
+[  9%]
+tests/test_contours_helpers.py::TestTxTyFromIndex::test_single_column PASSED [
+10%]
+tests/test_contours_labels.py::TestDrawContourLabels::test_empty_polylines PASS
+ED [ 10%]
+tests/test_contours_labels.py::TestDrawContourLabels::test_dry_run_mode PASSED
+[ 10%]
+tests/test_contours_labels.py::TestDrawContourLabels::test_with_crop_rect PASSE
+D [ 10%]
+tests/test_contours_labels.py::TestDrawContourLabels::test_single_level_single_
+polyline PASSED [ 11%]
+tests/test_contours_labels.py::TestDrawContourLabels::test_multiple_polylines_p
+er_level PASSED [ 11%]
+tests/test_contours_labels.py::TestDrawContourLabels::test_different_mpp_values
+ PASSED [ 11%]
+tests/test_contours_labels.py::TestDrawContourLabels::test_different_seed_ds_va
+lues PASSED [ 11%]
+tests/test_contours_labels.py::TestDrawContourLabels::test_short_polyline PASSE
+D [ 11%]
+tests/test_contours_labels.py::TestDrawContourLabels::test_returns_bounding_box
+es PASSED [ 12%]
+tests/test_contours_labels_overlay.py::TestDrawContourLabelsOverlay::test_empty
+_seeds PASSED [ 12%]
+tests/test_contours_labels_overlay.py::TestDrawContourLabelsOverlay::test_dry_r
+un_returns_boxes PASSED [ 12%]
+tests/test_contours_labels_overlay.py::TestDrawContourLabelsOverlay::test_retur
+ns_list PASSED [ 12%]
+tests/test_contours_labels_overlay.py::TestDrawContourLabelsOverlay::test_with_
+simple_polyline PASSED [ 12%]
+tests/test_contours_labels_overlay.py::TestDrawContourLabelsOverlay::test_multi
+ple_levels PASSED [ 13%]
+tests/test_contours_module.py::TestContoursModule::test_has_path PASSED  [ 13%]
+tests/test_contours_module.py::TestContoursModule::test_path_is_list PASSED [ 1
+3%]
+tests/test_contours_module.py::TestContoursModule::test_path_contains_contours
+PASSED [ 13%]
+tests/test_contours_seeds.py::TestMSParams::test_create_default PASSED   [ 13%]
+tests/test_contours_seeds.py::TestSmoothPolyline::test_empty_list PASSED [ 14%]
+tests/test_contours_seeds.py::TestSmoothPolyline::test_single_point PASSED [ 14
+%]
+tests/test_contours_seeds.py::TestSmoothPolyline::test_two_points PASSED [ 14%]
+tests/test_contours_seeds.py::TestSmoothPolyline::test_preserves_endpoints PASS
+ED [ 14%]
+tests/test_contours_seeds.py::TestSmoothPolyline::test_with_smoothing_factor PA
+SSED [ 15%]
+tests/test_contours_seeds.py::TestSimpleSmoothPolyline::test_empty_list PASSED
+[ 15%]
+tests/test_contours_seeds.py::TestSimpleSmoothPolyline::test_single_point PASSE
+D [ 15%]
+tests/test_contours_seeds.py::TestSimpleSmoothPolyline::test_two_points PASSED
+[ 15%]
+tests/test_contours_seeds.py::TestSimpleSmoothPolyline::test_preserves_endpoint
+s PASSED [ 15%]
+tests/test_contours_seeds.py::TestSimpleSmoothPolyline::test_with_iterations PA
+SSED [ 16%]
+tests/test_contours_seeds.py::TestBuildSeedPolylines::test_flat_dem_no_contours
+ PASSED [ 16%]
+tests/test_contours_seeds.py::TestBuildSeedPolylines::test_simple_gradient PASS
+ED [ 16%]
+tests/test_contours_seeds.py::TestBuildSeedPolylines::test_returns_dict PASSED
+[ 16%]
+tests/test_contours_seeds.py::TestBuildSeedPolylines::test_with_ms_params PASSE
+D [ 16%]
+tests/test_contours_seeds.py::TestBuildSeedPolylines::test_empty_dem PASSED [ 1
+7%]
+tests/test_contours_seeds.py::TestBuildSeedPolylines::test_single_row_dem PASSE
+D [ 17%]
+tests/test_contours_seeds.py::TestBuildSeedPolylines::test_multiple_levels PASS
+ED [ 17%]
+tests/test_contours_seeds.py::TestBuildSeedPolylines::test_negative_elevations
+PASSED [ 17%]
+tests/test_contours_seeds.py::TestSmoothPolylineExtended::test_many_points PASS
+ED [ 18%]
+tests/test_contours_seeds.py::TestSmoothPolylineExtended::test_zigzag_pattern P
+ASSED [ 18%]
+tests/test_contours_seeds.py::TestSmoothPolylineExtended::test_closed_loop PASS
+ED [ 18%]
+tests/test_contours_seeds.py::TestSimpleSmoothPolylineExtended::test_many_point
+s PASSED [ 18%]
+tests/test_contours_seeds.py::TestSimpleSmoothPolylineExtended::test_multiple_i
+terations PASSED [ 18%]
+tests/test_contours_seeds.py::TestSimpleSmoothPolylineExtended::test_zero_itera
+tions PASSED [ 19%]
+tests/test_coords_sk42.py::TestDetermineZone::test_zone_from_x_coordinate_zone_
+7 PASSED [ 19%]
+tests/test_coords_sk42.py::TestDetermineZone::test_zone_from_x_coordinate_zone_
+12 PASSED [ 19%]
+tests/test_coords_sk42.py::TestDetermineZone::test_zone_from_x_coordinate_zone_
+1 PASSED [ 19%]
+tests/test_coords_sk42.py::TestDetermineZone::test_zone_from_x_coordinate_zone_
+60 PASSED [ 19%]
+tests/test_coords_sk42.py::TestDetermineZone::test_zone_minimum_boundary PASSED
+ [ 20%]
+tests/test_coords_sk42.py::TestBuildSk42GkCrs::test_build_crs_zone_7 PASSED [ 2
+0%]
+tests/test_coords_sk42.py::TestBuildSk42GkCrs::test_build_crs_zone_12 PASSED [
+20%]
+tests/test_coords_sk42.py::TestBuildSk42GkCrs::test_build_crs_zone_1 PASSED [ 2
+0%]
+tests/test_coords_sk42.py::TestBuildSk42GkCrs::test_crs_is_projected PASSED [ 2
+0%]
+tests/test_coords_sk42.py::TestValidateSk42Bounds::test_valid_coordinates_cente
+r PASSED [ 21%]
+tests/test_coords_sk42.py::TestValidateSk42Bounds::test_valid_coordinates_at_bo
+undaries PASSED [ 21%]
+tests/test_coords_sk42.py::TestValidateSk42Bounds::test_invalid_longitude_below
+_min PASSED [ 21%]
+tests/test_coords_sk42.py::TestValidateSk42Bounds::test_invalid_longitude_above
+_max PASSED [ 21%]
+tests/test_coords_sk42.py::TestValidateSk42Bounds::test_invalid_latitude_below_
+min PASSED [ 22%]
+tests/test_coords_sk42.py::TestValidateSk42Bounds::test_invalid_latitude_above_
+max PASSED [ 22%]
+tests/test_coords_sk42_extended.py::TestDetermineZone::test_zone_from_prefixed_
+x PASSED [ 22%]
+tests/test_coords_sk42_extended.py::TestDetermineZone::test_zone_10 PASSED [ 22
+%]
+tests/test_coords_sk42_extended.py::TestDetermineZone::test_zone_1 PASSED [ 22%
+]
+tests/test_coords_sk42_extended.py::TestDetermineZone::test_zone_clamp_low PASS
+ED [ 23%]
+tests/test_coords_sk42_extended.py::TestDetermineZone::test_zone_clamp_high PAS
+SED [ 23%]
+tests/test_coords_sk42_extended.py::TestDetermineZone::test_typical_moscow_coor
+ds PASSED [ 23%]
+tests/test_coords_sk42_extended.py::TestBuildSk42GkCrs::test_returns_crs PASSED
+ [ 23%]
+tests/test_coords_sk42_extended.py::TestBuildSk42GkCrs::test_zone_7 PASSED [ 23
+%]
+tests/test_coords_sk42_extended.py::TestBuildSk42GkCrs::test_zone_10 PASSED [ 2
+4%]
+tests/test_coords_sk42_extended.py::TestBuildSk42GkCrs::test_different_zones_di
+fferent_crs PASSED [ 24%]
+tests/test_coords_sk42_extended.py::TestValidateSk42Bounds::test_valid_moscow P
+ASSED [ 24%]
+tests/test_coords_sk42_extended.py::TestValidateSk42Bounds::test_valid_novosibi
+rsk PASSED [ 24%]
+tests/test_coords_sk42_extended.py::TestValidateSk42Bounds::test_valid_boundary
+_min PASSED [ 25%]
+tests/test_coords_sk42_extended.py::TestValidateSk42Bounds::test_valid_boundary
+_max PASSED [ 25%]
+tests/test_coords_sk42_extended.py::TestValidateSk42Bounds::test_invalid_longit
+ude_low PASSED [ 25%]
+tests/test_coords_sk42_extended.py::TestValidateSk42Bounds::test_invalid_longit
+ude_high PASSED [ 25%]
+tests/test_coords_sk42_extended.py::TestValidateSk42Bounds::test_invalid_latitu
+de_low PASSED [ 25%]
+tests/test_coords_sk42_extended.py::TestValidateSk42Bounds::test_invalid_latitu
+de_high PASSED [ 26%]
+tests/test_diagnostics.py::TestLogMemoryUsage::test_does_not_raise PASSED [ 26%
+]
+tests/test_diagnostics.py::TestLogMemoryUsage::test_with_label PASSED    [ 26%]
+tests/test_diagnostics.py::TestLogMemoryUsage::test_empty_label PASSED   [ 26%]
+tests/test_diagnostics.py::TestLogThreadStatus::test_does_not_raise PASSED [ 26
+%]
+tests/test_diagnostics.py::TestLogThreadStatus::test_empty_context PASSED [ 27%
+]
+tests/test_diagnostics.py::TestGetMemoryInfo::test_returns_dict PASSED   [ 27%]
+tests/test_diagnostics.py::TestGetMemoryInfo::test_contains_rss PASSED   [ 27%]
+tests/test_diagnostics.py::TestGetThreadInfo::test_returns_dict PASSED   [ 27%]
+tests/test_diagnostics.py::TestGetThreadInfo::test_contains_count PASSED [ 27%]
+tests/test_diagnostics.py::TestGetFileDescriptorInfo::test_returns_dict PASSED
+[ 28%]
+tests/test_diagnostics.py::TestGetSystemLoad::test_returns_dict PASSED   [ 28%]
+tests/test_diagnostics.py::TestMonitorResourceChanges::test_without_before_info
+ PASSED [ 28%]
+tests/test_diagnostics.py::TestMonitorResourceChanges::test_with_before_info PA
+SSED [ 28%]
+tests/test_diagnostics.py::TestResourceMonitor::test_context_manager PASSED [ 2
+9%]
+tests/test_diagnostics.py::TestResourceMonitor::test_captures_operation_name PA
+SSED [ 29%]
+tests/test_diagnostics.py::TestResourceMonitor::test_with_exception PASSED [ 29
+%]
+tests/test_diagnostics.py::TestResourceMonitor::test_nested_monitors PASSED [ 2
+9%]
+tests/test_diagnostics.py::TestDiagnosticsExtended::test_get_memory_info_keys P
+ASSED [ 29%]
+tests/test_diagnostics.py::TestDiagnosticsExtended::test_get_thread_info_keys P
+ASSED [ 30%]
+tests/test_diagnostics.py::TestDiagnosticsExtended::test_get_file_descriptor_in
+fo_keys PASSED [ 30%]
+tests/test_diagnostics.py::TestDiagnosticsExtended::test_get_system_load_keys P
+ASSED [ 30%]
+tests/test_diagnostics.py::TestDiagnosticsExtended::test_log_memory_usage_multi
+ple_calls PASSED [ 30%]
+tests/test_diagnostics.py::TestDiagnosticsExtended::test_log_thread_status_mult
+iple_calls PASSED [ 30%]
+tests/test_diagnostics.py::TestDiagnosticsExtended::test_resource_monitor_multi
+ple_operations PASSED [ 31%]
+tests/test_diagnostics.py::TestDiagnosticsExtended::test_monitor_resource_chang
+es_returns_dict_or_none PASSED [ 31%]
+tests/test_diagnostics.py::TestDiagnosticsExtended::test_get_memory_info_no_exc
+eption PASSED [ 31%]
+tests/test_diagnostics.py::TestDiagnosticsExtended::test_get_thread_info_no_exc
+eption PASSED [ 31%]
+tests/test_diagnostics_extended.py::TestDiagnostics::test_get_memory_info PASSE
+D [ 31%]
+tests/test_diagnostics_extended.py::TestDiagnostics::test_get_thread_info PASSE
+D [ 32%]
+tests/test_diagnostics_extended.py::TestDiagnostics::test_get_file_descriptor_i
+nfo PASSED [ 32%]
+tests/test_diagnostics_extended.py::TestDiagnostics::test_get_sqlite_info PASSE
+D [ 32%]
+tests/test_diagnostics_extended.py::TestDiagnostics::test_get_system_load PASSE
+D [ 32%]
+tests/test_diagnostics_extended.py::TestDiagnostics::test_log_memory_usage PASS
+ED [ 33%]
+tests/test_diagnostics_extended.py::TestDiagnostics::test_log_thread_status PAS
+SED [ 33%]
+tests/test_diagnostics_extended.py::TestDiagnostics::test_log_comprehensive_dia
+gnostics PASSED [ 33%]
+tests/test_diagnostics_extended.py::TestDiagnostics::test_monitor_resource_chan
+ges PASSED [ 33%]
+tests/test_diagnostics_extended.py::TestDiagnostics::test_resource_monitor PASS
+ED [ 33%]
+tests/test_diagnostics_extended.py::TestDiagnostics::test_run_deep_verification
+_mock PASSED [ 34%]
+tests/test_diagnostics_extended.py::TestDiagnostics::test_ensure_writable_dir P
+ASSED [ 34%]
+tests/test_domen.py::TestMapSettingsValidators::test_mask_opacity_valid PASSED
+[ 34%]
+tests/test_domen.py::TestMapSettingsValidators::test_mask_opacity_zero PASSED [
+ 34%]
+tests/test_domen.py::TestMapSettingsValidators::test_mask_opacity_one PASSED [
+34%]
+tests/test_domen.py::TestMapSettingsValidators::test_mask_opacity_invalid_below
+_zero PASSED [ 35%]
+tests/test_domen.py::TestMapSettingsValidators::test_mask_opacity_invalid_above
+_one PASSED [ 35%]
+tests/test_domen.py::TestMapSettingsValidators::test_brightness_clamped_to_max
+PASSED [ 35%]
+tests/test_domen.py::TestMapSettingsValidators::test_brightness_clamped_to_min
+PASSED [ 35%]
+tests/test_domen.py::TestMapSettingsValidators::test_contrast_clamped_to_max PA
+SSED [ 36%]
+tests/test_domen.py::TestMapSettingsValidators::test_saturation_clamped_to_max
+PASSED [ 36%]
+tests/test_domen.py::TestMapSettingsProperties::test_bottom_left_x_sk42_gk PASS
+ED [ 36%]
+tests/test_domen.py::TestMapSettingsProperties::test_bottom_left_y_sk42_gk PASS
+ED [ 36%]
+tests/test_domen.py::TestMapSettingsProperties::test_top_right_x_sk42_gk PASSED
+ [ 36%]
+tests/test_domen.py::TestMapSettingsProperties::test_top_right_y_sk42_gk PASSED
+ [ 37%]
+tests/test_domen.py::TestMapSettingsProperties::test_control_point_coordinates
+PASSED [ 37%]
+tests/test_domen.py::TestMapSettingsHelmert::test_custom_helmert_all_set PASSED
+ [ 37%]
+tests/test_domen.py::TestMapSettingsHelmert::test_custom_helmert_none_when_part
+ial PASSED [ 37%]
+tests/test_domen.py::TestMapSettingsHelmert::test_custom_helmert_none_by_defaul
+t PASSED [ 37%]
+tests/test_domen.py::TestMapSettingsExtraFields::test_extra_fields_ignored PASS
+ED [ 38%]
+tests/test_domen_extended.py::TestMapSettingsGridParams::test_grid_width_m_defa
+ult PASSED [ 38%]
+tests/test_domen_extended.py::TestMapSettingsGridParams::test_grid_font_size_m
+PASSED [ 38%]
+tests/test_domen_extended.py::TestMapSettingsGridParams::test_grid_text_margin_
+m PASSED [ 38%]
+tests/test_domen_extended.py::TestMapSettingsGridParams::test_grid_label_bg_pad
+ding_m PASSED [ 38%]
+tests/test_domen_extended.py::TestMapSettingsImageParams::test_brightness_defau
+lt PASSED [ 39%]
+tests/test_domen_extended.py::TestMapSettingsImageParams::test_contrast_default
+ PASSED [ 39%]
+tests/test_domen_extended.py::TestMapSettingsImageParams::test_saturation_defau
+lt PASSED [ 39%]
+tests/test_domen_extended.py::TestMapSettingsImageParams::test_brightness_custo
+m PASSED [ 39%]
+tests/test_domen_extended.py::TestMapSettingsImageParams::test_contrast_custom
+PASSED [ 40%]
+tests/test_domen_extended.py::TestMapSettingsImageParams::test_saturation_custo
+m PASSED [ 40%]
+tests/test_domen_extended.py::TestMapSettingsControlPoint::test_control_point_d
+isabled_by_default PASSED [ 40%]
+tests/test_domen_extended.py::TestMapSettingsControlPoint::test_control_point_e
+nabled PASSED [ 40%]
+tests/test_domen_extended.py::TestMapSettingsControlPoint::test_control_point_x
+_has_default PASSED [ 40%]
+tests/test_domen_extended.py::TestMapSettingsControlPoint::test_control_point_y
+_has_default PASSED [ 41%]
+tests/test_domen_extended.py::TestMapSettingsControlPoint::test_control_point_x
+_sk42_gk PASSED [ 41%]
+tests/test_domen_extended.py::TestMapSettingsControlPoint::test_control_point_y
+_sk42_gk PASSED [ 41%]
+tests/test_domen_extended.py::TestMapSettingsMapType::test_map_type_default PAS
+SED [ 41%]
+tests/test_domen_extended.py::TestMapSettingsMapType::test_map_type_hybrid PASS
+ED [ 41%]
+tests/test_domen_extended.py::TestMapSettingsMapType::test_map_type_streets PAS
+SED [ 42%]
+tests/test_domen_extended.py::TestMapSettingsDisplayOptions::test_display_grid_
+default PASSED [ 42%]
+tests/test_domen_extended.py::TestMapSettingsDisplayOptions::test_display_grid_
+disabled PASSED [ 42%]
+tests/test_domen_extended.py::TestMapSettingsDisplayOptions::test_overlay_conto
+urs_default PASSED [ 42%]
+tests/test_domen_extended.py::TestMapSettingsDisplayOptions::test_overlay_conto
+urs_enabled PASSED [ 43%]
+tests/test_domen_extended.py::TestMapSettingsHelmertExtended::test_helmert_dx_d
+efault PASSED [ 43%]
+tests/test_domen_extended.py::TestMapSettingsHelmertExtended::test_helmert_all_
+params PASSED [ 43%]
+tests/test_domen_extended.py::TestMapSettingsHelmertExtended::test_custom_helme
+rt_returns_tuple PASSED [ 43%]
+tests/test_domen_extended.py::TestMapSettingsCoordinates::test_bottom_left_x_sk
+42_gk PASSED [ 43%]
+tests/test_domen_extended.py::TestMapSettingsCoordinates::test_bottom_left_y_sk
+42_gk PASSED [ 44%]
+tests/test_domen_extended.py::TestMapSettingsCoordinates::test_top_right_x_sk42
+_gk PASSED [ 44%]
+tests/test_domen_extended.py::TestMapSettingsCoordinates::test_top_right_y_sk42
+_gk PASSED [ 44%]
+tests/test_domen_extended.py::TestMapSettingsCoordinates::test_top_right_greate
+r_than_bottom_left PASSED [ 44%]
+tests/test_domen_extended.py::TestMapSettingsOutputPath::test_output_path_defau
+lt PASSED [ 44%]
+tests/test_domen_extended.py::TestMapSettingsOutputPath::test_output_path_custo
+m PASSED [ 45%]
+tests/test_domen_extended.py::TestMapSettingsFromToCoords::test_from_x_high PAS
+SED [ 45%]
+tests/test_domen_extended.py::TestMapSettingsFromToCoords::test_from_y_high PAS
+SED [ 45%]
+tests/test_domen_extended.py::TestMapSettingsFromToCoords::test_to_x_high PASSE
+D [ 45%]
+tests/test_domen_extended.py::TestMapSettingsFromToCoords::test_to_y_high PASSE
+D [ 45%]
+tests/test_domen_extended.py::TestMapSettingsFromToCoords::test_from_x_low PASS
+ED [ 46%]
+tests/test_domen_extended.py::TestMapSettingsFromToCoords::test_from_y_low PASS
+ED [ 46%]
+tests/test_domen_extended.py::TestMapSettingsFromToCoords::test_to_x_low PASSED
+ [ 46%]
+tests/test_domen_extended.py::TestMapSettingsFromToCoords::test_to_y_low PASSED
+ [ 46%]
+tests/test_domen_extended.py::TestMapSettingsMaskOpacity::test_mask_opacity_set
+ PASSED [ 47%]
+tests/test_domen_extended.py::TestMapSettingsMaskOpacity::test_mask_opacity_zer
+o PASSED [ 47%]
+tests/test_domen_extended.py::TestMapSettingsMaskOpacity::test_mask_opacity_one
+ PASSED [ 47%]
+tests/test_elevation_provider.py::TestTileKey::test_create PASSED        [ 47%]
+tests/test_elevation_provider.py::TestTileKey::test_path_parts_no_retina PASSED
+ [ 47%]
+tests/test_elevation_provider.py::TestTileKey::test_path_parts_with_retina PASS
+ED [ 48%]
+tests/test_elevation_provider.py::TestTileKey::test_hashable PASSED      [ 48%]
+tests/test_elevation_provider.py::TestTileKey::test_equality PASSED      [ 48%]
+tests/test_elevation_provider.py::TestTileKey::test_inequality_different_z PASS
+ED [ 48%]
+tests/test_elevation_provider.py::TestTileKey::test_inequality_different_retina
+ PASSED [ 48%]
+tests/test_elevation_provider.py::TestTileKey::test_inequality_different_x PASS
+ED [ 49%]
+tests/test_elevation_provider.py::TestTileKey::test_inequality_different_y PASS
+ED [ 49%]
+tests/test_elevation_provider.py::TestTileKey::test_path_parts_zero_coords PASS
+ED [ 49%]
+tests/test_elevation_provider.py::TestTileKey::test_path_parts_large_coords PAS
+SED [ 49%]
+tests/test_elevation_provider.py::TestTileKey::test_use_in_set PASSED    [ 50%]
+tests/test_elevation_provider_extended.py::TestElevationTileProvider::test_get_
+tile_image_cached_mem PASSED [ 50%]
+tests/test_elevation_provider_extended.py::TestElevationTileProvider::test_get_
+tile_image_cached_disk PASSED [ 50%]
+tests/test_elevation_provider_extended.py::TestElevationTileProvider::test_get_
+tile_dem PASSED [ 50%]
+tests/test_elevation_provider_extended.py::TestElevationTileProvider::test_fetc
+h_raw_network PASSED [ 50%]
+tests/test_elevation_provider_extended.py::TestElevationTileProvider::test_lru_
+eviction PASSED [ 51%]
+tests/test_elevation_stats.py::TestComputeElevationRange::test_empty_samples PA
+SSED [ 51%]
+tests/test_elevation_stats.py::TestComputeElevationRange::test_normal_range PAS
+SED [ 51%]
+tests/test_elevation_stats.py::TestComputeElevationRange::test_min_range_enforc
+ed PASSED [ 51%]
+tests/test_elevation_stats.py::TestComputeElevationRange::test_single_value PAS
+SED [ 51%]
+tests/test_elevation_stats.py::TestComputeElevationRange::test_negative_elevati
+ons PASSED [ 52%]
+tests/test_elevation_stats.py::TestComputeElevationRange::test_large_range PASS
+ED [ 52%]
+tests/test_geometry.py::TestTileOverlapRectCommon::test_full_overlap PASSED [ 5
+2%]
+tests/test_geometry.py::TestTileOverlapRectCommon::test_partial_overlap_right P
+ASSED [ 52%]
+tests/test_geometry.py::TestTileOverlapRectCommon::test_partial_overlap_bottom
+PASSED [ 52%]
+tests/test_geometry.py::TestTileOverlapRectCommon::test_no_overlap_tile_left_of
+_crop PASSED [ 53%]
+tests/test_geometry.py::TestTileOverlapRectCommon::test_no_overlap_tile_above_c
+rop PASSED [ 53%]
+tests/test_geometry.py::TestTileOverlapRectCommon::test_no_overlap_tile_right_o
+f_crop PASSED [ 53%]
+tests/test_geometry.py::TestTileOverlapRectCommon::test_no_overlap_tile_below_c
+rop PASSED [ 53%]
+tests/test_geometry.py::TestTileOverlapRectCommon::test_edge_touching_no_overla
+p PASSED [ 54%]
+tests/test_geometry.py::TestTileOverlapRectCommon::test_single_pixel_overlap PA
+SSED [ 54%]
+tests/test_geometry.py::TestTileOverlapRectCommon::test_different_tile_size PAS
+SED [ 54%]
+tests/test_geometry.py::TestTileOverlapRectCommon::test_crop_rect_smaller_than_
+tile PASSED [ 54%]
+tests/test_geometry_extended.py::TestTileOverlapRectCommon::test_full_overlap P
+ASSED [ 54%]
+tests/test_geometry_extended.py::TestTileOverlapRectCommon::test_partial_overla
+p_right PASSED [ 55%]
+tests/test_geometry_extended.py::TestTileOverlapRectCommon::test_partial_overla
+p_bottom PASSED [ 55%]
+tests/test_geometry_extended.py::TestTileOverlapRectCommon::test_no_overlap_out
+side_right PASSED [ 55%]
+tests/test_geometry_extended.py::TestTileOverlapRectCommon::test_no_overlap_out
+side_bottom PASSED [ 55%]
+tests/test_geometry_extended.py::TestTileOverlapRectCommon::test_edge_touch_no_
+overlap PASSED [ 55%]
+tests/test_geometry_extended.py::TestTileOverlapRectCommon::test_first_tile_ful
+l PASSED [ 56%]
+tests/test_geometry_extended.py::TestTileOverlapRectCommon::test_crop_rect_offs
+et PASSED [ 56%]
+tests/test_geometry_extended.py::TestTileOverlapRectCommon::test_large_tile_siz
+e PASSED [ 56%]
+tests/test_geometry_extended.py::TestTileOverlapRectCommon::test_small_crop_rec
+t PASSED [ 56%]
+tests/test_http_client.py::TestResolveCacheDir::test_returns_path PASSED [ 56%]
+tests/test_http_client.py::TestResolveCacheDir::test_with_localappdata_env PASS
+ED [ 57%]
+tests/test_http_client.py::TestResolveCacheDir::test_fallback_to_home PASSED [
+57%]
+tests/test_http_client.py::TestCleanupSqliteCache::test_cleanup_nonexistent_cac
+he PASSED [ 57%]
+tests/test_http_client.py::TestCleanupSqliteCache::test_cleanup_existing_cache
+PASSED [ 57%]
+tests/test_http_client.py::TestMakeHttpSession::test_creates_session_without_ca
+che PASSED [ 58%]
+tests/test_http_client.py::TestMakeHttpSession::test_creates_session_with_cache
+_dir PASSED [ 58%]
+tests/test_http_client.py::TestValidateStyleApi::test_invalid_api_key_raises PA
+SSED [ 58%]
+tests/test_http_client.py::TestValidateStyleApi::test_connection_error_raises P
+ASSED [ 58%]
+tests/test_http_client.py::TestValidateTerrainApi::test_invalid_api_key_raises
+PASSED [ 58%]
+tests/test_image.py::TestCenterCrop::test_center_crop_exact_size PASSED  [ 59%]
+tests/test_image.py::TestCenterCrop::test_center_crop_smaller PASSED     [ 59%]
+tests/test_image.py::TestCenterCrop::test_center_crop_asymmetric PASSED  [ 59%]
+tests/test_image.py::TestCenterCrop::test_center_crop_larger_than_image PASSED
+[ 59%]
+tests/test_image.py::TestApplyWhiteMask::test_zero_opacity_returns_original PAS
+SED [ 59%]
+tests/test_image.py::TestApplyWhiteMask::test_full_opacity_returns_white PASSED
+ [ 60%]
+tests/test_image.py::TestApplyWhiteMask::test_half_opacity_blends PASSED [ 60%]
+tests/test_image.py::TestApplyWhiteMask::test_opacity_clamped_below_zero PASSED
+ [ 60%]
+tests/test_image.py::TestApplyWhiteMask::test_opacity_clamped_above_one PASSED
+[ 60%]
+tests/test_image.py::TestApplyWhiteMask::test_returns_rgb_mode PASSED    [ 61%]
+tests/test_image.py::TestDrawTextWithOutline::test_draws_text PASSED     [ 61%]
+tests/test_image.py::TestDrawTextWithOutline::test_draws_with_custom_colors PAS
+SED [ 61%]
+tests/test_image.py::TestDrawTextWithOutline::test_no_outline_when_width_zero P
+ASSED [ 61%]
+tests/test_image.py::TestDrawLabelWithBg::test_draws_label_with_background PASS
+ED [ 61%]
+tests/test_image.py::TestDrawLabelWithBg::test_custom_background_color PASSED [
+ 62%]
+tests/test_image.py::TestLoadGridFont::test_returns_font PASSED          [ 62%]
+tests/test_image.py::TestLoadGridFont::test_different_sizes PASSED       [ 62%]
+tests/test_image.py::TestLoadGridFont::test_default_size PASSED          [ 62%]
+tests/test_image.py::TestAssembleAndCrop::test_single_tile PASSED        [ 62%]
+tests/test_image.py::TestAssembleAndCrop::test_2x2_grid PASSED           [ 63%]
+tests/test_image.py::TestAssembleAndCrop::test_with_crop PASSED          [ 63%]
+tests/test_image.py::TestAssembleAndCrop::test_3x2_grid PASSED           [ 63%]
+tests/test_image.py::TestAssembleAndCrop::test_different_tile_size PASSED [ 63%
+]
+tests/test_image.py::TestRotateKeepSize::test_no_rotation PASSED         [ 63%]
+tests/test_image.py::TestRotateKeepSize::test_90_degree_rotation PASSED  [ 64%]
+tests/test_image.py::TestRotateKeepSize::test_45_degree_rotation PASSED  [ 64%]
+tests/test_image.py::TestRotateKeepSize::test_negative_rotation PASSED   [ 64%]
+tests/test_image.py::TestRotateKeepSize::test_custom_fill_color PASSED   [ 64%]
+tests/test_image.py::TestRotateKeepSize::test_rectangular_image PASSED   [ 65%]
+tests/test_image.py::TestCalculateAdaptiveGridFontSize::test_returns_positive P
+ASSED [ 65%]
+tests/test_image.py::TestCalculateAdaptiveGridFontSize::test_smaller_mpp_larger
+_font PASSED [ 65%]
+tests/test_image.py::TestCalculateAdaptiveGridFontSize::test_typical_values PAS
+SED [ 65%]
+tests/test_image.py::TestCalculateAdaptiveGridFontSize::test_very_small_mpp PAS
+SED [ 65%]
+tests/test_image.py::TestCalculateAdaptiveGridFontSize::test_very_large_mpp PAS
+SED [ 66%]
+tests/test_image_extended.py::TestDrawAxisAlignedKmGrid::test_draw_grid_full PA
+SSED [ 66%]
+tests/test_image_extended.py::TestDrawAxisAlignedKmGrid::test_draw_grid_crosses
+_only PASSED [ 66%]
+tests/test_image_extended.py::TestDrawAxisAlignedKmGrid::test_draw_grid_with_le
+gend_bounds PASSED [ 66%]
+tests/test_image_extended.py::TestDrawElevationLegend::test_draw_elevation_lege
+nd_basic PASSED [ 66%]
+tests/test_image_extended.py::TestTopographyExtended::test_build_transformers_s
+k42_with_helmert PASSED [ 67%]
+tests/test_image_extended.py::TestTopographyExtended::test_compute_grid PASSED
+[ 67%]
+tests/test_image_extended.py::TestTopographyExtended::test_compute_xyz_coverage
+ PASSED [ 67%]
+tests/test_image_extended.py::TestTopographyExtended::test_decode_terrain_rgb_t
+o_elevation_m PASSED [ 67%]
+tests/test_image_extended.py::TestTopographyExtended::test_colorize_dem_to_imag
+e PASSED [ 68%]
+tests/test_image_io.py::TestBuildSaveKwargs::test_default_quality PASSED [ 68%]
+tests/test_image_io.py::TestBuildSaveKwargs::test_custom_quality PASSED  [ 68%]
+tests/test_image_io.py::TestBuildSaveKwargs::test_quality_clamped_to_min PASSED
+ [ 68%]
+tests/test_image_io.py::TestBuildSaveKwargs::test_quality_clamped_to_max PASSED
+ [ 68%]
+tests/test_image_io.py::TestBuildSaveKwargs::test_format_is_jpeg PASSED  [ 69%]
+tests/test_image_io.py::TestBuildSaveKwargs::test_optimize_enabled PASSED [ 69%
+]
+tests/test_image_io.py::TestBuildSaveKwargs::test_progressive_enabled PASSED [
+69%]
+tests/test_image_io.py::TestBuildSaveKwargs::test_subsampling_zero PASSED [ 69%
+]
+tests/test_image_io.py::TestBuildSaveKwargs::test_exif_empty PASSED      [ 69%]
+tests/test_main_extended.py::TestMain::test_setup_logging PASSED         [ 70%]
+tests/test_misc_extended.py::test_tile_overlap_rect_common PASSED        [ 70%]
+tests/test_misc_extended.py::test_build_save_kwargs PASSED               [ 70%]
+tests/test_misc_extended.py::test_save_jpeg PASSED                       [ 71%]
+tests/test_misc_extended.py::test_map_settings_pydantic PASSED           [ 71%]
+tests/test_preview.py::TestPublishPreviewImage::test_returns_bool PASSED [ 71%]
+tests/test_preview.py::TestPublishPreviewImage::test_no_callback_returns_false
+PASSED [ 71%]
+tests/test_preview.py::TestPublishPreviewImage::test_accepts_image PASSED [ 72%
+]
+tests/test_profiles.py::TestUserProfilesDir::test_returns_path PASSED    [ 72%]
+tests/test_profiles.py::TestUserProfilesDir::test_local_profiles_preferred PASS
+ED [ 72%]
+tests/test_profiles.py::TestEnsureProfilesDir::test_returns_path PASSED  [ 72%]
+tests/test_profiles.py::TestEnsureProfilesDir::test_directory_exists PASSED [ 7
+2%]
+tests/test_profiles.py::TestListProfiles::test_returns_list PASSED       [ 73%]
+tests/test_profiles.py::TestListProfiles::test_profiles_sorted PASSED    [ 73%]
+tests/test_profiles.py::TestListProfiles::test_no_toml_extension PASSED  [ 73%]
+tests/test_profiles.py::TestProfilePath::test_returns_path_with_toml PASSED [ 7
+3%]
+tests/test_profiles.py::TestLoadProfile::test_load_nonexistent_profile PASSED [
+ 73%]
+tests/test_profiles.py::TestLoadProfile::test_load_existing_profile PASSED [ 74
+%]
+tests/test_profiles.py::TestDeleteProfile::test_delete_nonexistent_profile PASS
+ED [ 74%]
+tests/test_profiles.py::TestControlPointPrecisionTolerance::test_is_small_posit
+ive PASSED [ 74%]
+tests/test_profiles_extended.py::TestProfiles::test_save_and_load_profile PASSE
+D [ 74%]
+tests/test_profiles_extended.py::TestProfiles::test_save_profile_by_absolute_pa
+th PASSED [ 75%]
+tests/test_profiles_extended.py::TestProfiles::test_list_profiles PASSED [ 75%]
+tests/test_profiles_extended.py::TestProfiles::test_delete_profile PASSED [ 75%
+]
+tests/test_profiles_extended.py::TestProfiles::test_load_nonexistent_profile PA
+SSED [ 75%]
+tests/test_profiles_extended.py::TestProfiles::test_load_profile_with_control_p
+oint PASSED [ 75%]
+tests/test_progress.py::TestSingleLineRenderer::test_single_line_mode_init PASS
+ED [ 76%]
+tests/test_progress.py::TestSingleLineRenderer::test_multi_line_mode_init PASSE
+D [ 76%]
+tests/test_progress.py::TestSingleLineRenderer::test_write_line_updates_last_le
+n PASSED [ 76%]
+tests/test_progress.py::TestSingleLineRenderer::test_clear_line_resets_last_len
+ PASSED [ 76%]
+tests/test_progress.py::TestCallbackStore::test_set_progress_callback PASSED [
+76%]
+tests/test_progress.py::TestCallbackStore::test_set_spinner_callbacks PASSED [
+77%]
+tests/test_progress.py::TestCallbackStore::test_set_preview_image_callback PASS
+ED [ 77%]
+tests/test_progress.py::TestCallbackStore::test_publish_preview_image_with_call
+back PASSED [ 77%]
+tests/test_progress.py::TestCallbackStore::test_publish_preview_image_without_c
+allback PASSED [ 77%]
+tests/test_progress.py::TestCallbackStore::test_publish_preview_image_callback_
+exception PASSED [ 77%]
+tests/test_progress.py::TestLiveSpinner::test_spinner_initialization PASSED [ 7
+8%]
+tests/test_progress.py::TestLiveSpinner::test_spinner_start_stop PASSED  [ 78%]
+tests/test_progress.py::TestLiveSpinner::test_spinner_callbacks PASSED   [ 78%]
+tests/test_progress.py::TestConsoleProgress::test_progress_initialization PASSE
+D [ 78%]
+tests/test_progress.py::TestConsoleProgress::test_progress_step_sync PASSED [ 7
+9%]
+tests/test_progress.py::TestConsoleProgress::test_progress_total_clamped_to_min
+ PASSED [ 79%]
+tests/test_progress.py::TestConsoleProgress::test_progress_negative_total PASSE
+D [ 79%]
+tests/test_progress.py::TestCleanup::test_cleanup_all_progress_resources PASSED
+ [ 79%]
+tests/test_progress.py::TestCleanup::test_force_stop_all_spinners PASSED [ 79%]
+tests/test_progress.py::TestConsoleProgressExtended::test_step_sync_clamps_to_t
+otal PASSED [ 80%]
+tests/test_progress.py::TestConsoleProgressExtended::test_format_eta_short PASS
+ED [ 80%]
+tests/test_progress.py::TestConsoleProgressExtended::test_format_eta_long PASSE
+D [ 80%]
+tests/test_progress.py::TestConsoleProgressExtended::test_format_eta_infinity P
+ASSED [ 80%]
+tests/test_progress.py::TestConsoleProgressExtended::test_format_eta_none PASSE
+D [ 80%]
+tests/test_progress.py::TestConsoleProgressExtended::test_close_does_not_raise
+PASSED [ 81%]
+tests/test_progress.py::TestConsoleProgressExtended::test_progress_callback_cal
+led PASSED [ 81%]
+tests/test_progress.py::TestLiveSpinnerExtended::test_spinner_frames PASSED [ 8
+1%]
+tests/test_progress.py::TestLiveSpinnerExtended::test_spinner_with_final_messag
+e PASSED [ 81%]
+tests/test_progress.py::TestLiveSpinnerExtended::test_spinner_default_interval
+PASSED [ 81%]
+tests/test_render_compose.py::TestComposeFinalImage::test_no_rotation PASSED [
+82%]
+tests/test_render_compose.py::TestComposeFinalImage::test_with_rotation PASSED
+[ 82%]
+tests/test_render_compose.py::TestComposeFinalImage::test_zero_rotation PASSED
+[ 82%]
+tests/test_render_compose.py::TestComposeFinalImage::test_90_degree_rotation PA
+SSED [ 82%]
+tests/test_render_compose.py::TestComposeFinalImage::test_negative_rotation PAS
+SED [ 83%]
+tests/test_render_compose.py::TestComposeFinalImage::test_returns_rgb_image PAS
+SED [ 83%]
+tests/test_render_compose.py::TestComposeFinalImage::test_180_degree_rotation P
+ASSED [ 83%]
+tests/test_render_compose.py::TestComposeFinalImage::test_small_rotation PASSED
+ [ 83%]
+tests/test_render_compose.py::TestComposeFinalImage::test_large_image PASSED [
+83%]
+tests/test_render_preview.py::test_compose_final_image PASSED            [ 84%]
+tests/test_render_preview.py::test_save_image PASSED                     [ 84%]
+tests/test_render_preview.py::test_publish_preview_image PASSED          [ 84%]
+tests/test_service_extended.py::TestService::test_download_satellite_rectangle_
+basic PASSED [ 84%]
+tests/test_status_bar_proxy.py::test_status_bar_proxy_emit PASSED        [ 84%]
+tests/test_tiles_coverage.py::TestIterOverlappingTiles::test_all_tiles_overlap
+PASSED [ 85%]
+tests/test_tiles_coverage.py::TestIterOverlappingTiles::test_no_tiles_overlap P
+ASSED [ 85%]
+tests/test_tiles_coverage.py::TestIterOverlappingTiles::test_partial_overlap PA
+SSED [ 85%]
+tests/test_tiles_coverage.py::TestIterOverlappingTiles::test_empty_tiles_list P
+ASSED [ 85%]
+tests/test_tiles_coverage.py::TestIterOverlappingTiles::test_preserves_tile_dat
+a PASSED [ 86%]
+tests/test_tiles_executor.py::TestRunTiles::test_empty_tiles PASSED      [ 86%]
+tests/test_tiles_executor.py::TestRunTiles::test_processes_all_tiles PASSED [ 8
+6%]
+tests/test_tiles_executor.py::TestRunTiles::test_with_progress_callback PASSED
+[ 86%]
+tests/test_tiles_executor.py::TestRunTiles::test_with_skip_function PASSED [ 86
+%]
+tests/test_tiles_executor.py::TestRunTiles::test_concurrency_limit PASSED [ 87%
+]
+tests/test_tiles_executor.py::TestRunTiles::test_skip_with_progress PASSED [ 87
+%]
+tests/test_tiles_extended_2.py::TestTiles::test_tile_fetcher PASSED      [ 87%]
+tests/test_tiles_extended_2.py::TestTiles::test_stream_tiles PASSED      [ 87%]
+tests/test_tiles_extended_2.py::TestTiles::test_compute_coverage PASSED  [ 87%]
+tests/test_tiles_extended_2.py::TestTiles::test_iter_overlapping_tiles PASSED [
+ 88%]
+tests/test_tiles_fetcher.py::TestTileFetcher::test_fetch_many_empty PASSED [ 88
+%]
+tests/test_tiles_fetcher.py::TestTileFetcher::test_fetch_many_single_tile PASSE
+D [ 88%]
+tests/test_tiles_fetcher.py::TestTileFetcher::test_fetch_many_multiple_tiles PA
+SSED [ 88%]
+tests/test_tiles_fetcher.py::TestTileFetcher::test_fetch_many_with_progress PAS
+SED [ 88%]
+tests/test_tiles_fetcher.py::TestTileFetcher::test_concurrency_limit PASSED [ 8
+9%]
+tests/test_tiles_fetcher.py::TestStreamTiles::test_stream_empty PASSED   [ 89%]
+tests/test_tiles_fetcher.py::TestStreamTiles::test_stream_single_tile PASSED [
+89%]
+tests/test_tiles_fetcher.py::TestStreamTiles::test_stream_multiple_tiles PASSED
+ [ 89%]
+tests/test_topography.py::TestMetersPerPixel::test_equator_zoom_0 PASSED [ 90%]
+tests/test_topography.py::TestMetersPerPixel::test_equator_zoom_20 PASSED [ 90%
+]
+tests/test_topography.py::TestMetersPerPixel::test_higher_latitude_smaller_mpp
+PASSED [ 90%]
+tests/test_topography.py::TestMetersPerPixel::test_higher_zoom_smaller_mpp PASS
+ED [ 90%]
+tests/test_topography.py::TestLatlngToPixelXy::test_origin PASSED        [ 90%]
+tests/test_topography.py::TestLatlngToPixelXy::test_positive_longitude PASSED [
+ 91%]
+tests/test_topography.py::TestLatlngToPixelXy::test_positive_latitude PASSED [
+91%]
+tests/test_topography.py::TestPixelXyToLatlng::test_roundtrip PASSED     [ 91%]
+tests/test_topography.py::TestPixelXyToLatlng::test_center_of_world PASSED [ 91
+%]
+tests/test_topography.py::TestEstimateCropSizePx::test_returns_positive_values
+PASSED [ 91%]
+tests/test_topography.py::TestEstimateCropSizePx::test_larger_area_more_pixels
+PASSED [ 92%]
+tests/test_topography.py::TestEstimateCropSizePx::test_higher_zoom_more_pixels
+PASSED [ 92%]
+tests/test_topography.py::TestComputePercentiles::test_simple_range PASSED [ 92
+%]
+tests/test_topography.py::TestComputePercentiles::test_single_value PASSED [ 92
+%]
+tests/test_topography.py::TestComputePercentiles::test_two_values PASSED [ 93%]
+tests/test_topography.py::TestComputePercentiles::test_percentile_0_and_100 PAS
+SED [ 93%]
+tests/test_topography.py::TestChooseZoomWithLimit::test_returns_desired_zoom_wh
+en_under_limit PASSED [ 93%]
+tests/test_topography.py::TestChooseZoomWithLimit::test_reduces_zoom_when_over_
+limit PASSED [ 93%]
+tests/test_topography.py::TestChooseZoomWithLimit::test_returns_zero_for_imposs
+ible_limit PASSED [ 93%]
+tests/test_topography.py::TestComputeGrid::test_returns_correct_structure PASSE
+D [ 94%]
+tests/test_topography.py::TestComputeGrid::test_centers_count_matches_tiles PAS
+SED [ 94%]
+tests/test_topography.py::TestComputeGrid::test_with_padding PASSED      [ 94%]
+tests/test_topography.py::TestEffectiveScaleForXyz::test_tile_256_no_retina PAS
+SED [ 94%]
+tests/test_topography.py::TestEffectiveScaleForXyz::test_tile_256_with_retina P
+ASSED [ 94%]
+tests/test_topography.py::TestEffectiveScaleForXyz::test_tile_512_no_retina PAS
+SED [ 95%]
+tests/test_topography.py::TestEffectiveScaleForXyz::test_tile_512_with_retina P
+ASSED [ 95%]
+tests/test_topography.py::TestDecodeTerrainRgbToElevationM::test_sea_level PASS
+ED [ 95%]
+tests/test_topography.py::TestDecodeTerrainRgbToElevationM::test_positive_eleva
+tion PASSED [ 95%]
+tests/test_topography.py::TestDecodeTerrainRgbToElevationM::test_image_dimensio
+ns PASSED [ 95%]
+tests/test_topography.py::TestComputeXyzCoverage::test_returns_correct_structur
+e PASSED [ 96%]
+tests/test_topography.py::TestComputeXyzCoverage::test_tiles_count_matches PASS
+ED [ 96%]
+tests/test_topography.py::TestComputeXyzCoverage::test_with_padding PASSED [ 96
+%]
+tests/test_topography.py::TestComputeXyzCoverage::test_crop_rect_positive PASSE
+D [ 96%]
+tests/test_topography.py::TestComputeXyzCoverage::test_different_zoom_levels PA
+SSED [ 97%]
+tests/test_topography.py::TestComputeXyzCoverage::test_tiles_have_valid_coords
+PASSED [ 97%]
+tests/test_topography.py::TestMetersPerPixelExtended::test_higher_zoom_smaller_
+mpp PASSED [ 97%]
+tests/test_topography.py::TestMetersPerPixelExtended::test_equator_vs_high_lati
+tude PASSED [ 97%]
+tests/test_topography.py::TestMetersPerPixelExtended::test_scale_factor PASSED
+[ 97%]
+tests/test_topography.py::TestLatlngPixelConversionExtended::test_roundtrip_con
+version PASSED [ 98%]
+tests/test_topography.py::TestLatlngPixelConversionExtended::test_different_zoo
+m_levels PASSED [ 98%]
+tests/test_topography.py::TestLatlngPixelConversionExtended::test_negative_long
+itude PASSED [ 98%]
+tests/test_topography.py::TestLatlngPixelConversionExtended::test_southern_hemi
+sphere PASSED [ 98%]
+tests/test_topography.py::TestEstimateCropSizeExtended::test_larger_area_more_p
+ixels PASSED [ 98%]
+tests/test_topography.py::TestEstimateCropSizeExtended::test_higher_zoom_more_p
+ixels PASSED [ 99%]
+tests/test_topography.py::TestEstimateCropSizeExtended::test_asymmetric_dimensi
+ons PASSED [ 99%]
+tests/test_topography.py::TestComputeGridExtended::test_small_area PASSED [ 99%
+]
+tests/test_topography.py::TestComputeGridExtended::test_large_area PASSED [ 99%
+]
+tests/test_topography.py::TestComputeGridExtended::test_map_params_structure PA
+SSED [100%]
+================= 470 passed, 2 skipped, 2 warnings in 13.25s =================

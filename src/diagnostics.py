@@ -94,7 +94,12 @@ def get_file_descriptor_info() -> dict[str, Any]:
     try:
         process = psutil.Process()
         open_files = len(process.open_files())
-        connections = len(process.connections())
+        # Use net_connections() instead of deprecated connections()
+        try:
+            connections = len(process.net_connections())
+        except AttributeError:
+            # Fallback for older psutil versions
+            connections = len(process.connections())
 
         return {
             'open_files': open_files,

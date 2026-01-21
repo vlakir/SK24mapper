@@ -388,10 +388,10 @@ class MilMapperController:
         """Обновление настроек сетки (фильтруются только допустимые ключи)."""
         try:
             valid_keys = {
-                'grid_width_px',
-                'grid_font_size',
-                'grid_text_margin',
-                'grid_label_bg_padding',
+                'grid_width_m',
+                'grid_font_size_m',
+                'grid_text_margin_m',
+                'grid_label_bg_padding_m',
             }
 
             filtered_settings = {

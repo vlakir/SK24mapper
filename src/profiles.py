@@ -156,7 +156,7 @@ def save_profile(name: str, settings: MapSettings) -> Path:
     except Exception:
         logger.debug('Failed to log detailed settings in save_profile')
 
-    data = settings.model_dump()
+    data = settings.model_dump(exclude_none=True)
     text = tomlkit.dumps(data)
     path.write_text(text, encoding='utf-8')
     return path

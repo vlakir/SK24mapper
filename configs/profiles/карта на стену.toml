@@ -1,4 +1,4 @@
-from_x_high = 54
+﻿from_x_high = 54
 from_y_high = 74
 to_x_high = 54
 to_y_high = 74
@@ -7,10 +7,10 @@ from_y_low = 34
 to_x_low = 21
 to_y_low = 48
 output_path = "../maps/map.jpg"
-grid_width_px = 10
-grid_font_size = 86
-grid_text_margin = 43
-grid_label_bg_padding = 6
+grid_width_m = 10.0
+grid_font_size_m = 100.0
+grid_text_margin_m = 50.0
+grid_label_bg_padding_m = 10.0
 display_grid = true
 mask_opacity = 0.24
 jpeg_quality = 100
@@ -31,3 +31,4 @@ helmert_ds_ppm = -1.430651
 control_point_enabled = false
 control_point_x = 5415000
 control_point_y = 7440000
+

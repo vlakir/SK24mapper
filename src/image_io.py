@@ -32,9 +32,9 @@ def save_jpeg(img: Image.Image, out_path: Path, save_kwargs: dict[str, Any]) -> 
     finally:
         with contextlib.suppress(Exception):
             tmp_rgb.close()
-    # Ensure data is written to disk
-    fd = os.open(out_path, os.O_RDONLY)
+    # Ensure data is written to disk (may fail on some Windows configurations)
     try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
+        with out_path.open('rb') as f:
+            os.fsync(f.fileno())
+    except OSError:
+        pass  # fsync not supported on this file system
