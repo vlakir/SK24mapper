@@ -13,7 +13,6 @@ from constants import (
     GRID_FONT_PATH_BOLD,
     GRID_LABEL_BG_COLOR,
     GRID_LABEL_MOD,
-    GRID_LABEL_OFFSET_FRACTION,
     GRID_LABEL_THOUSAND_DIV,
     GRID_STEP_M,
     GRID_TEXT_COLOR,
@@ -35,6 +34,7 @@ from constants import (
     LEGEND_TEXT_OUTLINE_WIDTH_PX,
     LEGEND_VERTICAL_OFFSET_RATIO,
     LEGEND_WIDTH_TO_HEIGHT_RATIO,
+    MIN_POINTS_FOR_LINE,
     STATIC_SCALE,
 )
 from progress import ConsoleProgress, LiveSpinner
@@ -275,11 +275,11 @@ def draw_axis_aligned_km_grid(
     t_sk42_to_wgs: Transformer,
     step_m: int = GRID_STEP_M,
     color: tuple[int, int, int] = GRID_COLOR,
-    width_px: int = 4,
+    width_m: float = 5.0,
     scale: int = STATIC_SCALE,
-    grid_font_size: int = 86,
-    grid_text_margin: int = 43,
-    grid_label_bg_padding: int = 6,
+    grid_font_size_m: float = 100.0,
+    grid_text_margin_m: float = 50.0,
+    grid_label_bg_padding_m: float = 10.0,
     legend_bounds: tuple[int, int, int, int] | None = None,
     *,
     display_grid: bool = True,
@@ -311,17 +311,17 @@ def draw_axis_aligned_km_grid(
             координат СК‑42 → WGS‑84 (учитывает параметры Хельмерта).
         step_m: Шаг сетки в метрах; по умолчанию 1000 (GRID_STEP_M).
         color: Цвет линий/крестиков сетки в формате RGB.
-        width_px: Толщина линий сетки в пикселях (игнорируется, если display_grid=False
-            и рисуются крестики).
+        width_m: Толщина линий сетки в метрах (конвертируется в пиксели по масштабу).
         scale: Масштабный коэффициент рендеринга тайлов (обычно 1 или 2 для retina).
-        grid_font_size: Базовый размер шрифта для подписей сетки (px); фактически
-            может быть переопределён адаптивным расчётом.
-        grid_text_margin: Отступ подписей от краёв изображения (px).
-        grid_label_bg_padding: Внутренний отступ подложки под подписью (px).
+        grid_font_size_m: Размер шрифта для подписей сетки в метрах.
+        grid_text_margin_m: Отступ подписей от краёв изображения в метрах.
+        grid_label_bg_padding_m: Внутренний отступ подложки под подписью в метрах.
         legend_bounds: Опциональные границы легенды высот (x1, y1, x2, y2) — в этой
             области линии сетки прерываются, крестики не рисуются.
         display_grid: Признак полного отображения сетки. Если True — рисуются линии
             и подписи; если False — рисуются только крестики на пересечениях.
+        rotation_deg: Угол поворота изображения в градусах. Используется для
+            корректного преобразования координат сетки при повороте карты.
 
     Returns:
         None: Функция изменяет переданное изображение на месте, ничего не возвращает.
@@ -331,10 +331,19 @@ def draw_axis_aligned_km_grid(
     w, h = img.size
 
     mpp = meters_per_pixel(center_lat_wgs, zoom, scale=scale)
+    ppm = 1.0 / mpp  # pixels per meter
+
+    # Конвертация параметров из метров в пиксели
+    width_px = max(1, round(width_m * ppm))
+    grid_font_size = max(10, round(grid_font_size_m * ppm))
+    grid_text_margin = max(0, round(grid_text_margin_m * ppm))
+    grid_label_bg_padding = max(0, round(grid_label_bg_padding_m * ppm))
+
     # Вычисляем адаптивный размер шрифта на основе масштаба карты
     adaptive_font_size = calculate_adaptive_grid_font_size(mpp)
-    font = load_grid_font(adaptive_font_size)
-    ppm = 1.0 / mpp
+    # Используем заданный размер шрифта, если он больше адаптивного
+    final_font_size = max(adaptive_font_size, grid_font_size)
+    font = load_grid_font(final_font_size)
 
     cx, cy = w / 2.0, h / 2.0
 
@@ -489,7 +498,7 @@ def draw_axis_aligned_km_grid(
                 line_points.append((px, py))
 
             # Рисуем ломаную линию
-            if len(line_points) >= 2:
+            if len(line_points) >= MIN_POINTS_FOR_LINE:
                 draw.line(line_points, fill=color, width=width_px)
             grid_progress.step_sync(1)
 
@@ -541,7 +550,7 @@ def draw_axis_aligned_km_grid(
                 line_points_h.append((px, py))
 
             # Рисуем ломаную линию
-            if len(line_points_h) >= 2:
+            if len(line_points_h) >= MIN_POINTS_FOR_LINE:
                 draw.line(line_points_h, fill=color, width=width_px)
             grid_progress.step_sync(1)
 

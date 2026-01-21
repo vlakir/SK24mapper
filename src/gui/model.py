@@ -113,10 +113,10 @@ class MilMapperModel(Observable):
             to_x_low=23,
             to_y_low=49,
             output_path='../../maps/map.jpg',
-            grid_width_px=4,
-            grid_font_size=86,
-            grid_text_margin=43,
-            grid_label_bg_padding=6,
+            grid_width_m=5.0,
+            grid_font_size_m=100.0,
+            grid_text_margin_m=50.0,
+            grid_label_bg_padding_m=10.0,
             mask_opacity=0.35,
         )
         self._state = ApplicationState()

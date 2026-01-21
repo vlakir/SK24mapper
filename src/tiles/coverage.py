@@ -10,7 +10,13 @@ if TYPE_CHECKING:
 
 
 def compute_coverage(
-    bounds: Any, zoom: int
+    center_lat: float,
+    center_lng: float,
+    width_m: float,
+    height_m: float,
+    zoom: int,
+    eff_scale: int,
+    pad_px: int,
 ) -> tuple[
     list[tuple[int, tuple[int, int]]],
     tuple[int, int],
@@ -24,7 +30,15 @@ def compute_coverage(
         tiles, (tiles_x, tiles_y), crop_rect, map_params
 
     """
-    return _compute_xyz_coverage(bounds, zoom)
+    return _compute_xyz_coverage(
+        center_lat,
+        center_lng,
+        width_m,
+        height_m,
+        zoom,
+        eff_scale,
+        pad_px,
+    )
 
 
 def iter_overlapping_tiles(

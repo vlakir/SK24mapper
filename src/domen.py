@@ -33,14 +33,14 @@ class MapSettings(BaseModel):
     # Наложение изолиний поверх выбранного типа карты
     overlay_contours: bool = False
 
-    # Толщина линий сетки (px)
-    grid_width_px: int
-    # Размер шрифта подписей (px)
-    grid_font_size: int
-    # Отступ подписи от края изображения (px)
-    grid_text_margin: int
-    # Внутренний отступ подложки вокруг текста (px)
-    grid_label_bg_padding: int
+    # Толщина линий сетки (м)
+    grid_width_m: float
+    # Размер шрифта подписей (м)
+    grid_font_size_m: float
+    # Отступ подписи от края изображения (м)
+    grid_text_margin_m: float
+    # Внутренний отступ подложки вокруг текста (м)
+    grid_label_bg_padding_m: float
     # Отображать полную сетку (True) или только крестики в точках пересечения (False)
     display_grid: bool = True
     # Прозрачность белой маски (0.0 — прозрачная, 1.0 — непрозрачная)

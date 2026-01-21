@@ -25,6 +25,7 @@ pillow = "^11.3.0"
 numpy = "^2.3.3"
 pytest = "^8.4.2"
 certifi = "^2025.10.5"
+pytest-cov = "^7.0.0"
 
 
 [build-system]
@@ -92,6 +93,12 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+addopts = "-q --tb=short --cov=src --cov-report=term-missing"
+pythonpath = ["src"]
+filterwarnings = [
+    "ignore::DeprecationWarning:pydantic.*:",
+    "ignore::ResourceWarning:aiohttp.*:",
+]
 
 
 [tool.black]
@@ -103,3 +110,9 @@ max_line_length = 88
 [tool.poetry.scripts]
 helmert_tool = "gui.helmert_tool:main"
 
+
+[dependency-groups]
+dev = [
+    "pytest-cov (>=7.0.0,<8.0.0)",
+    "pytest-asyncio (>=1.3.0,<2.0.0)"
+]
