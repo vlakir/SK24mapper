@@ -22,7 +22,7 @@ from constants import (
     CONTOUR_LABEL_MIN_SEG_LEN_PX,
     CONTOUR_LABEL_OUTLINE_COLOR,
     CONTOUR_LABEL_OUTLINE_WIDTH,
-    CONTOUR_LABEL_SPACING_PX,
+    CONTOUR_LABEL_SPACING_M,
     CONTOUR_LABEL_TEXT_COLOR,
     CONTOUR_LABELS_ENABLED,
     GRID_FONT_PATH,
@@ -132,14 +132,18 @@ def draw_contour_labels(
         bx0, by0, bx1, by1 = b
         return not (ax1 <= bx0 or bx1 <= ax0 or ay1 <= by0 or by1 <= ay0)
 
+    spacing_px = max(1, round(CONTOUR_LABEL_SPACING_M / max(1e-9, mpp)))
+
     logger.info(
-        'Подписи изолиний: старт (levels=%d, img=%dx%d, seed_ds=%d, dry_run=%s). Пороги: spacing=%d, min_seg=%d, edge=%d, outline=%d, gap_bg=%s',
+        'Подписи изолиний: старт (levels=%d, img=%dx%d, seed_ds=%d, dry_run=%s). '
+        'Пороги: spacing_m=%.1f (spacing_px=%d), min_seg=%d, edge=%d, outline=%d, gap_bg=%s',
         len(levels),
         w,
         h,
         int(seed_ds),
         dry_run,
-        int(CONTOUR_LABEL_SPACING_PX),
+        float(CONTOUR_LABEL_SPACING_M),
+        int(spacing_px),
         int(CONTOUR_LABEL_MIN_SEG_LEN_PX),
         int(CONTOUR_LABEL_EDGE_MARGIN_PX),
         int(CONTOUR_LABEL_OUTLINE_WIDTH),
@@ -187,13 +191,13 @@ def draw_contour_labels(
                 seg_l_list.append(length)
                 total_len += length
             if total_len < max(
-                CONTOUR_LABEL_MIN_SEG_LEN_PX, CONTOUR_LABEL_SPACING_PX * 0.8
+                CONTOUR_LABEL_MIN_SEG_LEN_PX, spacing_px * 0.8
             ):
                 level_skipped_short += 1
                 total_skipped_short += 1
                 continue
 
-            target = CONTOUR_LABEL_SPACING_PX
+            target = spacing_px
             while target < total_len:
                 acc = 0.0
                 idx = -1
@@ -233,7 +237,7 @@ def draw_contour_labels(
                 ):
                     level_skipped_edge += 1
                     total_skipped_edge += 1
-                    target += CONTOUR_LABEL_SPACING_PX
+                    target += spacing_px
                     continue
 
                 # Prepare text box
@@ -293,7 +297,7 @@ def draw_contour_labels(
                     else:
                         level_skipped_collision += 1
                         total_skipped_collision += 1
-                    target += CONTOUR_LABEL_SPACING_PX
+                    target += spacing_px
                     continue
 
                 if not dry_run:
@@ -304,7 +308,7 @@ def draw_contour_labels(
 
                 placed.append(bbox)
                 level_placed += 1
-                target += CONTOUR_LABEL_SPACING_PX
+                target += spacing_px
 
         logger.info(
             'Уровень %.1fm: размещено=%d, попыток=%d, отклонено: коротких=%d, у_края=%d, bbox=%d, коллизии=%d',

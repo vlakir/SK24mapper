@@ -3,6 +3,7 @@ import logging
 import math
 from collections.abc import Sequence
 from contextlib import suppress
+from functools import lru_cache
 from http import HTTPStatus
 from io import BytesIO
 
@@ -525,6 +526,35 @@ def decode_terrain_rgb_to_elevation_m(img: Image.Image) -> np.ndarray:
     return elevation.astype(np.float32)
 
 
+# Кэш для декодированных DEM-тайлов (~400 MB при 100 тайлах 512x512 float32)
+_dem_tile_cache: dict[tuple[int, int, int], np.ndarray] = {}
+_DEM_CACHE_MAX_SIZE = 100
+
+
+def get_cached_dem_tile(z: int, x: int, y: int) -> np.ndarray | None:
+    """Возвращает закэшированный DEM-тайл или None."""
+    return _dem_tile_cache.get((z, x, y))
+
+
+def cache_dem_tile(z: int, x: int, y: int, dem: np.ndarray) -> None:
+    """Кэширует DEM-тайл с ограничением размера кэша."""
+    if len(_dem_tile_cache) >= _DEM_CACHE_MAX_SIZE:
+        # Удаляем самый старый элемент (FIFO)
+        oldest_key = next(iter(_dem_tile_cache))
+        del _dem_tile_cache[oldest_key]
+    _dem_tile_cache[(z, x, y)] = dem
+
+
+def clear_dem_cache() -> None:
+    """Очищает кэш DEM-тайлов."""
+    _dem_tile_cache.clear()
+
+
+def get_dem_cache_stats() -> tuple[int, int]:
+    """Возвращает (текущий размер кэша, максимальный размер)."""
+    return len(_dem_tile_cache), _DEM_CACHE_MAX_SIZE
+
+
 def assemble_dem(
     tiles_data: list[np.ndarray],
     tiles_x: int,
@@ -583,74 +613,86 @@ def compute_percentiles(
     return vals[idx_of(p_lo)], vals[idx_of(p_hi)]
 
 
+def _build_elevation_lut(
+    color_ramp: list[tuple[float, tuple[int, int, int]]],
+    lut_size: int = 2048,
+) -> np.ndarray:
+    """Строит LUT для быстрого маппинга нормализованных высот в цвета."""
+    lut = np.zeros((lut_size, 3), dtype=np.uint8)
+    ramp = sorted(color_ramp, key=lambda x: x[0])
+
+    for i in range(lut_size):
+        tt = i / (lut_size - 1)
+        # Находим сегмент
+        color = ramp[-1][1]
+        for j in range(len(ramp) - 1):
+            t0, c0 = ramp[j]
+            t1, c1 = ramp[j + 1]
+            if t0 <= tt <= t1:
+                if t1 == t0:
+                    color = c0
+                else:
+                    ratio = (tt - t0) / (t1 - t0)
+                    color = (
+                        int(c0[0] + (c1[0] - c0[0]) * ratio),
+                        int(c0[1] + (c1[1] - c0[1]) * ratio),
+                        int(c0[2] + (c1[2] - c0[2]) * ratio),
+                    )
+                break
+        lut[i] = color
+
+    return lut
+
+
 def colorize_dem_to_image(
-    dem: list[list[float]],
+    dem: list[list[float]] | np.ndarray,
     p_lo: float = ELEV_PCTL_LO,
     p_hi: float = ELEV_PCTL_HI,
     min_range_m: float = ELEV_MIN_RANGE_M,
 ) -> Image.Image:
-    """Преобразует DEM в цветное изображение по заданной палитре с перцентильной нормализацией."""
-    h = len(dem)
-    w = len(dem[0]) if h else 0
-    # Выборка для перцентилей: используем равномерную подвыборку, чтобы не хранить всё
-    samples: list[float] = []
-    if h and w:
-        step_y = max(1, h // 200)
-        step_x = max(1, w // 200)
-        for y in range(0, h, step_y):
-            row = dem[y]
-            for x in range(0, w, step_x):
-                samples.append(row[x])
-    lo, hi = compute_percentiles(
-        samples or [v for row in dem for v in row][:10000], p_lo, p_hi
-    )
+    """
+    Преобразует DEM в цветное изображение по заданной палитре.
+
+    Оптимизированная numpy-версия с векторизованными операциями.
+    """
+    # Конвертируем в numpy если нужно
+    if isinstance(dem, list):
+        dem_arr = np.array(dem, dtype=np.float32)
+    else:
+        dem_arr = dem.astype(np.float32) if dem.dtype != np.float32 else dem
+
+    h, w = dem_arr.shape
+    if h == 0 or w == 0:
+        return Image.new('RGB', (1, 1), (128, 128, 128))
+
+    # Выборка для перцентилей: используем равномерную подвыборку
+    step_y = max(1, h // 200)
+    step_x = max(1, w // 200)
+    samples = dem_arr[::step_y, ::step_x].flatten()
+
+    if len(samples) == 0:
+        samples = dem_arr.flatten()[:10000]
+
+    lo, hi = compute_percentiles(samples.tolist(), p_lo, p_hi)
+
     if hi - lo < min_range_m:
         mid = (lo + hi) / 2.0
         lo = mid - min_range_m / 2.0
         hi = mid + min_range_m / 2.0
-    inv = 1.0 / (hi - lo) if hi > lo else 0.0
 
-    def lerp(a: float, b: float, t: float) -> float:
-        return a + (b - a) * t
-
-    # Build LUT once per image for fast palette mapping
+    # Строим LUT
     lut_size = 2048
-    _lut: list[tuple[int, int, int]] = []
-    ramp = ELEVATION_COLOR_RAMP
-    for i in range(lut_size):
-        tt = i / (lut_size - 1)
-        for j in range(1, len(ramp)):
-            t0, c0 = ramp[j - 1]
-            t1, c1 = ramp[j]
-            if tt <= t1 or j == len(ramp) - 1:
-                local = 0.0 if t1 == t0 else (tt - t0) / (t1 - t0)
-                r = round(lerp(c0[0], c1[0], local))
-                g = round(lerp(c0[1], c1[1], local))
-                b = round(lerp(c0[2], c1[2], local))
-                _lut.append((r, g, b))
-                break
+    lut = _build_elevation_lut(ELEVATION_COLOR_RAMP, lut_size)
 
-    def color_at(t: float) -> tuple[int, int, int]:
-        if t <= 0.0:
-            return _lut[0]
-        if t >= 1.0:
-            return _lut[-1]
-        idx = int(t * (lut_size - 1))
-        return _lut[idx]
+    # Нормализация и индексация — полностью векторизовано
+    inv_range = (lut_size - 1) / (hi - lo) if hi > lo else 0.0
+    indices = ((dem_arr - lo) * inv_range).astype(np.int32)
+    indices = np.clip(indices, 0, lut_size - 1)
 
-    # Build entire image buffer as bytes (scanlines) and create Image from bytes
-    buf = bytearray(w * h * 3)
-    k = 0
-    for y in range(h):
-        row = dem[y]
-        for x in range(w):
-            t = (row[x] - lo) * inv
-            r, g, b = color_at(t)
-            buf[k] = r
-            buf[k + 1] = g
-            buf[k + 2] = b
-            k += 3
-    return Image.frombytes('RGB', (w, h), bytes(buf))
+    # Применяем LUT — векторизованная операция
+    rgb = lut[indices]
+
+    return Image.fromarray(rgb, mode='RGB')
 
 
 def latlng_to_final_pixel(

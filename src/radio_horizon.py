@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import math
 
+import cv2
 import numpy as np
+from numba import njit, prange
 from PIL import Image
 
 from constants import (
@@ -103,33 +105,31 @@ def compute_downsample_factor(
     return factor
 
 
-def _bilinear_interpolate_np(
+@njit(cache=True)
+def _bilinear_interpolate_numba(
     dem: np.ndarray,
     row: float,
     col: float,
+    h: int,
+    w: int,
 ) -> float:
-    """
-    Билинейная интерполяция высоты в дробной позиции DEM (numpy версия).
-
-    Args:
-        dem: Матрица высот (numpy array)
-        row: Дробная строка (y)
-        col: Дробный столбец (x)
-
-    Returns:
-        Интерполированная высота в метрах
-
-    """
-    h, w = dem.shape
+    """Билинейная интерполяция высоты (Numba JIT версия)."""
+    edge_eps = 1.0001
 
     # Ограничиваем координаты
-    row = max(0.0, min(row, h - RADIO_HORIZON_INTERPOLATION_EDGE_EPSILON))
-    col = max(0.0, min(col, w - RADIO_HORIZON_INTERPOLATION_EDGE_EPSILON))
+    if row < 0.0:
+        row = 0.0
+    elif row > h - edge_eps:
+        row = h - edge_eps
+    if col < 0.0:
+        col = 0.0
+    elif col > w - edge_eps:
+        col = w - edge_eps
 
     r0 = int(row)
     c0 = int(col)
-    r1 = min(r0 + 1, h - 1)
-    c1 = min(c0 + 1, w - 1)
+    r1 = r0 + 1 if r0 + 1 < h else h - 1
+    c1 = c0 + 1 if c0 + 1 < w else w - 1
 
     dr = row - r0
     dc = col - c0
@@ -142,10 +142,11 @@ def _bilinear_interpolate_np(
 
     v0 = v00 + (v01 - v00) * dc
     v1 = v10 + (v11 - v10) * dc
-    return float(v0 + (v1 - v0) * dr)
+    return v0 + (v1 - v0) * dr
 
 
-def _trace_line_of_sight_np(
+@njit(cache=True)
+def _trace_line_of_sight_numba(
     dem: np.ndarray,
     antenna_row: int,
     antenna_col: int,
@@ -154,36 +155,51 @@ def _trace_line_of_sight_np(
     target_col: int,
     pixel_size_m: float,
     effective_earth_radius: float,
+    h: int,
+    w: int,
 ) -> float:
     """
-    Трассировка луча от антенны к целевой точке (numpy версия).
+    Трассировка луча от антенны к целевой точке (Numba JIT версия).
 
     Returns:
         Минимальная высота БпЛА над поверхностью в целевой точке (метры).
 
     """
+    # Константы (инлайн для Numba)
+    min_dist_px_sq = 4.0  # RADIO_HORIZON_LOS_MIN_DISTANCE_PX_SQ
+    los_steps_max = 200  # RADIO_HORIZON_LOS_STEPS_MAX
+    los_steps_min = 20  # RADIO_HORIZON_LOS_STEPS_MIN
+    los_step_divisor = 4.0  # RADIO_HORIZON_LOS_STEP_DIVISOR
+    max_elev_init = -1e9  # RADIO_HORIZON_MAX_ELEVATION_ANGLE_INIT
+    no_data_threshold = -1e8  # RADIO_HORIZON_MAX_ELEVATION_ANGLE_NO_DATA_THRESHOLD
+    clearance_m = 5.0  # RADIO_HORIZON_TARGET_HEIGHT_CLEARANCE_M
+
     # Расстояние в пикселях
     dx = target_col - antenna_col
     dy = target_row - antenna_row
-    dist_px_sq = dx * dx + dy * dy
+    dist_px_sq = float(dx * dx + dy * dy)
 
-    if dist_px_sq < RADIO_HORIZON_LOS_MIN_DISTANCE_PX_SQ:
+    if dist_px_sq < min_dist_px_sq:
         return 0.0
 
     dist_px = math.sqrt(dist_px_sq)
     dist_m = dist_px * pixel_size_m
 
     # Высота поверхности в целевой точке
-    target_surface_height = _bilinear_interpolate_np(dem, target_row, target_col)
-
-    # Количество шагов (оптимизировано - не более 200 шагов)
-    num_steps = min(
-        RADIO_HORIZON_LOS_STEPS_MAX,
-        max(RADIO_HORIZON_LOS_STEPS_MIN, int(dist_px / RADIO_HORIZON_LOS_STEP_DIVISOR)),
+    target_surface_height = _bilinear_interpolate_numba(
+        dem, float(target_row), float(target_col), h, w
     )
 
+    # Количество шагов
+    num_steps_calc = int(dist_px / los_step_divisor)
+    if num_steps_calc < los_steps_min:
+        num_steps_calc = los_steps_min
+    if num_steps_calc > los_steps_max:
+        num_steps_calc = los_steps_max
+    num_steps = num_steps_calc
+
     # Максимальный угол затенения
-    max_elevation_angle = RADIO_HORIZON_MAX_ELEVATION_ANGLE_INIT
+    max_elevation_angle = max_elev_init
 
     # Трассируем луч от антенны к цели
     for i in range(1, num_steps):
@@ -202,15 +218,16 @@ def _trace_line_of_sight_np(
         )
 
         # Высота поверхности + поправка на кривизну
-        surface_height = _bilinear_interpolate_np(dem, curr_row, curr_col)
+        surface_height = _bilinear_interpolate_numba(dem, curr_row, curr_col, h, w)
         effective_height = surface_height + earth_curvature_drop
 
         # Угол от антенны до текущей точки рельефа
         height_diff = effective_height - antenna_abs_height
         elevation_angle = height_diff / curr_dist_m
-        max_elevation_angle = max(max_elevation_angle, elevation_angle)
+        if elevation_angle > max_elevation_angle:
+            max_elevation_angle = elevation_angle
 
-    if max_elevation_angle < RADIO_HORIZON_MAX_ELEVATION_ANGLE_NO_DATA_THRESHOLD:
+    if max_elevation_angle < no_data_threshold:
         return 0.0
 
     # Поправка на кривизну в целевой точке
@@ -223,13 +240,51 @@ def _trace_line_of_sight_np(
     effective_target_surface = target_surface_height + target_curvature_drop
 
     # Минимальная высота БпЛА над поверхностью + запас
-    min_uav_height = (
-        los_height_at_target
-        - effective_target_surface
-        + RADIO_HORIZON_TARGET_HEIGHT_CLEARANCE_M
-    )
+    min_uav_height = los_height_at_target - effective_target_surface + clearance_m
 
-    return max(0.0, min_uav_height)
+    if min_uav_height < 0.0:
+        return 0.0
+    return min_uav_height
+
+
+@njit(parallel=True, cache=True)
+def _compute_grid_values_parallel(
+    dem: np.ndarray,
+    antenna_row: int,
+    antenna_col: int,
+    antenna_abs_height: float,
+    pixel_size_m: float,
+    effective_earth_radius: float,
+    grid_step: int,
+    h: int,
+    w: int,
+) -> np.ndarray:
+    """Вычисляет значения на грубой сетке параллельно (Numba JIT)."""
+    grid_h = (h + grid_step - 1) // grid_step
+    grid_w = (w + grid_step - 1) // grid_step
+    grid_values = np.zeros((grid_h, grid_w), dtype=np.float32)
+
+    for gr in prange(grid_h):
+        row = gr * grid_step
+        if row > h - 1:
+            row = h - 1
+        for gc in range(grid_w):
+            col = gc * grid_step
+            if col > w - 1:
+                col = w - 1
+            grid_values[gr, gc] = _trace_line_of_sight_numba(
+                dem,
+                antenna_row,
+                antenna_col,
+                antenna_abs_height,
+                row,
+                col,
+                pixel_size_m,
+                effective_earth_radius,
+                h,
+                w,
+            )
+    return grid_values
 
 
 def _build_color_lut(
@@ -322,55 +377,23 @@ def compute_radio_horizon(
     # Эффективный радиус Земли
     effective_earth_radius = earth_radius_m * refraction_k
 
-    # Размеры грубой сетки
-    grid_h = (h + grid_step - 1) // grid_step
-    grid_w = (w + grid_step - 1) // grid_step
+    # Вычисляем значения на грубой сетке параллельно (Numba JIT)
+    grid_values = _compute_grid_values_parallel(
+        dem,
+        antenna_row,
+        antenna_col,
+        antenna_abs_height,
+        pixel_size_m,
+        effective_earth_radius,
+        grid_step,
+        h,
+        w,
+    )
 
-    # Вычисляем значения на грубой сетке
-    grid_values = np.zeros((grid_h, grid_w), dtype=np.float32)
+    # Интерполируем до полного размера с помощью cv2.resize (быстрее scipy.ndimage.zoom)
+    result = cv2.resize(grid_values, (w, h), interpolation=cv2.INTER_LINEAR)
 
-    for gr in range(grid_h):
-        row = min(gr * grid_step, h - 1)
-        for gc in range(grid_w):
-            col = min(gc * grid_step, w - 1)
-            val = _trace_line_of_sight_np(
-                dem,
-                antenna_row,
-                antenna_col,
-                antenna_abs_height,
-                row,
-                col,
-                pixel_size_m,
-                effective_earth_radius,
-            )
-            grid_values[gr, gc] = val
-
-    # Интерполируем до полного размера с помощью scipy или вручную
-    # Используем простую билинейную интерполяцию
-    result = np.zeros((h, w), dtype=np.float32)
-    inv_grid_step = 1.0 / grid_step
-
-    for row in range(h):
-        gr0 = row // grid_step
-        gr1 = min(gr0 + 1, grid_h - 1)
-        dr = (row - gr0 * grid_step) * inv_grid_step
-
-        for col in range(w):
-            gc0 = col // grid_step
-            gc1 = min(gc0 + 1, grid_w - 1)
-            dc = (col - gc0 * grid_step) * inv_grid_step
-
-            # Интерполяция
-            v00 = grid_values[gr0, gc0]
-            v01 = grid_values[gr0, gc1]
-            v10 = grid_values[gr1, gc0]
-            v11 = grid_values[gr1, gc1]
-
-            v0 = v00 + (v01 - v00) * dc
-            v1 = v10 + (v11 - v10) * dc
-            result[row, col] = v0 + (v1 - v0) * dr
-
-    return result
+    return result.astype(np.float32)
 
 
 def colorize_radio_horizon(
@@ -477,28 +500,20 @@ def compute_and_colorize_radio_horizon(
     antenna_abs_height = float(dem[antenna_row, antenna_col]) + antenna_height_m
     effective_earth_radius = earth_radius_m * refraction_k
 
-    # Размеры грубой сетки
-    grid_h = (h + grid_step - 1) // grid_step
-    grid_w = (w + grid_step - 1) // grid_step
+    # Вычисляем значения на грубой сетке параллельно (Numba JIT)
+    grid_values = _compute_grid_values_parallel(
+        dem,
+        antenna_row,
+        antenna_col,
+        antenna_abs_height,
+        pixel_size_m,
+        effective_earth_radius,
+        grid_step,
+        h,
+        w,
+    )
 
-    # Вычисляем значения на грубой сетке
-    grid_values = np.zeros((grid_h, grid_w), dtype=np.float32)
-
-    for gr in range(grid_h):
-        row = min(gr * grid_step, h - 1)
-        for gc in range(grid_w):
-            col = min(gc * grid_step, w - 1)
-            val = _trace_line_of_sight_np(
-                dem,
-                antenna_row,
-                antenna_col,
-                antenna_abs_height,
-                row,
-                col,
-                pixel_size_m,
-                effective_earth_radius,
-            )
-            grid_values[gr, gc] = val
+    grid_h, grid_w = grid_values.shape
 
     # Строим LUT
     lut_size = RADIO_HORIZON_LUT_SIZE
@@ -579,7 +594,7 @@ def _bilinear_interpolate(
     """Обёртка для совместимости с тестами."""
     if isinstance(dem, list):
         dem = _list_to_numpy(dem)
-    return _bilinear_interpolate_np(dem, row, col)
+    return _bilinear_interpolate_numba(dem, row, col, h, w)
 
 
 def _trace_line_of_sight(
@@ -597,7 +612,7 @@ def _trace_line_of_sight(
     """Обёртка для совместимости с тестами."""
     if isinstance(dem, list):
         dem = _list_to_numpy(dem)
-    return _trace_line_of_sight_np(
+    return _trace_line_of_sight_numba(
         dem,
         antenna_row,
         antenna_col,
@@ -606,4 +621,6 @@ def _trace_line_of_sight(
         target_col,
         pixel_size_m,
         effective_earth_radius,
+        h,
+        w,
     )

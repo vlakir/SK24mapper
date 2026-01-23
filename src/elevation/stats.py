@@ -29,7 +29,8 @@ async def sample_elevation_percentiles(
     rng_seed: int = 42,
     on_progress: Callable[[int], Awaitable[None]] | None = None,
     semaphore=None,
-) -> tuple[list[float], int]:
+    cache_tiles: bool = False,
+) -> tuple[list[float], int, dict[tuple[int, int], Image.Image] | None]:
     """
     Reservoir-sample elevations over a set of tiles for percentile estimation.
 
@@ -43,9 +44,11 @@ async def sample_elevation_percentiles(
         rng_seed: RNG seed for reproducibility.
         on_progress: Optional async callback to report progress per processed tile.
         semaphore: Optional asyncio.Semaphore to limit concurrency.
+        cache_tiles: If True, cache loaded tile images and return them for reuse.
 
     Returns:
-        (samples, seen_count): sampled elevation values and total number of seen samples.
+        (samples, seen_count, tile_cache): sampled elevation values, total number of seen samples,
+        and optionally a dict mapping (idx, (x_world, y_world)) -> Image if cache_tiles=True.
 
     """
     rng = random.Random(  # noqa: S311
@@ -54,6 +57,7 @@ async def sample_elevation_percentiles(
     samples: list[float] = []
     seen_count = 0
     tile_count = 0
+    tile_cache: dict[tuple[int, int], Image.Image] = {} if cache_tiles else {}
 
     async def _step_progress() -> None:
         if on_progress is not None:
@@ -74,6 +78,11 @@ async def sample_elevation_percentiles(
         else:
             async with semaphore:
                 img = await get_tile_image(tile_x_world, tile_y_world)
+        
+        # Cache tile if requested
+        if cache_tiles:
+            tile_cache[(tile_x_world, tile_y_world)] = img
+        
         dem_tile = decode_terrain_rgb_to_elevation_m(img)
         # iterate coarse grid (approx 32x32) within tile to limit CPU
         h = len(dem_tile)
@@ -109,7 +118,7 @@ async def sample_elevation_percentiles(
     for idx_xy in tiles:
         await _fetch_and_sample(idx_xy)
 
-    return samples, seen_count
+    return samples, seen_count, tile_cache if cache_tiles else None
 
 
 def compute_elevation_range(

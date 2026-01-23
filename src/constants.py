@@ -153,8 +153,8 @@ XYZ_TILE_SIZE = 512
 XYZ_USE_RETINA = True
 # Использовать ретину для карт высот (Terrain-RGB)
 ELEVATION_USE_RETINA = True
-# Параллелизм загрузки HTTP
-DOWNLOAD_CONCURRENCY = 20
+# Параллелизм загрузки HTTP (увеличено для ускорения)
+DOWNLOAD_CONCURRENCY = 40
 # Значения совместимости для «статичного» источника
 
 # --- Опции кэша (были в секции профиля [cache], перенесены в constants)
@@ -221,8 +221,6 @@ ELEV_PCTL_LO = 2.0
 ELEV_PCTL_HI = 98.0
 # Запас для защиты от плоских регионов (минимальная дельта высот в метрах)
 ELEV_MIN_RANGE_M = 10.0
-# Опциональный быстрый путь на NumPy (если установлен)
-USE_NUMPY_FASTPATH = True
 # Палитра: список контрольных точек (t in [0,1], (R,G,B))
 ELEVATION_COLOR_RAMP = [
     (0.00, (0, 0, 130)),  # deep blue
@@ -249,6 +247,8 @@ CONTOUR_SMOOTHING_STRENGTH = (
 CONTOUR_SMOOTHING_ITERATIONS = 2  # Итерации для fallback-метода (1-3)
 # Минимальное количество точек для применения сглаживания
 MIN_POINTS_FOR_SMOOTHING = 3
+# Количество параллельных воркеров для построения изолиний
+CONTOUR_PARALLEL_WORKERS = 4
 # Цвет обычных изогипс (RGB)
 CONTOUR_COLOR = (30, 30, 30)
 # Толщина обычных изогипс в пикселях (задаётся здесь)
@@ -262,7 +262,8 @@ CONTOUR_INDEX_WIDTH = 2
 # --- Подписи изогипс
 CONTOUR_LABELS_ENABLED = True
 CONTOUR_LABEL_INDEX_ONLY = False
-CONTOUR_LABEL_SPACING_PX = 300
+# Интервал между подписями в метрах (пересчитывается в пиксели по текущему масштабу)
+CONTOUR_LABEL_SPACING_M = 1000
 CONTOUR_LABEL_MIN_SEG_LEN_PX = 40
 CONTOUR_LABEL_EDGE_MARGIN_PX = 8
 CONTOUR_LABEL_TEXT_COLOR = (20, 20, 20)

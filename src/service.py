@@ -8,7 +8,6 @@ import random
 import time
 from collections import defaultdict
 from pathlib import Path
-from typing import cast
 
 import aiohttp
 import numpy as np
@@ -30,12 +29,11 @@ from constants import (
     CONTOUR_LABEL_GAP_ENABLED,
     CONTOUR_LABEL_GAP_PADDING,
     CONTOUR_LABEL_MIN_SEG_LEN_PX,
-    CONTOUR_LABEL_SPACING_PX,
+    CONTOUR_LABEL_SPACING_M,
     CONTOUR_LABELS_ENABLED,
     CONTOUR_LOG_MEMORY_EVERY_TILES,
     CONTOUR_PASS2_QUEUE_MAXSIZE,
     CONTOUR_SEED_DOWNSAMPLE,
-    CONTOUR_SEED_SMOOTHING,
     CONTOUR_WIDTH,
     CONTROL_POINT_COLOR,
     CONTROL_POINT_SIZE_M,
@@ -45,28 +43,15 @@ from constants import (
     GRID_COLOR,
     GRID_STEP_M,
     MAPBOX_STYLE_BY_TYPE,
-    MARCHING_SQUARES_CENTER_WEIGHT,
     MAX_OUTPUT_PIXELS,
     MAX_ZOOM,
-    MIN_POINTS_FOR_SMOOTHING,
-    MS_AMBIGUOUS_CASES,
-    MS_CONNECT_LEFT_BOTTOM,
-    MS_CONNECT_LEFT_RIGHT,
-    MS_CONNECT_RIGHT_BOTTOM,
-    MS_CONNECT_TOP_BOTTOM,
-    MS_CONNECT_TOP_LEFT,
-    MS_CONNECT_TOP_RIGHT,
-    MS_MASK_TL_BR,
-    MS_NO_CONTOUR_CASES,
     PIL_DISABLE_LIMIT,
     RADIO_HORIZON_COLOR_RAMP,
     RADIO_HORIZON_TOPO_OVERLAY_ALPHA,
     RADIO_HORIZON_USE_RETINA,
     ROTATION_PAD_MIN_PX,
     ROTATION_PAD_RATIO,
-    SEED_POLYLINE_QUANT_FACTOR,
     TILE_SIZE,
-    USE_NUMPY_FASTPATH,
     XYZ_TILE_SIZE,
     XYZ_USE_RETINA,
     MapType,
@@ -108,6 +93,7 @@ from radio_horizon import (
     compute_downsample_factor,
     downsample_dem,
 )
+from render.contours_builder import build_seed_polylines
 from topography import (
     ELEV_MIN_RANGE_M,
     ELEV_PCTL_HI,
@@ -248,6 +234,14 @@ async def download_satellite_rectangle(
         await _validate_terrain_api(api_key)
     else:
         eff_scale = effective_scale_for_xyz(XYZ_TILE_SIZE, use_retina=XYZ_USE_RETINA)
+
+    # Единый ретина-фактор для контурного оверлея (синхронизирован с базовой картой)
+    if is_elev_color or is_elev_contours:
+        contour_use_retina = ELEVATION_USE_RETINA
+    elif is_radio_horizon:
+        contour_use_retina = RADIO_HORIZON_USE_RETINA
+    else:
+        contour_use_retina = XYZ_USE_RETINA
 
     # Подготовка — конвертация из Гаусса-Крюгера в географические координаты СК-42
     sp = LiveSpinner('Подготовка: определение зоны')
@@ -443,16 +437,16 @@ async def download_satellite_rectangle(
 
                 full_eff_tile_px = 256 * (2 if ELEVATION_USE_RETINA else 1)
 
-                # Pass A: sample elevations for percentiles (reservoir sampling)
+                # Single pass: load tiles, sample elevations, and cache for colorization
                 from elevation.stats import compute_elevation_range as _elev_range
                 from elevation.stats import sample_elevation_percentiles as _sample_elev
 
-                tile_progress.label = 'Проверка диапазона высот (проход 1/2)'
+                tile_progress.label = 'Загрузка и анализ DEM'
 
                 async def _get_dem_tile(xw: int, yw: int) -> Image.Image:
                     return await provider_main.get_tile_image(zoom, xw, yw)
 
-                samples, seen_count = await _sample_elev(
+                samples, seen_count, tile_cache = await _sample_elev(
                     enumerate(tiles),
                     tiles_x=tiles_x,
                     crop_rect=crop_rect,
@@ -462,6 +456,7 @@ async def download_satellite_rectangle(
                     rng_seed=42,
                     on_progress=tile_progress.step,
                     semaphore=semaphore,
+                    cache_tiles=True,
                 )
                 with contextlib.suppress(Exception):
                     tile_progress.close()
@@ -479,10 +474,10 @@ async def download_satellite_rectangle(
                 elev_min_m = lo
                 elev_max_m = hi
 
-                # Pass B: render directly to output image using producer–consumer (I/O vs CPU)
+                # Pass B: render directly to output image using cached tiles (no network)
                 result = Image.new('RGB', (crop_rect[2], crop_rect[3]))
                 tile_progress = ConsoleProgress(
-                    total=len(tiles), label='Окрашивание DEM (проход 2/2)'
+                    total=len(tiles), label='Окрашивание DEM'
                 )
                 tile_count = 0
 
@@ -499,10 +494,15 @@ async def download_satellite_rectangle(
                     if ov is None:
                         await tile_progress.step(1)
                         return
-                    async with semaphore:
-                        img = await provider_main.get_tile_image(
-                            zoom, tile_x_world, tile_y_world
-                        )
+                    # Use cached tile from Pass A (no network request)
+                    if tile_cache and (tile_x_world, tile_y_world) in tile_cache:
+                        img = tile_cache[(tile_x_world, tile_y_world)]
+                    else:
+                        # Fallback to network if cache miss (shouldn't happen)
+                        async with semaphore:
+                            img = await provider_main.get_tile_image(
+                                zoom, tile_x_world, tile_y_world
+                            )
                     # Enqueue with metadata for consumers
                     x0, y0, x1, y1 = ov
                     await queue.put((tx, ty, x0, y0, x1, y1, img))
@@ -517,10 +517,6 @@ async def download_satellite_rectangle(
                     ab = 0.1 * 1.0 * inv
                     a0 = (-10000.0 - lo) * inv
 
-                    try:
-                        _numpy_ok = bool(USE_NUMPY_FASTPATH)
-                    except Exception:
-                        _numpy_ok = False
                     while True:
                         item = await queue.get()
                         if item is None:  # type: ignore[comparison-overlap]
@@ -533,63 +529,39 @@ async def download_satellite_rectangle(
                             dy0 = y0 - cy
                             base_x = tx * full_eff_tile_px
                             base_y = ty * full_eff_tile_px
-                            # Build raw RGB buffer for the overlap block (scanline writing)
-                            block_w = x1 - x0
-                            block_h = y1 - y0
-                            if _numpy_ok:
-                                arr = np.asarray(img, dtype=np.uint8)  # HxWx3
-                                # Slice overlap
-                                sub = arr[
-                                    y0 - base_y : y1 - base_y,
-                                    x0 - base_x : x1 - base_x,
-                                    :3,
-                                ]
-                                # Compute t linear combination
-                                t = (
-                                    ar * sub[..., 0].astype(np.float32)
-                                    + ag * sub[..., 1].astype(np.float32)
-                                    + ab * sub[..., 2].astype(np.float32)
-                                    + a0
-                                )
-                                # Clamp and map to LUT
-                                _l = np.clip(
-                                    (t * (lut_size - 1)).astype(np.int32),
-                                    0,
-                                    lut_size - 1,
-                                )
-                                lut = np.asarray(_lut, dtype=np.uint8)
-                                rgb = lut[_l]
-                                block_img = Image.fromarray(rgb, mode='RGB')
-                            else:
-                                # Fallback: per-pixel loop without NumPy
-                                buf = bytearray(block_w * block_h * 3)
-                                out_idx = 0
-                                pix = img.load()
-                                assert pix is not None
-                                for yy in range(y0, y1):
-                                    for xx in range(x0, x1):
-                                        r0, g0, b0 = cast(
-                                            'tuple[int, int, int]',
-                                            pix[xx - base_x, yy - base_y],
-                                        )[:3]
-                                        t = ar * r0 + ag * g0 + ab * b0 + a0
-                                        cr, cg, cb = _color_at(t)
-                                        buf[out_idx] = cr
-                                        buf[out_idx + 1] = cg
-                                        buf[out_idx + 2] = cb
-                                        out_idx += 3
-                                block_img = Image.frombytes(
-                                    'RGB', (block_w, block_h), bytes(buf)
-                                )
+                            # NumPy fast path for DEM colorization
+                            arr = np.asarray(img, dtype=np.uint8)  # HxWx3
+                            # Slice overlap
+                            sub = arr[
+                                y0 - base_y : y1 - base_y,
+                                x0 - base_x : x1 - base_x,
+                                :3,
+                            ]
+                            # Compute t linear combination
+                            t = (
+                                ar * sub[..., 0].astype(np.float32)
+                                + ag * sub[..., 1].astype(np.float32)
+                                + ab * sub[..., 2].astype(np.float32)
+                                + a0
+                            )
+                            # Clamp and map to LUT
+                            _l = np.clip(
+                                (t * (lut_size - 1)).astype(np.int32),
+                                0,
+                                lut_size - 1,
+                            )
+                            lut = np.asarray(_lut, dtype=np.uint8)
+                            rgb = lut[_l]
+                            block_img = Image.fromarray(rgb, mode='RGB')
                             # Paste into result under lock (PIL isn't thread-safe)
                             async with paste_lock:
                                 result.paste(block_img, (dx0, dy0))
                         finally:
-                            img.close()
+                            # Don't close img here - it's from cache, will be closed later
                             queue.task_done()
                             tile_count += 1
                             if tile_count % CONTOUR_LOG_MEMORY_EVERY_TILES == 0:
-                                log_memory_usage(f'pass2 after {tile_count} tiles')
+                                log_memory_usage(f'colorize after {tile_count} tiles')
                             await tile_progress.step(1)
 
                 # Launch producers/consumers with guarded cancellation
@@ -617,6 +589,12 @@ async def download_satellite_rectangle(
                     raise
                 finally:
                     tile_progress.close()
+                    # Clean up tile cache
+                    if tile_cache:
+                        for img in tile_cache.values():
+                            with contextlib.suppress(Exception):
+                                img.close()
+                        tile_cache.clear()
             elif is_elev_contours:
                 # Two-pass streaming without storing full DEM (contours)
 
@@ -769,137 +747,8 @@ async def download_satellite_rectangle(
                 )
                 tile_count = 0
 
-                # Build global polylines from seed_dem via marching squares once (in crop pixels / seed ds)
-                def build_seed_polylines() -> dict[
-                    int, list[list[tuple[float, float]]]
-                ]:
-                    hs = seed_h
-                    ws = seed_w
-                    polylines_by_level: dict[int, list[list[tuple[float, float]]]] = {}
-
-                    # Simple marching squares on seed grid; coordinates will be in seed-cell space
-                    def interp(
-                        p0: float, p1: float, v0: float, v1: float, level: float
-                    ) -> float:
-                        if v1 == v0:
-                            return p0
-                        t = (level - v0) / (v1 - v0)
-                        if t < 0.0:
-                            t = 0.0
-                        elif t > 1.0:
-                            t = 1.0
-                        return p0 + (p1 - p0) * t
-
-                    # For each level index (use indexes into levels)
-                    for li, level in enumerate(levels):
-                        segs: list[tuple[tuple[float, float], tuple[float, float]]] = []
-                        for j in range(hs - 1):
-                            row0 = seed_dem[j]
-                            row1 = seed_dem[j + 1]
-                            for i in range(ws - 1):
-                                v00 = row0[i]
-                                v10 = row0[i + 1]
-                                v11 = row1[i + 1]
-                                v01 = row1[i]
-                                mask = (
-                                    (1 if v00 >= level else 0)
-                                    | ((1 if v10 >= level else 0) << 1)
-                                    | ((1 if v11 >= level else 0) << 2)
-                                    | ((1 if v01 >= level else 0) << 3)
-                                )
-                                if mask in MS_NO_CONTOUR_CASES:
-                                    continue
-                                x = i
-                                y = j
-                                yl = interp(y, y + 1, v00, v01, level)
-                                yr = interp(y, y + 1, v10, v11, level)
-                                xt = interp(x, x + 1, v00, v10, level)
-                                xb = interp(x, x + 1, v01, v11, level)
-
-                                def add(
-                                    a: tuple[float, float],
-                                    b: tuple[float, float],
-                                    segs_list: list[
-                                        tuple[tuple[float, float], tuple[float, float]]
-                                    ] = segs,
-                                ) -> None:
-                                    segs_list.append((a, b))
-
-                                if mask in MS_CONNECT_TOP_LEFT:
-                                    add((xt, y), (x, yl))
-                                elif mask in MS_CONNECT_TOP_RIGHT:
-                                    add((xt, y), (x + 1, yr))
-                                elif mask in MS_CONNECT_LEFT_RIGHT:
-                                    add((x, yl), (x + 1, yr))
-                                elif mask in MS_CONNECT_RIGHT_BOTTOM:
-                                    add((x + 1, yr), (xb, y + 1))
-                                elif mask in MS_AMBIGUOUS_CASES:
-                                    center = (
-                                        v00 + v10 + v11 + v01
-                                    ) * MARCHING_SQUARES_CENTER_WEIGHT
-                                    choose_diag = center >= level
-                                    if choose_diag:
-                                        if mask == MS_MASK_TL_BR:
-                                            add((xt, y), (xb, y + 1))
-                                        else:
-                                            add((x, yl), (x + 1, yr))
-                                    elif mask == MS_MASK_TL_BR:
-                                        add((x, yl), (x + 1, yr))
-                                    else:
-                                        add((xt, y), (xb, y + 1))
-                                elif mask in MS_CONNECT_TOP_BOTTOM:
-                                    add((xt, y), (xb, y + 1))
-                                elif mask in MS_CONNECT_LEFT_BOTTOM:
-                                    add((x, yl), (xb, y + 1))
-                        # Chain segments into polylines (simple greedy)
-                        polylines: list[list[tuple[float, float]]] = []
-                        if segs:
-                            buckets = defaultdict(list)
-
-                            def key(p: tuple[float, float]) -> tuple[int, int]:
-                                # quantize in seed grid to reduce splits
-                                qx = round(p[0] * SEED_POLYLINE_QUANT_FACTOR)
-                                qy = round(p[1] * SEED_POLYLINE_QUANT_FACTOR)
-                                return qx, qy
-
-                            unused = {}
-                            for idx, (a, b) in enumerate(segs):
-                                unused[idx] = True
-                                buckets[key(a)].append((idx, 0))
-                                buckets[key(b)].append((idx, 1))
-                            for si in range(len(segs)):
-                                if si not in unused:
-                                    continue
-                                # start a polyline from seg si
-                                unused.pop(si, None)
-                                a, b = segs[si]
-                                poly = [a, b]
-                                end = b
-                                # extend forward
-                                while True:
-                                    k = key(end)
-                                    found = None
-                                    for idx, endpos in buckets.get(k, []):
-                                        if idx in unused:
-                                            aa, bb = segs[idx]
-                                            if endpos == 0:
-                                                end = bb
-                                                poly.append(bb)
-                                            else:
-                                                end = aa
-                                                poly.append(aa)
-                                            unused.pop(idx, None)
-                                            found = True
-                                            break
-                                    if not found:
-                                        break
-                                polylines.append(poly)
-                        polylines_by_level[li] = polylines
-                    return polylines_by_level
-
-                from contours.seeds import build_seed_polylines as _build_seeds
-
-                seed_polylines = _build_seeds(seed_dem, levels)
+                # Build global polylines from seed_dem via marching squares
+                seed_polylines = build_seed_polylines(seed_dem, levels, seed_h, seed_w)
 
                 queue_contours: asyncio.Queue[tuple[int, int, int, int, int, int]] = (
                     asyncio.Queue(maxsize=CONTOUR_PASS2_QUEUE_MAXSIZE)
@@ -1043,11 +892,13 @@ async def download_satellite_rectangle(
                         )
                         lat_rad = math.radians(center_lat_wgs)
                         # Web Mercator meters-per-pixel at given zoom and latitude
+                        # Учитываем retina-фактор для корректного mpp
+                        elev_retina_factor = 2 if ELEVATION_USE_RETINA else 1
                         mpp = (math.cos(lat_rad) * 2 * math.pi * EARTH_RADIUS_M) / (
-                            TILE_SIZE * (2**zoom)
+                            TILE_SIZE * elev_retina_factor * (2**zoom)
                         )
                         logger.info(
-                            'Подписи изогипс: mpp=%.6f (TILE_SIZE=%d)', mpp, TILE_SIZE
+                            'Подписи изогипс: mpp=%.6f (TILE_SIZE=%d, retina=%s)', mpp, TILE_SIZE, ELEVATION_USE_RETINA
                         )
                         # Первый проход: получаем позиции подписей БЕЗ размещения на изображении
                         label_bboxes = _draw_contour_labels(
@@ -1066,7 +917,7 @@ async def download_satellite_rectangle(
                         if not label_bboxes:
                             logger.warning(
                                 'Подписи изогипс: dry_run вернул 0 кандидатов — проверьте пороги (spacing=%d,min_len=%d,edge=%d) и геометрию полилиний',
-                                int(CONTOUR_LABEL_SPACING_PX),
+                                int(CONTOUR_LABEL_SPACING_M),
                                 int(CONTOUR_LABEL_MIN_SEG_LEN_PX),
                                 int(CONTOUR_LABEL_EDGE_MARGIN_PX),
                             )
@@ -1390,9 +1241,7 @@ async def download_satellite_rectangle(
             logger.info('Изолинии: Terrain-RGB API доступен')
 
             # Строим Terrain-RGB оверлей изолиний независимо, затем масштабируем к размеру основы
-            eff_scale_cont = effective_scale_for_xyz(
-                256, use_retina=ELEVATION_USE_RETINA
-            )
+            eff_scale_cont = effective_scale_for_xyz(256, use_retina=contour_use_retina)
             base_pad = round(min(target_w_px, target_h_px) * ROTATION_PAD_RATIO)
             pad_px_cont = max(base_pad, ROTATION_PAD_MIN_PX)
             tiles_c, (tiles_x_c, tiles_y_c), crop_rect_c, _ = compute_xyz_coverage(
@@ -1409,7 +1258,7 @@ async def download_satellite_rectangle(
             cache_dir_resolved2 = _resolve_cache_dir()
             session_ctx2 = _make_http_session(cache_dir_resolved2)
 
-            full_eff_tile_px = 256 * (2 if ELEVATION_USE_RETINA else 1)
+            full_eff_tile_px = 256 * (2 if contour_use_retina else 1)
 
             # Pass A: gather samples and build low-res seed
             max_samples = 50000
@@ -1500,7 +1349,7 @@ async def download_satellite_rectangle(
             )
             async with session_ctx2 as client2:
                 provider2 = ElevationTileProvider(
-                    client=client2, api_key=api_key, use_retina=ELEVATION_USE_RETINA
+                    client=client2, api_key=api_key, use_retina=contour_use_retina
                 )
                 await asyncio.gather(
                     *[
@@ -1558,128 +1407,10 @@ async def download_satellite_rectangle(
                 k += 1
                 v = start + k * interval
 
-            def build_seed_polylines() -> dict[int, list[list[tuple[float, float]]]]:
-                h_s = seed_h
-                w_s = seed_w
-                polylines_by_level: dict[int, list[list[tuple[float, float]]]] = {}
-
-                def interp(
-                    p0: float, p1: float, v0: float, v1: float, level: float
-                ) -> float:
-                    if v1 == v0:
-                        return p0
-                    t = (level - v0) / (v1 - v0)
-                    if t < 0.0:
-                        t = 0.0
-                    elif t > 1.0:
-                        t = 1.0
-                    return p0 + (p1 - p0) * t
-
-                for li, level in enumerate(levels_c):
-                    segs: list[tuple[tuple[float, float], tuple[float, float]]] = []
-                    for j in range(h_s - 1):
-                        row0 = seed_dem_c[j]
-                        row1 = seed_dem_c[j + 1]
-                        for i in range(w_s - 1):
-                            v00 = row0[i]
-                            v10 = row0[i + 1]
-                            v11 = row1[i + 1]
-                            v01 = row1[i]
-                            mask = (
-                                (1 if v00 >= level else 0)
-                                | ((1 if v10 >= level else 0) << 1)
-                                | ((1 if v11 >= level else 0) << 2)
-                                | ((1 if v01 >= level else 0) << 3)
-                            )
-                            if mask in MS_NO_CONTOUR_CASES:
-                                continue
-                            x = i
-                            y = j
-                            yl = interp(y, y + 1, v00, v01, level)
-                            yr = interp(y, y + 1, v10, v11, level)
-                            xt = interp(x, x + 1, v00, v10, level)
-                            xb = interp(x, x + 1, v01, v11, level)
-
-                            def add(
-                                a: tuple[float, float],
-                                b: tuple[float, float],
-                                _segs=segs,
-                            ) -> None:
-                                _segs.append((a, b))
-
-                            if mask in MS_CONNECT_TOP_LEFT:
-                                add((xt, y), (x, yl))
-                            elif mask in MS_CONNECT_TOP_RIGHT:
-                                add((xt, y), (x + 1, yr))
-                            elif mask in MS_CONNECT_LEFT_RIGHT:
-                                add((x, yl), (x + 1, yr))
-                            elif mask in MS_CONNECT_RIGHT_BOTTOM:
-                                add((x + 1, yr), (xb, y + 1))
-                            elif mask in MS_AMBIGUOUS_CASES:
-                                center = (
-                                    v00 + v10 + v11 + v01
-                                ) * MARCHING_SQUARES_CENTER_WEIGHT
-                                choose_diag = center >= level
-                                if choose_diag:
-                                    if mask == MS_AMBIGUOUS_CASES[0]:
-                                        add((xt, y), (xb, y + 1))
-                                    else:
-                                        add((x, yl), (x + 1, yr))
-                                elif mask == MS_AMBIGUOUS_CASES[0]:
-                                    add((x, yl), (x + 1, yr))
-                                else:
-                                    add((xt, y), (xb, y + 1))
-                            elif mask in MS_CONNECT_TOP_BOTTOM:
-                                add((xt, y), (xb, y + 1))
-                            elif mask in MS_CONNECT_LEFT_BOTTOM:
-                                add((x, yl), (xb, y + 1))
-                    polylines: list[list[tuple[float, float]]] = []
-                    if segs:
-                        buckets = defaultdict(list)
-
-                        def key(p: tuple[float, float]) -> tuple[int, int]:
-                            qx = round(p[0] * SEED_POLYLINE_QUANT_FACTOR)
-                            qy = round(p[1] * SEED_POLYLINE_QUANT_FACTOR)
-                            return qx, qy
-
-                        unused = {}
-                        for idx, (a, b) in enumerate(segs):
-                            unused[idx] = True
-                            buckets[key(a)].append((idx, 0))
-                            buckets[key(b)].append((idx, 1))
-                        for si in range(len(segs)):
-                            if si not in unused:
-                                continue
-                            a, b = segs[si]
-                            poly = [a, b]
-                            end = b
-                            while True:
-                                k = key(end)
-                                found = None
-                                for idx, endpos in buckets.get(k, []):
-                                    if idx in unused:
-                                        aa, bb = segs[idx]
-                                        if endpos == 0:
-                                            end = bb
-                                            poly.append(bb)
-                                        else:
-                                            end = aa
-                                            poly.append(aa)
-                                        unused.pop(idx, None)
-                                        found = True
-                                        break
-                                if not found:
-                                    break
-                            polylines.append(poly)
-                    polylines_by_level[li] = polylines
-                return polylines_by_level
-
-            from contours.seeds import build_seed_polylines as _build_seeds
-
             logger.info(
                 'Изолинии: построение seed polylines для %d уровней', len(levels_c)
             )
-            seed_polylines = _build_seeds(seed_dem_c, levels_c)
+            seed_polylines = build_seed_polylines(seed_dem_c, levels_c, seed_h, seed_w)
             total_polylines = sum(len(polys) for polys in seed_polylines.values())
             logger.info('Изолинии: создано %d полилиний', total_polylines)
 
@@ -1695,33 +1426,32 @@ async def download_satellite_rectangle(
                 label='Изолинии: построение и рисование (проход 2/2)',
             )
             logger.info('Изолинии: старт прохода 2/2: levels=%d', len(levels_c))
+            
+            # Сглаживание отключено для оверлея ради производительности и согласованности
+            smoothed_polylines = seed_polylines
+            
+            # Создаём ImageDraw один раз перед циклами
+            draw = ImageDraw.Draw(overlay)
+            
             for li, _level in enumerate(levels_c):
                 is_index = (li % max(1, int(CONTOUR_INDEX_EVERY))) == 0
                 color = CONTOUR_INDEX_COLOR if is_index else CONTOUR_COLOR
                 width = int(CONTOUR_INDEX_WIDTH if is_index else CONTOUR_WIDTH)
-                for poly in seed_polylines.get(li, []):
-                    # Применяем сглаживание если включено
-                    if CONTOUR_SEED_SMOOTHING and len(poly) >= MIN_POINTS_FOR_SMOOTHING:
-                        from contours.seeds import smooth_polyline
-
-                        smoothed_poly = smooth_polyline(poly)
-                    else:
-                        smoothed_poly = poly
-
+                fill_color = (*list(color), 255)
+                
+                for poly in smoothed_polylines.get(li, []):
                     # draw full polylines; block optimization skipped for simplicity
                     pts_crop = [
                         (int(p[0] * seed_ds), int(p[1] * seed_ds))
-                        for p in smoothed_poly
+                        for p in poly
                     ]
                     if len(pts_crop) < 2:  # noqa: PLR2004
                         continue
-                    draw = ImageDraw.Draw(overlay)
                     for i in range(1, len(pts_crop)):
                         x0, y0 = pts_crop[i - 1]
                         x1, y1 = pts_crop[i]
-                        draw.line(
-                            (x0, y0, x1, y1), fill=(*list(color), 255), width=width
-                        )
+                        draw.line((x0, y0, x1, y1), fill=fill_color, width=width)
+                        
                 # step progress per level
                 with contextlib.suppress(Exception):
                     overlay_progress_b.step_sync(1)
@@ -1745,8 +1475,10 @@ async def download_satellite_rectangle(
                 try:
                     # прогресс для подписей можно отразить тем же лейблом
                     lat_rad = math.radians(center_lat_wgs)
+                    # Учитываем retina-фактор overlay для корректного mpp
+                    overlay_retina_factor = 2 if contour_use_retina else 1
                     mpp = (math.cos(lat_rad) * 2 * math.pi * EARTH_RADIUS_M) / (
-                        TILE_SIZE * (2**zoom)
+                        TILE_SIZE * overlay_retina_factor * (2**zoom)
                     )
 
                     # Reuse overlay label drawer from dedicated module
