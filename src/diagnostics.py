@@ -330,40 +330,42 @@ async def run_deep_verification(*, api_key: str, settings: Any) -> None:
             total=10, connect=10, sock_connect=10, sock_read=10
         )
         attempts = 3
-        for i in range(attempts):
-            try:
-                async with (
-                    aiohttp.ClientSession(connector=connector) as client,
-                    client.get(url, timeout=timeout) as resp,
-                ):
-                    from constants import HTTP_FORBIDDEN, HTTP_OK, HTTP_UNAUTHORIZED
+        async with aiohttp.ClientSession(connector=connector) as client:
+            for i in range(attempts):
+                try:
+                    async with client.get(url, timeout=timeout) as resp:
+                        from constants import (
+                            HTTP_FORBIDDEN,
+                            HTTP_OK,
+                            HTTP_UNAUTHORIZED,
+                        )
 
-                    if resp.status == HTTP_OK:
-                        with contextlib.suppress(Exception):
-                            await resp.read()
-                        return
-                    if resp.status in (HTTP_UNAUTHORIZED, HTTP_FORBIDDEN):
-                        msg = 'Неверный или недействительный API-ключ. Проверьте ключ и попробуйте снова.'
+                        if resp.status == HTTP_OK:
+                            with contextlib.suppress(Exception):
+                                await resp.read()
+                            return
+                        if resp.status in (HTTP_UNAUTHORIZED, HTTP_FORBIDDEN):
+                            msg = 'Неверный или недействительный API-ключ. Проверьте ключ и попробуйте снова.'
+                            raise RuntimeError(msg)
+                        msg = f'Ошибка доступа к серверу карт (HTTP {resp.status}). Повторите попытку позже.'
                         raise RuntimeError(msg)
-                    msg = f'Ошибка доступа к серверу карт (HTTP {resp.status}). Повторите попытку позже.'
-                    raise RuntimeError(msg)
-            except asyncio.CancelledError:
-                # важно не маскировать отмену задач
-                raise
-            except (TimeoutError, aiohttp.ClientError, OSError) as e:
-                if i < attempts - 1:
-                    backoff = 0.5 * (2**i)
-                    logger.warning(
-                        'Проблема сети при проверке стиля (попытка %s/%s): %s; повтор через %.1fs',
-                        i + 1,
-                        attempts,
-                        e,
-                        backoff,
-                    )
-                    await asyncio.sleep(backoff)
-                    continue
-                msg = 'Не удалось связаться с сервером карт. Проверьте подключение к интернету и попробуйте снова.'
-                raise RuntimeError(msg) from e
+                except asyncio.CancelledError:
+                    # важно не маскировать отмену задач
+                    raise
+                except (TimeoutError, aiohttp.ClientError, OSError) as e:
+                    if i < attempts - 1:
+                        backoff = 0.5 * (2**i)
+                        logger.warning(
+                            'Проблема сети при проверке стиля (попытка %s/%s): %s; повтор через %.1fs',
+                            i + 1,
+                            attempts,
+                            e,
+                            backoff,
+                        )
+                        await asyncio.sleep(backoff)
+                        continue
+                    msg = 'Не удалось связаться с сервером карт. Проверьте подключение к интернету и попробуйте снова.'
+                    raise RuntimeError(msg) from e
 
     async def _check_terrain_small() -> None:
         import asyncio
@@ -382,42 +384,44 @@ async def run_deep_verification(*, api_key: str, settings: Any) -> None:
         )
         attempts = 3
         last_exc: Exception | None = None
-        for i in range(attempts):
-            try:
-                async with (
-                    aiohttp.ClientSession(connector=connector) as client,
-                    client.get(url, timeout=timeout) as resp,
-                ):
-                    from constants import HTTP_FORBIDDEN, HTTP_OK, HTTP_UNAUTHORIZED
+        async with aiohttp.ClientSession(connector=connector) as client:
+            for i in range(attempts):
+                try:
+                    async with client.get(url, timeout=timeout) as resp:
+                        from constants import (
+                            HTTP_FORBIDDEN,
+                            HTTP_OK,
+                            HTTP_UNAUTHORIZED,
+                        )
 
-                    if resp.status == HTTP_OK:
-                        data = await resp.read()
-                    elif resp.status in (HTTP_UNAUTHORIZED, HTTP_FORBIDDEN):
-                        msg = 'Неверный или недействительный API-ключ. Проверьте ключ и попробуйте снова.'
-                        raise RuntimeError(msg)
-                    else:
-                        msg = f'Ошибка доступа к серверу карт (HTTP {resp.status}). Повторите попытку позже.'
-                        raise RuntimeError(msg)
-                    # Decode tiny image and colorize to ensure pipeline works
-                    img = Image.open(io.BytesIO(data)).convert('RGB')
-                    dem = decode_terrain_rgb_to_elevation_m(img)
-                    _ = colorize_dem_to_image(dem)
-                    return
-            except asyncio.CancelledError:
-                raise
-            except (TimeoutError, aiohttp.ClientError, OSError) as e:
-                last_exc = e
-                if i < attempts - 1:
-                    backoff = 0.5 * (2**i)
-                    logger.warning(
-                        'Проблема сети при проверке Terrain-RGB (попытка %s/%s): %s; повтор через %.1fs',
-                        i + 1,
-                        attempts,
-                        e,
-                        backoff,
-                    )
-                    await asyncio.sleep(backoff)
-                    continue
+                        if resp.status == HTTP_OK:
+                            data = await resp.read()
+                        elif resp.status in (HTTP_UNAUTHORIZED, HTTP_FORBIDDEN):
+                            msg = 'Неверный или недействительный API-ключ. Проверьте ключ и попробуйте снова.'
+                            raise RuntimeError(msg)
+                        else:
+                            msg = f'Ошибка доступа к серверу карт (HTTP {resp.status}). Повторите попытку позже.'
+                            raise RuntimeError(msg)
+                        # Decode tiny image and colorize to ensure pipeline works
+                        img = Image.open(io.BytesIO(data)).convert('RGB')
+                        dem = decode_terrain_rgb_to_elevation_m(img)
+                        _ = colorize_dem_to_image(dem)
+                        return
+                except asyncio.CancelledError:
+                    raise
+                except (TimeoutError, aiohttp.ClientError, OSError) as e:
+                    last_exc = e
+                    if i < attempts - 1:
+                        backoff = 0.5 * (2**i)
+                        logger.warning(
+                            'Проблема сети при проверке Terrain-RGB (попытка %s/%s): %s; повтор через %.1fs',
+                            i + 1,
+                            attempts,
+                            e,
+                            backoff,
+                        )
+                        await asyncio.sleep(backoff)
+                        continue
         msg = 'Не удалось выполнить проверку Terrain-RGB: сеть недоступна. Проверьте подключение к интернету.'
         raise RuntimeError(msg) from last_exc
 

@@ -738,7 +738,7 @@ class MainWindow(QMainWindow):
         control_point_group.setFrameStyle(QFrame.Shape.StyledPanel)
         control_point_layout = QVBoxLayout()
         
-        self.control_point_checkbox = QCheckBox('Контрольная точка')
+        self.control_point_checkbox = QCheckBox('Контрольная точка (НСУ)')
         self.control_point_checkbox.setToolTip('Включить отображение контрольной точки на карте')
         control_point_layout.addWidget(self.control_point_checkbox)
         

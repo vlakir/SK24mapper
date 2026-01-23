@@ -110,6 +110,7 @@ class MapType(str, Enum):
     ELEVATION_COLOR = 'ELEVATION_COLOR'
     ELEVATION_CONTOURS = 'ELEVATION_CONTOURS'
     ELEVATION_HILLSHADE = 'ELEVATION_HILLSHADE'
+    RADIO_HORIZON = 'RADIO_HORIZON'
 
 
 # Человекочитаемые названия для GUI
@@ -121,6 +122,7 @@ MAP_TYPE_LABELS_RU: dict[MapType, str] = {
     MapType.ELEVATION_COLOR: 'Карта высот (цветовая шкала)',
     MapType.ELEVATION_CONTOURS: 'Карта высот (контуры)',
     MapType.ELEVATION_HILLSHADE: 'Карта высот (hillshade)',
+    MapType.RADIO_HORIZON: 'Радиогоризонт',
 }
 
 # Резолвер для стилевых карт (этап 1)
@@ -330,13 +332,11 @@ CENTER_CROSS_LINE_WIDTH_PX = 1
 # Полная длина линии креста (пиксели)
 CENTER_CROSS_LENGTH_PX = 40
 
-# --- Контрольная точка: крест, аналогичный центральному, но красного цвета
-# Цвет креста контрольной точки (RGB)
-CONTROL_POINT_CROSS_COLOR = (220, 0, 0)
-# Толщина линий креста контрольной точки (пиксели)
-CONTROL_POINT_CROSS_LINE_WIDTH_PX = 5
-# Полная длина линии креста контрольной точки (пиксели)
-CONTROL_POINT_CROSS_LENGTH_PX = 240
+# --- Контрольная точка: единый стиль — красный треугольник с подписью
+# Размер контрольной точки (треугольника) в метрах на местности
+CONTROL_POINT_SIZE_M = 100.0
+# Цвет контрольной точки (треугольника) — ярко-красный
+CONTROL_POINT_COLOR = (255, 0, 0)
 
 # --- Вспомогательные константы для генерации контуров в service.py
 # Квантование координат при сцеплении отрезков (чем больше — тем грубее)
@@ -414,11 +414,11 @@ LEGEND_NUM_LABELS = 5
 LEGEND_TEXT_OFFSET_PX = 5
 # Толщина рамки вокруг цветовой полосы легенды в пикселях
 LEGEND_BORDER_WIDTH_PX = 2
-# Размер шрифта для подписей легенды как доля от высоты легенды (увеличено на 30%)
-LEGEND_LABEL_FONT_RATIO = 0.13  # размер_шрифта = высота_легенды * 0.13
-# Диапазон размера шрифта подписей легенды в пикселях (мин и макс)
-LEGEND_LABEL_FONT_MIN_PX = 12
-LEGEND_LABEL_FONT_MAX_PX = 48
+# Размер шрифта для подписей легенды как доля от высоты легенды (увеличено в 2 раза)
+LEGEND_LABEL_FONT_RATIO = 0.26  # размер_шрифта = высота_легенды * 0.26
+# Диапазон размера шрифта подписей легенды в пикселях (мин и макс, увеличено в 2 раза)
+LEGEND_LABEL_FONT_MIN_PX = 24
+LEGEND_LABEL_FONT_MAX_PX = 96
 # Толщина обводки текста легенды в пикселях
 LEGEND_TEXT_OUTLINE_WIDTH_PX = 2
 # Дополнительный отступ вокруг легенды для разрыва линий сетки (пиксели)
@@ -431,3 +431,65 @@ LEGEND_BACKGROUND_PADDING_PX = 8
 LEGEND_HORIZONTAL_POSITION_RATIO = 0.5
 # Вертикальный отступ нижней границы легенды от первой горизонтальной линии сетки (в долях от шага сетки)
 LEGEND_VERTICAL_OFFSET_RATIO = 0.15
+
+# --- Радиогоризонт (Radio Horizon)
+# Использовать ретина-тайлы для радиогоризонта (False = 256px, экономит память в 4 раза)
+RADIO_HORIZON_USE_RETINA = False
+# Размер блока для потоковой обработки (пиксели)
+RADIO_HORIZON_BLOCK_SIZE = 2048
+# Цветовая шкала для карты радиогоризонта: (t, (R, G, B))
+# t — нормализованное значение от 0.0 (0 м) до 1.0 (RADIO_HORIZON_MAX_HEIGHT_M)
+RADIO_HORIZON_COLOR_RAMP: list[tuple[float, tuple[int, int, int]]] = [
+    (0.0, (0, 128, 0)),  # тёмно-зелёный: 0 м (прямая видимость без подъёма)
+    (0.1, (50, 205, 50)),  # лайм: ~50 м
+    (0.2, (144, 238, 144)),  # светло-зелёный: ~100 м
+    (0.4, (255, 255, 0)),  # жёлтый: ~200 м
+    (0.6, (255, 165, 0)),  # оранжевый: ~300 м
+    (0.8, (255, 69, 0)),  # красно-оранжевый: ~400 м
+    (1.0, (139, 0, 0)),  # тёмно-красный: 500+ м
+]
+# Максимальная высота шкалы радиогоризонта (метры)
+RADIO_HORIZON_MAX_HEIGHT_M = 500.0
+# Коэффициент атмосферной рефракции (k=4/3 для стандартной атмосферы)
+RADIO_HORIZON_REFRACTION_K = 4.0 / 3.0
+# Шаг сетки расчёта (каждый N-й пиксель) для оптимизации производительности
+# Автоматически увеличивается для больших изображений
+RADIO_HORIZON_GRID_STEP = 4
+# Цвет для точек за пределами радиогоризонта (недостижимые)
+RADIO_HORIZON_UNREACHABLE_COLOR = (64, 64, 64)  # тёмно-серый
+# Максимальное количество пикселей DEM для радиогоризонта (16 млн = 4000×4000)
+# При превышении DEM автоматически даунсэмплится
+RADIO_HORIZON_MAX_DEM_PIXELS = 16_000_000
+# Коэффициент прозрачности цветовой карты радиогоризонта при наложении на топографическую основу
+# 0.0 = полностью прозрачный (только топо), 1.0 = полностью непрозрачный (только цвета)
+RADIO_HORIZON_TOPO_OVERLAY_ALPHA = 0.8
+# Эпсилон для ограничения координат интерполяции внутри границ DEM
+RADIO_HORIZON_INTERPOLATION_EDGE_EPSILON = 1.001
+# Минимальное расстояние (в квадрате пикселей) для трассировки LOS
+RADIO_HORIZON_LOS_MIN_DISTANCE_PX_SQ = 1.0
+# Параметры дискретизации трассировки LOS
+RADIO_HORIZON_LOS_STEPS_MAX = 200
+RADIO_HORIZON_LOS_STEPS_MIN = 2
+RADIO_HORIZON_LOS_STEP_DIVISOR = 2
+# Инициализация и порог отсутствия данных для угла затенения
+RADIO_HORIZON_MAX_ELEVATION_ANGLE_INIT = -1e30
+RADIO_HORIZON_MAX_ELEVATION_ANGLE_NO_DATA_THRESHOLD = -1e29
+# Минимальный запас высоты в целевой точке (метры)
+RADIO_HORIZON_TARGET_HEIGHT_CLEARANCE_M = 1.0
+# Размер LUT для цветовой шкалы радиогоризонта
+RADIO_HORIZON_LUT_SIZE = 1024
+# Параметры пустого изображения для вырожденных случаев
+RADIO_HORIZON_EMPTY_IMAGE_SIZE_PX = (1, 1)
+RADIO_HORIZON_EMPTY_IMAGE_COLOR = (128, 128, 128)
+# Пороги адаптивного шага сетки по количеству пикселей
+RADIO_HORIZON_GRID_STEP_THRESHOLD_PIXELS_LARGE = 64_000_000
+RADIO_HORIZON_GRID_STEP_THRESHOLD_PIXELS_MEDIUM = 16_000_000
+RADIO_HORIZON_GRID_STEP_THRESHOLD_PIXELS_SMALL = 4_000_000
+# Значения шага сетки для крупных изображений
+RADIO_HORIZON_GRID_STEP_LARGE = 32
+RADIO_HORIZON_GRID_STEP_MEDIUM = 16
+RADIO_HORIZON_GRID_STEP_SMALL = 8
+# Единица измерения для легенды радиогоризонта
+RADIO_HORIZON_LEGEND_UNIT_LABEL = 'м'
+# Минимальная высота для легенды радиогоризонта
+RADIO_HORIZON_MIN_HEIGHT_M = 0.0

@@ -64,6 +64,14 @@ class MapSettings(BaseModel):
     control_point_enabled: bool = False
     control_point_x: int = 5415000  # Default: 54*100000 + 15*1000
     control_point_y: int = 7440000  # Default: 74*100000 + 40*1000
+    control_point_name: str = (
+        'НСУ'  # Название контрольной точки для отображения на карте
+    )
+
+    # Высота антенны над поверхностью земли (для карты радиогоризонта)
+    antenna_height_m: float = 10.0
+    # Максимальная высота полёта (для карты радиогоризонта, значения выше отображаются серым)
+    max_flight_height_m: float = 500.0
 
     # Валидации через Pydantic validators
     @field_validator('mask_opacity')

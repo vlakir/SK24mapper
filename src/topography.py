@@ -5,9 +5,9 @@ from collections.abc import Sequence
 from contextlib import suppress
 from http import HTTPStatus
 from io import BytesIO
-from typing import cast
 
 import aiohttp
+import numpy as np
 from PIL import Image
 from pyproj import CRS, Transformer
 from pyproj.transformer import TransformerGroup
@@ -503,44 +503,45 @@ async def async_fetch_terrain_rgb_tile(
     raise RuntimeError(msg)
 
 
-def decode_terrain_rgb_to_elevation_m(img: Image.Image) -> list[list[float]]:
+def decode_terrain_rgb_to_elevation_m(img: Image.Image) -> np.ndarray:
     """
     Декодирует Terrain-RGB картинку в двумерный массив высот (метры).
 
     elevation = -10000 + (R*256*256 + G*256 + B) * 0.1
 
-    Возвращает список строк для экономии зависимостей (без numpy).
+    Возвращает numpy array (dtype=float32) для экономии памяти.
     """
-    w, h = img.size
-    pix = img.load()
-    assert pix is not None
-    rows: list[list[float]] = []
-    for y in range(h):
-        row: list[float] = []
-        for x in range(w):
-            r, g, b = cast('tuple[int, int, int]', pix[x, y])[:3]
-            elev = -10000.0 + (r * 256 * 256 + g * 256 + b) * 0.1
-            row.append(elev)
-        rows.append(row)
-    return rows
+    # Конвертируем в numpy array для векторизованных операций
+    arr = np.asarray(img, dtype=np.float32)
+
+    # Извлекаем RGB каналы
+    r = arr[:, :, 0]
+    g = arr[:, :, 1]
+    b = arr[:, :, 2]
+
+    # Вычисляем высоту векторизованно
+    elevation = -10000.0 + (r * 65536.0 + g * 256.0 + b) * 0.1
+
+    return elevation.astype(np.float32)
 
 
 def assemble_dem(
-    tiles_data: list[list[list[float]]],
+    tiles_data: list[np.ndarray],
     tiles_x: int,
     tiles_y: int,
     eff_tile_px: int,
     crop_rect: tuple[int, int, int, int],
-) -> list[list[float]]:
+) -> np.ndarray:
     """
     Сшивает список DEM тайлов (в порядке строк) в единый DEM и применяет crop_rect.
 
-    Возвращает 2D список float метров.
+    Возвращает numpy array (dtype=float32).
     """
     full_w = tiles_x * eff_tile_px
     full_h = tiles_y * eff_tile_px
-    # Инициализация полотна
-    canvas: list[list[float]] = [[0.0] * full_w for _ in range(full_h)]
+
+    # Инициализация полотна как numpy array
+    canvas = np.zeros((full_h, full_w), dtype=np.float32)
 
     # Размещение тайлов
     idx = 0
@@ -548,19 +549,20 @@ def assemble_dem(
         for tx in range(tiles_x):
             tile = tiles_data[idx]
             idx += 1
-            # Копируем по строкам
             base_y = ty * eff_tile_px
             base_x = tx * eff_tile_px
-            for y in range(eff_tile_px):
-                row_src = tile[y]
-                row_dst = canvas[base_y + y]
-                row_dst[base_x : base_x + eff_tile_px] = row_src[:eff_tile_px]
+            # Копируем тайл в полотно
+            tile_h, tile_w = tile.shape
+            copy_h = min(eff_tile_px, tile_h)
+            copy_w = min(eff_tile_px, tile_w)
+            canvas[base_y : base_y + copy_h, base_x : base_x + copy_w] = tile[
+                :copy_h, :copy_w
+            ]
 
     cx, cy, cw, ch = crop_rect
-    # Обрезка
-    cropped: list[list[float]] = [row[cx : cx + cw] for row in canvas[cy : cy + ch]]
-    # Освободить полотно
-    canvas.clear()
+    # Обрезка и возврат копии (чтобы освободить память canvas)
+    cropped = canvas[cy : cy + ch, cx : cx + cw].copy()
+    del canvas
     return cropped
 
 

@@ -709,22 +709,78 @@ class MainWindow(QMainWindow):
         control_point_group.setFrameStyle(QFrame.Shape.StyledPanel)
         control_point_layout = QVBoxLayout()
 
-        self.control_point_checkbox = QCheckBox('Контрольная точка')
+        self.control_point_checkbox = QCheckBox('Контрольная точка (НСУ)')
         self.control_point_checkbox.setToolTip(
             'Включить отображение контрольной точки на карте'
         )
-        control_point_layout.addWidget(self.control_point_checkbox)
 
         self.control_point_x_widget = CoordinateInputWidget('X (вертикаль):', 54, 15)
         self.control_point_y_widget = CoordinateInputWidget('Y (горизонталь):', 74, 40)
 
-        control_point_layout.addWidget(self.control_point_x_widget)
-        control_point_layout.addWidget(self.control_point_y_widget)
+        # Название контрольной точки
+        self.control_point_name_label = QLabel('Название:')
+        self.control_point_name_edit = QLineEdit()
+        self.control_point_name_edit.setPlaceholderText('Название точки')
+        self.control_point_name_edit.setToolTip(
+            'Название контрольной точки для отображения на карте'
+        )
+
+        # Высота антенны (для карты радиогоризонта)
+        antenna_row = QHBoxLayout()
+        self.antenna_height_label = QLabel('Высота антенны (м):')
+        self.antenna_height_spin = QDoubleSpinBox()
+        self.antenna_height_spin.setRange(0.0, 500.0)
+        self.antenna_height_spin.setDecimals(1)
+        self.antenna_height_spin.setValue(10.0)
+        self.antenna_height_spin.setSingleStep(1.0)
+        self.antenna_height_spin.setToolTip(
+            'Высота антенны над поверхностью земли (для карты радиогоризонта)'
+        )
+        antenna_row.addWidget(self.antenna_height_label)
+        antenna_row.addWidget(self.antenna_height_spin)
+
+        # Максимальная высота полёта (для карты радиогоризонта)
+        max_flight_row = QHBoxLayout()
+        self.max_flight_height_label = QLabel('Макс. высота полёта БПЛА (м):')
+        self.max_flight_height_spin = QDoubleSpinBox()
+        self.max_flight_height_spin.setRange(10.0, 5000.0)
+        self.max_flight_height_spin.setDecimals(0)
+        self.max_flight_height_spin.setValue(500.0)
+        self.max_flight_height_spin.setSingleStep(50.0)
+        self.max_flight_height_spin.setToolTip(
+            'Максимальная высота полёта для цветовой шкалы радиогоризонта.\n'
+            'Значения выше будут отображаться серым цветом.'
+        )
+        max_flight_row.addWidget(self.max_flight_height_label)
+        max_flight_row.addWidget(self.max_flight_height_spin)
+
+        name_row = QHBoxLayout()
+        name_row.addWidget(self.control_point_checkbox)
+        name_row.addWidget(self.control_point_name_label)
+        name_row.addWidget(self.control_point_name_edit)
+
+        coords_row = QHBoxLayout()
+        coords_row.addWidget(self.control_point_x_widget)
+        coords_row.addWidget(self.control_point_y_widget)
+
+        heights_row = QHBoxLayout()
+        heights_row.addLayout(antenna_row)
+        heights_row.addLayout(max_flight_row)
+
+        control_point_layout.addLayout(name_row)
+        control_point_layout.addLayout(coords_row)
+        control_point_layout.addLayout(heights_row)
         control_point_group.setLayout(control_point_layout)
 
         # По умолчанию контролы координат отключены
         self.control_point_x_widget.setEnabled(False)
         self.control_point_y_widget.setEnabled(False)
+        self.control_point_name_label.setEnabled(False)
+        self.control_point_name_edit.setEnabled(False)
+        self.antenna_height_label.setEnabled(False)
+        self.antenna_height_spin.setEnabled(False)
+        self.max_flight_height_label.setEnabled(False)
+        self.max_flight_height_spin.setEnabled(False)
 
         coords_layout.addWidget(control_point_group)
         left_container.addWidget(coords_frame)
@@ -754,6 +810,7 @@ class MainWindow(QMainWindow):
             MapType.OUTDOORS,
             MapType.ELEVATION_COLOR,
             # MapType.ELEVATION_HILLSHADE,
+            MapType.RADIO_HORIZON,
         ]
         for mt in self._maptype_order:
             self.map_type_combo.addItem(MAP_TYPE_LABELS_RU[mt], userData=mt.value)
@@ -1001,6 +1058,12 @@ class MainWindow(QMainWindow):
         self.control_point_y_widget.coordinate_edit.editingFinished.connect(
             self._on_settings_changed
         )
+        # Control point name
+        self.control_point_name_edit.editingFinished.connect(self._on_settings_changed)
+        # Antenna height for radio horizon
+        self.antenna_height_spin.valueChanged.connect(self._on_settings_changed)
+        # Max flight height for radio horizon
+        self.max_flight_height_spin.valueChanged.connect(self._on_settings_changed)
 
         # Grid settings
         self.grid_widget.width_spin.valueChanged.connect(self._on_settings_changed)
@@ -1067,12 +1130,46 @@ class MainWindow(QMainWindow):
         enabled = self.control_point_checkbox.isChecked()
         self.control_point_x_widget.setEnabled(enabled)
         self.control_point_y_widget.setEnabled(enabled)
+        self.control_point_name_label.setEnabled(enabled)
+        self.control_point_name_edit.setEnabled(enabled)
+        self.antenna_height_label.setEnabled(enabled)
+        self.antenna_height_spin.setEnabled(enabled)
+        self.max_flight_height_label.setEnabled(enabled)
+        self.max_flight_height_spin.setEnabled(enabled)
 
     @Slot()
     def _on_map_type_changed(self) -> None:
         """Clear preview immediately when map type changes and propagate setting."""
         # Clear any existing preview to avoid showing outdated imagery for another map type
         self._clear_preview_ui()
+
+        # При выборе "Радиогоризонт" автоматически включаем контрольную точку и блокируем чекбокс
+        try:
+            idx = max(0, self.map_type_combo.currentIndex())
+            map_type_value = self.map_type_combo.itemData(idx)
+            is_radio_horizon = map_type_value == MapType.RADIO_HORIZON.value
+        except Exception:
+            is_radio_horizon = False
+
+        if is_radio_horizon:
+            # Принудительно включаем контрольную точку и блокируем возможность отключения
+            self.control_point_checkbox.setChecked(True)
+            self.control_point_checkbox.setEnabled(False)
+            # Включаем поля ввода координат, названия и высоты антенны/полёта
+            self.control_point_x_widget.setEnabled(True)
+            self.control_point_y_widget.setEnabled(True)
+            self.control_point_name_label.setEnabled(True)
+            self.control_point_name_edit.setEnabled(True)
+            self.antenna_height_label.setEnabled(True)
+            self.antenna_height_spin.setEnabled(True)
+            self.max_flight_height_label.setEnabled(True)
+            self.max_flight_height_spin.setEnabled(True)
+        else:
+            # Разблокируем чекбокс для других типов карт
+            self.control_point_checkbox.setEnabled(True)
+            # Обновляем состояние полей согласно текущему состоянию чекбокса
+            self._on_control_point_toggled()
+
         # Delegate to the common settings handler to store the new map type in the model
         self._on_settings_changed()
 
@@ -1104,7 +1201,7 @@ class MainWindow(QMainWindow):
         payload['overlay_contours'] = overlay_checked
         self._controller.update_settings_bulk(**payload)
 
-    def _get_current_coordinates(self) -> dict[str, int]:
+    def _get_current_coordinates(self) -> dict[str, int | bool | float | str]:
         """Get current coordinate values from UI."""
         from_x_high, from_x_low = self.from_x_widget.get_values()
         from_y_high, from_y_low = self.from_y_widget.get_values()
@@ -1127,6 +1224,9 @@ class MainWindow(QMainWindow):
             'control_point_enabled': self.control_point_checkbox.isChecked(),
             'control_point_x': control_point_x,
             'control_point_y': control_point_y,
+            'control_point_name': self.control_point_name_edit.text(),
+            'antenna_height_m': self.antenna_height_spin.value(),
+            'max_flight_height_m': self.max_flight_height_spin.value(),
         }
 
     @Slot(int)
@@ -1252,6 +1352,10 @@ class MainWindow(QMainWindow):
         if self._download_worker and self._download_worker.isRunning():
             QMessageBox.information(self, 'Информация', 'Загрузка уже выполняется')
             return
+
+        # Force sync UI -> Model before starting download to ensure all settings
+        # (including control_point_enabled) are up-to-date
+        self._sync_ui_to_model_now()
 
         # Clear previous preview and pixmap cache between runs
         self._clear_preview_ui()
@@ -1410,6 +1514,9 @@ class MainWindow(QMainWindow):
         with QSignalBlocker(self.contours_checkbox):
             self.contours_checkbox.setChecked(overlay_flag)
 
+        # Проверяем, является ли текущий тип карты "Радиогоризонт"
+        is_radio_horizon = current_mt == MapType.RADIO_HORIZON
+
         # Update Helmert settings
         self.helmert_widget.set_values(
             getattr(settings, 'helmert_dx', None),
@@ -1423,8 +1530,16 @@ class MainWindow(QMainWindow):
 
         # Update control point settings
         control_point_enabled = getattr(settings, 'control_point_enabled', False)
+
+        # Для радиогоризонта принудительно включаем контрольную точку
+        if is_radio_horizon:
+            control_point_enabled = True
+
         with QSignalBlocker(self.control_point_checkbox):
             self.control_point_checkbox.setChecked(control_point_enabled)
+
+        # Блокируем/разблокируем чекбокс в зависимости от типа карты
+        self.control_point_checkbox.setEnabled(not is_radio_horizon)
 
         # Programmatically set full control point coordinates without splitting to high/low
         control_point_x = int(getattr(settings, 'control_point_x', 5415000))
@@ -1435,17 +1550,33 @@ class MainWindow(QMainWindow):
         with QSignalBlocker(self.control_point_y_widget.coordinate_edit):
             self.control_point_y_widget.set_coordinate(control_point_y)
 
+        # Control point name
+        control_point_name = str(getattr(settings, 'control_point_name', ''))
+        with QSignalBlocker(self.control_point_name_edit):
+            self.control_point_name_edit.setText(control_point_name)
+
+        # Antenna height for radio horizon
+        antenna_height = float(getattr(settings, 'antenna_height_m', 10.0))
+        with QSignalBlocker(self.antenna_height_spin):
+            self.antenna_height_spin.setValue(antenna_height)
+
+        # Max flight height for radio horizon
+        max_flight_height = float(getattr(settings, 'max_flight_height_m', 500.0))
+        with QSignalBlocker(self.max_flight_height_spin):
+            self.max_flight_height_spin.setValue(max_flight_height)
+
         # Log the values to ensure no truncation occurs during UI update
         try:
             x_text = self.control_point_x_widget.coordinate_edit.text()
             y_text = self.control_point_y_widget.coordinate_edit.text()
             logger.info(
-                "UI control point set: enabled=%s, x_src=%d -> edit='%s', y_src=%d -> edit='%s'",
+                "UI control point set: enabled=%s, x_src=%d -> edit='%s', y_src=%d -> edit='%s', antenna_h=%.1f",
                 control_point_enabled,
                 control_point_x,
                 x_text,
                 control_point_y,
                 y_text,
+                antenna_height,
             )
         except Exception:
             logger.exception('Failed to log control point UI update')
@@ -1453,6 +1584,9 @@ class MainWindow(QMainWindow):
         # Enable/disable coordinate inputs based on checkbox state
         self.control_point_x_widget.setEnabled(control_point_enabled)
         self.control_point_y_widget.setEnabled(control_point_enabled)
+        self.control_point_name_edit.setEnabled(control_point_enabled)
+        self.antenna_height_spin.setEnabled(control_point_enabled)
+        self.max_flight_height_spin.setEnabled(control_point_enabled)
 
         # Unblock settings propagation after UI is fully synced
         self._ui_sync_in_progress = False
@@ -1728,15 +1862,34 @@ class MainWindow(QMainWindow):
         self.to_y_widget.setEnabled(enabled)
 
         # Control point checkbox and widgets
-        self.control_point_checkbox.setEnabled(enabled)
+        # Для типа карты "Радиогоризонт" чекбокс должен оставаться заблокированным
+        try:
+            idx = max(0, self.map_type_combo.currentIndex())
+            map_type_value = self.map_type_combo.itemData(idx)
+            is_radio_horizon = map_type_value == MapType.RADIO_HORIZON.value
+        except Exception:
+            is_radio_horizon = False
+
+        if is_radio_horizon:
+            # Для радиогоризонта чекбокс всегда включён и заблокирован
+            self.control_point_checkbox.setEnabled(False)
+        else:
+            self.control_point_checkbox.setEnabled(enabled)
+
         # Control point coordinate widgets should respect checkbox state
         if enabled:
             cp_enabled = self.control_point_checkbox.isChecked()
             self.control_point_x_widget.setEnabled(cp_enabled)
             self.control_point_y_widget.setEnabled(cp_enabled)
+            self.control_point_name_edit.setEnabled(cp_enabled)
+            self.antenna_height_spin.setEnabled(cp_enabled)
+            self.max_flight_height_spin.setEnabled(cp_enabled)
         else:
             self.control_point_x_widget.setEnabled(False)
             self.control_point_y_widget.setEnabled(False)
+            self.control_point_name_edit.setEnabled(False)
+            self.antenna_height_spin.setEnabled(False)
+            self.max_flight_height_spin.setEnabled(False)
 
         # Map type and contours
         self.map_type_combo.setEnabled(enabled)

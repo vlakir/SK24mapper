@@ -37,14 +37,14 @@ from constants import (
     CONTOUR_SEED_DOWNSAMPLE,
     CONTOUR_SEED_SMOOTHING,
     CONTOUR_WIDTH,
-    CONTROL_POINT_CROSS_COLOR,
-    CONTROL_POINT_CROSS_LENGTH_PX,
-    CONTROL_POINT_CROSS_LINE_WIDTH_PX,
+    CONTROL_POINT_COLOR,
+    CONTROL_POINT_SIZE_M,
     DOWNLOAD_CONCURRENCY,
     EARTH_RADIUS_M,
     ELEVATION_USE_RETINA,
     GRID_COLOR,
     GRID_STEP_M,
+    MAPBOX_STYLE_BY_TYPE,
     MARCHING_SQUARES_CENTER_WEIGHT,
     MAX_OUTPUT_PIXELS,
     MAX_ZOOM,
@@ -59,6 +59,9 @@ from constants import (
     MS_MASK_TL_BR,
     MS_NO_CONTOUR_CASES,
     PIL_DISABLE_LIMIT,
+    RADIO_HORIZON_COLOR_RAMP,
+    RADIO_HORIZON_TOPO_OVERLAY_ALPHA,
+    RADIO_HORIZON_USE_RETINA,
     ROTATION_PAD_MIN_PX,
     ROTATION_PAD_RATIO,
     SEED_POLYLINE_QUANT_FACTOR,
@@ -91,12 +94,20 @@ from image import (
     center_crop,
     draw_axis_aligned_km_grid,
     draw_elevation_legend,
+    draw_label_with_bg,
+    draw_label_with_subscript_bg,
+    load_grid_font,
     rotate_keep_size,
 )
 from image_io import build_save_kwargs as _build_save_kwargs
 from image_io import save_jpeg as _save_jpeg
 from preview import publish_preview_image
 from progress import ConsoleProgress, LiveSpinner
+from radio_horizon import (
+    compute_and_colorize_radio_horizon,
+    compute_downsample_factor,
+    downsample_dem,
+)
 from topography import (
     ELEV_MIN_RANGE_M,
     ELEV_PCTL_HI,
@@ -111,6 +122,7 @@ from topography import (
     decode_terrain_rgb_to_elevation_m,
     effective_scale_for_xyz,
     estimate_crop_size_px,
+    latlng_to_pixel_xy,
     meters_per_pixel,
 )
 
@@ -185,6 +197,16 @@ async def download_satellite_rectangle(
             mt_enum,
             ELEVATION_USE_RETINA,
         )
+    elif mt_enum == MapType.RADIO_HORIZON:
+        if not settings.control_point_enabled:
+            msg = 'Для карты радиогоризонта необходимо включить контрольную точку'
+            raise ValueError(msg)
+        logger.info(
+            'Тип карты: %s (радиогоризонт); высота антенны=%s м; retina=%s',
+            mt_enum,
+            settings.antenna_height_m,
+            ELEVATION_USE_RETINA,
+        )
     else:
         # Нереализованные режимы пока откатываются к Спутнику
         logger.warning(
@@ -197,13 +219,16 @@ async def download_satellite_rectangle(
     # Выбор масштаба под тип карты
     is_elev_color = False
     is_elev_contours = False
+    is_radio_horizon = False
     try:
         mt_val = MapType(mt) if not isinstance(mt, MapType) else mt
         is_elev_color = mt_val == MapType.ELEVATION_COLOR
         is_elev_contours = mt_val == MapType.ELEVATION_CONTOURS
+        is_radio_horizon = mt_val == MapType.RADIO_HORIZON
     except Exception:
         is_elev_color = False
         is_elev_contours = False
+        is_radio_horizon = False
 
     # Флаг оверлея изолиний поверх выбранного типа карты
     overlay_contours = bool(getattr(settings, 'overlay_contours', False))
@@ -216,6 +241,10 @@ async def download_satellite_rectangle(
         # Для Terrain-RGB базовый тайл 256px; @2x даёт 512
         eff_scale = effective_scale_for_xyz(256, use_retina=ELEVATION_USE_RETINA)
         # Ранняя проверка доступности Terrain-RGB
+        await _validate_terrain_api(api_key)
+    elif is_radio_horizon:
+        # Для радиогоризонта используем пониженное разрешение для экономии памяти
+        eff_scale = effective_scale_for_xyz(256, use_retina=RADIO_HORIZON_USE_RETINA)
         await _validate_terrain_api(api_key)
     else:
         eff_scale = effective_scale_for_xyz(XYZ_TILE_SIZE, use_retina=XYZ_USE_RETINA)
@@ -1077,6 +1106,218 @@ async def download_satellite_rectangle(
                         logger.warning(
                             'Не удалось нанести подписи изогипс: %s', e, exc_info=True
                         )
+            elif is_radio_horizon:
+                # Карта радиогоризонта: загружаем DEM и вычисляем минимальные высоты БпЛА
+                from topography import assemble_dem
+
+                provider_rh = ElevationTileProvider(
+                    client=client, api_key=api_key, use_retina=RADIO_HORIZON_USE_RETINA
+                )
+
+                full_eff_tile_px = 256 * (2 if RADIO_HORIZON_USE_RETINA else 1)
+
+                tile_progress.label = 'Загрузка DEM для радиогоризонта'
+
+                # Загружаем все DEM тайлы (numpy arrays)
+                dem_tiles_data: list[np.ndarray] = []
+
+                async def fetch_dem_tile(
+                    idx_xy: tuple[int, tuple[int, int]],
+                ) -> tuple[int, np.ndarray]:
+                    nonlocal tile_count
+                    idx, (tile_x_world, tile_y_world) = idx_xy
+                    async with semaphore:
+                        dem_tile = await provider_rh.get_tile_dem(
+                            zoom, tile_x_world, tile_y_world
+                        )
+                        await tile_progress.step(1)
+                        tile_count += 1
+                        if tile_count % CONTOUR_LOG_MEMORY_EVERY_TILES == 0:
+                            log_memory_usage(f'radio_horizon after {tile_count} tiles')
+                        return idx, dem_tile
+
+                tasks_rh = [fetch_dem_tile(pair) for pair in enumerate(tiles)]
+                results_rh = await asyncio.gather(*tasks_rh)
+                tile_progress.close()
+
+                results_rh.sort(key=lambda t: t[0])
+                dem_tiles_data = [dem for _, dem in results_rh]
+
+                # Собираем единую DEM (numpy array)
+                dem_full = assemble_dem(
+                    tiles_data=dem_tiles_data,
+                    tiles_x=tiles_x,
+                    tiles_y=tiles_y,
+                    eff_tile_px=full_eff_tile_px,
+                    crop_rect=crop_rect,
+                )
+                del dem_tiles_data  # Освобождаем память
+                gc.collect()
+
+                # Проверяем, нужен ли даунсэмплинг DEM
+                dem_h_orig, dem_w_orig = dem_full.shape
+                ds_factor = compute_downsample_factor(dem_h_orig, dem_w_orig)
+
+                if ds_factor > 1:
+                    logger.info(
+                        'Радиогоризонт: DEM слишком большой (%dx%d = %d Mpx), '
+                        'даунсэмплинг в %d раз',
+                        dem_w_orig,
+                        dem_h_orig,
+                        dem_w_orig * dem_h_orig // 1_000_000,
+                        ds_factor,
+                    )
+                    dem_full = downsample_dem(dem_full, ds_factor)
+                    gc.collect()
+
+                # Вычисляем позицию антенны в пикселях DEM
+                # Сначала конвертируем координаты контрольной точки из ГК в географические СК-42
+                cp_lng_sk42, cp_lat_sk42 = t_sk42_from_gk.transform(
+                    settings.control_point_x_sk42_gk,
+                    settings.control_point_y_sk42_gk,
+                )
+                # Затем из СК-42 в WGS84
+                control_lng_wgs, control_lat_wgs = t_sk42_to_wgs.transform(
+                    cp_lng_sk42, cp_lat_sk42
+                )
+
+                # Конвертируем в пиксели относительно crop_rect
+                ant_px_x, ant_px_y = latlng_to_pixel_xy(
+                    control_lat_wgs, control_lng_wgs, zoom
+                )
+                # Преобразуем в локальные координаты crop (с учётом даунсэмплинга)
+                cx, cy, cw, ch = crop_rect
+                # Начало тайловой сетки в глобальных пикселях
+                first_tile_x, first_tile_y = tiles[0]
+                global_origin_x = first_tile_x * full_eff_tile_px
+                global_origin_y = first_tile_y * full_eff_tile_px
+
+                # Координаты антенны в оригинальном масштабе
+                antenna_col_orig = int(
+                    ant_px_x * (full_eff_tile_px / 256) - global_origin_x - cx
+                )
+                antenna_row_orig = int(
+                    ant_px_y * (full_eff_tile_px / 256) - global_origin_y - cy
+                )
+
+                # Применяем коэффициент даунсэмплинга
+                antenna_col = antenna_col_orig // ds_factor
+                antenna_row = antenna_row_orig // ds_factor
+
+                # Проверяем границы
+                dem_h, dem_w = dem_full.shape
+                antenna_row = max(0, min(antenna_row, dem_h - 1))
+                antenna_col = max(0, min(antenna_col, dem_w - 1))
+
+                logger.info(
+                    'Радиогоризонт: DEM размер %dx%d, антенна в пикселях (%d, %d)',
+                    dem_w,
+                    dem_h,
+                    antenna_col,
+                    antenna_row,
+                )
+
+                # Вычисляем размер пикселя в метрах (с учётом даунсэмплинга)
+                pixel_size_m = (
+                    meters_per_pixel(
+                        center_lat_wgs, zoom, scale=full_eff_tile_px // 256
+                    )
+                    * ds_factor
+                )
+
+                # Вычисляем и раскрашиваем радиогоризонт за один проход
+                sp_rh = LiveSpinner('Расчёт радиогоризонта')
+                sp_rh.start()
+
+                result = compute_and_colorize_radio_horizon(
+                    dem=dem_full,
+                    antenna_row=antenna_row,
+                    antenna_col=antenna_col,
+                    antenna_height_m=settings.antenna_height_m,
+                    pixel_size_m=pixel_size_m,
+                    max_height_m=settings.max_flight_height_m,
+                )
+
+                sp_rh.stop('Радиогоризонт рассчитан')
+                del dem_full  # Освобождаем память
+                gc.collect()  # Принудительная сборка мусора
+
+                # Масштабируем результат до целевого размера (если был даунсэмплинг)
+                target_size = (cw, ch)
+                if result.size != target_size:
+                    logger.info(
+                        'Радиогоризонт: масштабирование %s -> %s',
+                        result.size,
+                        target_size,
+                    )
+                    result = result.resize(target_size, Image.Resampling.BILINEAR)
+
+                # Накладываем цветовую карту радиогоризонта на топографическую основу
+                logger.info('Загрузка топографической основы для радиогоризонта')
+                sp_topo = LiveSpinner('Загрузка топографической основы')
+                sp_topo.start()
+
+                topo_style_id = MAPBOX_STYLE_BY_TYPE[MapType.OUTDOORS]
+
+                # Используем те же настройки тайлов, что и для DEM (RADIO_HORIZON_USE_RETINA)
+                # чтобы crop_rect соответствовал и не было огромного потребления памяти
+                topo_tile_size = TILE_SIZE
+                topo_use_retina = RADIO_HORIZON_USE_RETINA
+
+                async def fetch_topo_tile(
+                    idx_xy: tuple[int, tuple[int, int]],
+                ) -> tuple[int, Image.Image]:
+                    idx, (tx, ty) = idx_xy
+                    async with semaphore:
+                        img = await async_fetch_xyz_tile(
+                            client=client,
+                            api_key=api_key,
+                            style_id=topo_style_id,
+                            tile_size=topo_tile_size,
+                            z=zoom,
+                            x=tx,
+                            y=ty,
+                            use_retina=topo_use_retina,
+                        )
+                        return idx, img
+
+                topo_tasks = [fetch_topo_tile(pair) for pair in enumerate(tiles)]
+                topo_results = await asyncio.gather(*topo_tasks)
+                topo_results.sort(key=lambda t: t[0])
+                topo_images: list[Image.Image] = [img for _, img in topo_results]
+                eff_tile_px_topo = topo_tile_size * (2 if topo_use_retina else 1)
+                topo_base = assemble_and_crop(
+                    images=topo_images,
+                    tiles_x=tiles_x,
+                    tiles_y=tiles_y,
+                    eff_tile_px=eff_tile_px_topo,
+                    crop_rect=crop_rect,
+                )
+                with contextlib.suppress(Exception):
+                    topo_images.clear()
+
+                sp_topo.stop('Топографическая основа загружена')
+
+                # Масштабируем топооснову до размера результата если нужно
+                if topo_base.size != result.size:
+                    topo_base = topo_base.resize(result.size, Image.Resampling.BILINEAR)
+
+                # Накладываем цветовую карту радиогоризонта на топооснову с прозрачностью
+                logger.info(
+                    'Наложение радиогоризонта на топооснову (alpha=%.2f)',
+                    RADIO_HORIZON_TOPO_OVERLAY_ALPHA,
+                )
+                # Конвертируем топооснову в оттенки серого, затем в RGBA для смешивания
+                topo_base = topo_base.convert('L').convert('RGBA')
+                result = result.convert('RGBA')
+                result = Image.blend(
+                    topo_base, result, RADIO_HORIZON_TOPO_OVERLAY_ALPHA
+                )
+                del topo_base
+                gc.collect()
+
+                logger.info('Карта радиогоризонта построена')
+
             else:
 
                 async def bound_fetch(
@@ -1641,28 +1882,7 @@ async def download_satellite_rectangle(
     logger.info('Обрезка к целевому размеру — завершена (%.2fs)', crop_elapsed)
     log_memory_usage('after cropping')
 
-    # Draw elevation legend first (if needed) to get bounds for grid line breaking
-    legend_bounds: tuple[int, int, int, int] | None = None
-    if is_elev_color and elev_min_m is not None and elev_max_m is not None:
-        legend_start_time = time.monotonic()
-        logger.info('Рисование легенды высот — старт')
-        try:
-            legend_bounds = draw_elevation_legend(
-                img=result,
-                color_ramp=ELEVATION_COLOR_RAMP,
-                min_elevation_m=elev_min_m,
-                max_elevation_m=elev_max_m,
-                center_lat_wgs=center_lat_wgs,
-                zoom=zoom,
-                scale=eff_scale,
-            )
-            legend_elapsed = time.monotonic() - legend_start_time
-            logger.info('Рисование легенды высот — завершено (%.2fs)', legend_elapsed)
-        except Exception as e:
-            logger.warning('Не удалось нарисовать легенду высот: %s', e)
-            legend_bounds = None
-
-    # Grid drawing (with legend bounds for line breaking if legend was drawn)
+    # Grid drawing first (legend will be drawn on top)
     grid_start_time = time.monotonic()
     logger.info('Рисование км-сетки — старт')
     draw_axis_aligned_km_grid(
@@ -1681,7 +1901,7 @@ async def download_satellite_rectangle(
         grid_font_size_m=settings.grid_font_size_m,
         grid_text_margin_m=settings.grid_text_margin_m,
         grid_label_bg_padding_m=settings.grid_label_bg_padding_m,
-        legend_bounds=legend_bounds,
+        legend_bounds=None,
         display_grid=settings.display_grid,
         rotation_deg=rotation_deg,
     )
@@ -1689,6 +1909,46 @@ async def download_satellite_rectangle(
     logger.info('Рисование км-сетки — завершено (%.2fs)', grid_elapsed)
     log_memory_usage('after grid drawing')
     log_thread_status('after grid drawing')
+
+    # Draw elevation legend on top of grid (if needed)
+    if is_elev_color and elev_min_m is not None and elev_max_m is not None:
+        legend_start_time = time.monotonic()
+        logger.info('Рисование легенды высот — старт')
+        try:
+            draw_elevation_legend(
+                img=result,
+                color_ramp=ELEVATION_COLOR_RAMP,
+                min_elevation_m=elev_min_m,
+                max_elevation_m=elev_max_m,
+                center_lat_wgs=center_lat_wgs,
+                zoom=zoom,
+                scale=eff_scale,
+            )
+            legend_elapsed = time.monotonic() - legend_start_time
+            logger.info('Рисование легенды высот — завершено (%.2fs)', legend_elapsed)
+        except Exception as e:
+            logger.warning('Не удалось нарисовать легенду высот: %s', e)
+
+    # Draw radio horizon legend on top of grid (if needed)
+    elif is_radio_horizon:
+        legend_start_time = time.monotonic()
+        logger.info('Рисование легенды радиогоризонта — старт')
+        try:
+            draw_elevation_legend(
+                img=result,
+                color_ramp=RADIO_HORIZON_COLOR_RAMP,
+                min_elevation_m=0.0,
+                max_elevation_m=settings.max_flight_height_m,
+                center_lat_wgs=center_lat_wgs,
+                zoom=zoom,
+                scale=eff_scale,
+            )
+            legend_elapsed = time.monotonic() - legend_start_time
+            logger.info(
+                'Рисование легенды радиогоризонта — завершено (%.2fs)', legend_elapsed
+            )
+        except Exception as e:
+            logger.warning('Не удалось нарисовать легенду радиогоризонта: %s', e)
 
     # Draw center cross and log its coordinates (military notation)
     # PROJ/pyproj uses (easting, northing) with always_xy=True. Military notation wants X=northing, Y=easting.
@@ -1726,40 +1986,114 @@ async def download_satellite_rectangle(
             'Не удалось нарисовать центрированный крест или вывести координаты: %s', e
         )
 
-    # Draw control point as red cross (using same mechanics as grid/center cross)
+    # Draw control point as red triangle (unified style for all map types)
     try:
-        if getattr(settings, 'control_point_enabled', False):
+        cp_enabled = getattr(settings, 'control_point_enabled', False)
+        logger.info(
+            'CP DEBUG ENTRY: map_type=%s, control_point_enabled=%s, is_radio_horizon=%s, '
+            'result.size=%s, result.mode=%s, eff_scale=%s, zoom=%s',
+            getattr(settings, 'map_type', 'UNKNOWN'),
+            cp_enabled,
+            is_radio_horizon,
+            result.size,
+            result.mode,
+            eff_scale,
+            zoom,
+        )
+        if cp_enabled:
+            logger.info('Отрисовка контрольной точки включена')
             # Get control point coordinates in SK-42 GK (easting, northing)
             cp_x_gk = float(settings.control_point_x_sk42_gk)
             cp_y_gk = float(settings.control_point_y_sk42_gk)
-
-            # Compute center in GK as above
-            t_sk42gk_from_sk42 = Transformer.from_crs(
-                crs_sk42_geog,
-                crs_sk42_gk,
-                always_xy=True,
-            )
-            x0_gk, y0_gk = t_sk42gk_from_sk42.transform(
-                center_lng_sk42, center_lat_sk42
-            )
 
             # Pixels-per-meter at center latitude in WGS84
             mpp = meters_per_pixel(center_lat_wgs, zoom, scale=eff_scale)
             ppm = 1.0 / mpp if mpp > 0 else 0.0
 
-            # Map GK offsets to pixel offsets (screen Y grows down)
-            dx_m = cp_x_gk - x0_gk
-            dy_m = cp_y_gk - y0_gk
-            cx_img = result.width / 2.0 + dx_m * ppm
-            cy_img = result.height / 2.0 - dy_m * ppm
-
-            # Optional: log WGS84 of control point via Helmert-aware transformer
-
-            t_sk42_from_gk = Transformer.from_crs(
-                crs_sk42_gk, crs_sk42_geog, always_xy=True
-            )
+            # Преобразуем координаты контрольной точки через полную цепочку:
+            # СК-42 ГК → СК-42 географические → WGS-84 → Web Mercator пиксели
+            # Используем существующий трансформер t_sk42_from_gk (определён в начале функции)
             cp_lng_sk42, cp_lat_sk42 = t_sk42_from_gk.transform(cp_x_gk, cp_y_gk)
             cp_lng_wgs, cp_lat_wgs = t_sk42_to_wgs.transform(cp_lng_sk42, cp_lat_sk42)
+
+            # Детальное логирование для диагностики
+            logger.info(
+                'CP DEBUG: input control_point_x=%d, control_point_y=%d',
+                settings.control_point_x,
+                settings.control_point_y,
+            )
+            logger.info(
+                'CP DEBUG: cp_x_gk(easting)=%.3f, cp_y_gk(northing)=%.3f',
+                cp_x_gk,
+                cp_y_gk,
+            )
+            logger.info(
+                'CP DEBUG: cp_lng_sk42=%.8f, cp_lat_sk42=%.8f',
+                cp_lng_sk42,
+                cp_lat_sk42,
+            )
+            logger.info(
+                'CP DEBUG: center_lng_wgs=%.8f, center_lat_wgs=%.8f',
+                center_lng_wgs,
+                center_lat_wgs,
+            )
+
+            # Вычисляем "мировые" пиксельные координаты центра и контрольной точки
+            cx_world, cy_world = latlng_to_pixel_xy(
+                center_lat_wgs, center_lng_wgs, zoom
+            )
+            cp_x_world, cp_y_world = latlng_to_pixel_xy(cp_lat_wgs, cp_lng_wgs, zoom)
+
+            logger.info(
+                'CP DEBUG: cx_world=%.3f, cy_world=%.3f, cp_x_world=%.3f, cp_y_world=%.3f',
+                cx_world,
+                cy_world,
+                cp_x_world,
+                cp_y_world,
+            )
+
+            # Преобразуем в пиксели изображения (относительно центра, до поворота)
+            img_cx = result.width / 2.0
+            img_cy = result.height / 2.0
+            x_pre = img_cx + (cp_x_world - cx_world) * eff_scale
+            y_pre = img_cy + (cp_y_world - cy_world) * eff_scale
+
+            logger.info(
+                'CP DEBUG: img_cx=%.1f, img_cy=%.1f, x_pre=%.1f, y_pre=%.1f, eff_scale=%d',
+                img_cx,
+                img_cy,
+                x_pre,
+                y_pre,
+                eff_scale,
+            )
+
+            # Применяем поворот вокруг центра изображения (как в gk_to_pixel)
+            rotation_rad = math.radians(-rotation_deg)
+            cos_rot = math.cos(rotation_rad)
+            sin_rot = math.sin(rotation_rad)
+            dx = x_pre - img_cx
+            dy = y_pre - img_cy
+            cx_img = img_cx + dx * cos_rot - dy * sin_rot
+            cy_img = img_cy + dx * sin_rot + dy * cos_rot
+
+            logger.info(
+                'CP DEBUG: rotation_deg=%.3f, dx=%.1f, dy=%.1f, cx_img=%.1f, cy_img=%.1f',
+                rotation_deg,
+                dx,
+                dy,
+                cx_img,
+                cy_img,
+            )
+            # Показываем координаты как процент от размера изображения для диагностики
+            logger.info(
+                'CP DEBUG BOUNDS: cx_img=%.1f (%.1f%% of width=%d), cy_img=%.1f (%.1f%% of height=%d)',
+                cx_img,
+                100.0 * cx_img / result.width,
+                result.width,
+                cy_img,
+                100.0 * cy_img / result.height,
+                result.height,
+            )
             logger.info(
                 'Контрольная точка: СК-42 ГК X(север)=%.3f, Y(восток)=%.3f; WGS84 lat=%.8f, lon=%.8f',
                 cp_y_gk,
@@ -1768,22 +2102,95 @@ async def download_satellite_rectangle(
                 cp_lng_wgs,
             )
 
-            # Draw cross if inside image bounds
+            # Draw control point if inside image bounds
             if 0 <= cx_img <= result.width and 0 <= cy_img <= result.height:
                 draw = ImageDraw.Draw(result)
-                half = max(1, int(CONTROL_POINT_CROSS_LENGTH_PX) // 2)
-                line_w = max(1, int(CONTROL_POINT_CROSS_LINE_WIDTH_PX))
-                color = tuple(CONTROL_POINT_CROSS_COLOR)
                 cx_i = round(cx_img)
                 cy_i = round(cy_img)
-                draw.line(
-                    [(cx_i, cy_i - half), (cx_i, cy_i + half)], fill=color, width=line_w
-                )
-                draw.line(
-                    [(cx_i - half, cy_i), (cx_i + half, cy_i)], fill=color, width=line_w
+
+                # Единый стиль контрольной точки для всех типов карт: красный треугольник
+                # Размер треугольника в пикселях (из метров на местности)
+                triangle_size_px = max(10, round(CONTROL_POINT_SIZE_M * ppm))
+                # Высота равнобедренного треугольника (вершина вверху)
+                h_tri = triangle_size_px
+                # Ширина основания = высоте для равнобедренного треугольника
+                half_base = triangle_size_px // 2
+                # Вершины треугольника: вершина вверху, основание внизу
+                p1 = (cx_i, cy_i - h_tri // 2)  # верхняя вершина
+                p2 = (cx_i - half_base, cy_i + h_tri // 2)  # левый нижний угол
+                p3 = (cx_i + half_base, cy_i + h_tri // 2)  # правый нижний угол
+                color = tuple(CONTROL_POINT_COLOR)
+                draw.polygon([p1, p2, p3], fill=color, outline=(0, 0, 0))
+                marker_bottom_y = cy_i + h_tri // 2
+
+                # Рисуем название контрольной точки с высотой антенны
+                cp_name = getattr(settings, 'control_point_name', '')
+                antenna_h = getattr(settings, 'antenna_height_m', 10.0)
+
+                # Формируем текст: "<Название> (hант = <высота>)" или "(hант = <высота>)" если имя пустое
+                # Размер шрифта такой же как у подписей сетки (в метрах → пиксели)
+                label_font_size = max(10, round(settings.grid_font_size_m * ppm))
+                subscript_font_size = max(8, round(label_font_size * 0.65))
+                try:
+                    label_font = load_grid_font(label_font_size)
+                    subscript_font = load_grid_font(subscript_font_size)
+                except Exception:
+                    from PIL import ImageFont
+
+                    label_font = ImageFont.load_default()
+                    subscript_font = label_font
+
+                # Отступ текста от маркера = настройка "Отступ текста" из параметров сетки
+                text_margin_px = max(5, round(settings.grid_text_margin_m * ppm))
+                # Позиция текста: под маркером с отступом
+                label_x = cx_i
+                label_y = marker_bottom_y + text_margin_px
+
+                # Внутренний отступ подложки (как у подписей сетки)
+                bg_padding_px = max(2, round(settings.grid_label_bg_padding_m * ppm))
+
+                # Рисуем название и высоту антенны на отдельных строках
+                # Формат: "<Название>" на первой строке, "(hант = <высота> м)" на второй
+                current_y = label_y
+
+                # Первая строка: название точки (если есть)
+                if cp_name:
+                    draw_label_with_bg(
+                        draw,
+                        (label_x, current_y),
+                        cp_name,
+                        font=label_font,
+                        anchor='mt',  # middle-top
+                        img_size=result.size,
+                        padding=bg_padding_px,
+                    )
+                    # Вычисляем высоту первой строки для отступа
+                    name_bbox = draw.textbbox(
+                        (0, 0), cp_name, font=label_font, anchor='lt'
+                    )
+                    name_height = name_bbox[3] - name_bbox[1]
+                    # Отступ между строками = высота текста + padding
+                    current_y += name_height + bg_padding_px * 2
+
+                # Вторая строка: высота антенны с подстрочным индексом
+                height_parts = [
+                    ('(h', False),
+                    ('ант', True),  # подстрочный индекс
+                    (f' = {antenna_h:.1f} м)', False),
+                ]
+
+                draw_label_with_subscript_bg(
+                    draw,
+                    (label_x, current_y),
+                    height_parts,
+                    font=label_font,
+                    subscript_font=subscript_font,
+                    anchor='mt',  # middle-top
+                    img_size=result.size,
+                    padding=bg_padding_px,
                 )
             else:
-                logger.debug(
+                logger.warning(
                     'Контрольная точка вне кадра: (%.2f, %.2f) not in [0..%d]x[0..%d]',
                     cx_img,
                     cy_img,
