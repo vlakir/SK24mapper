@@ -39,6 +39,7 @@ from PySide6.QtWidgets import (
 
 from constants import (
     MAP_TYPE_LABELS_RU,
+    MIN_DECIMALS_FOR_SMALL_STEP,
     MapType,
 )
 from diagnostics import (
@@ -61,10 +62,6 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
-
-# Constant for decimal precision threshold
-MIN_DECIMALS_FOR_SMALL_STEP = 2
-
 
 class DownloadWorker(QThread):
     """Worker thread for map download operations."""
@@ -730,7 +727,7 @@ class MainWindow(QMainWindow):
         self.antenna_height_label = QLabel('Высота антенны (м):')
         self.antenna_height_spin = QDoubleSpinBox()
         self.antenna_height_spin.setRange(0.0, 500.0)
-        self.antenna_height_spin.setDecimals(1)
+        self.antenna_height_spin.setDecimals(0)
         self.antenna_height_spin.setValue(10.0)
         self.antenna_height_spin.setSingleStep(1.0)
         self.antenna_height_spin.setToolTip(
@@ -806,7 +803,7 @@ class MainWindow(QMainWindow):
         self._maptype_order = [
             MapType.SATELLITE,
             MapType.HYBRID,
-            MapType.STREETS,
+            # MapType.STREETS,
             MapType.OUTDOORS,
             MapType.ELEVATION_COLOR,
             # MapType.ELEVATION_HILLSHADE,
@@ -1225,7 +1222,7 @@ class MainWindow(QMainWindow):
             'control_point_x': control_point_x,
             'control_point_y': control_point_y,
             'control_point_name': self.control_point_name_edit.text(),
-            'antenna_height_m': self.antenna_height_spin.value(),
+            'antenna_height_m': int(round(self.antenna_height_spin.value())),
             'max_flight_height_m': self.max_flight_height_spin.value(),
         }
 
@@ -1557,6 +1554,7 @@ class MainWindow(QMainWindow):
 
         # Antenna height for radio horizon
         antenna_height = float(getattr(settings, 'antenna_height_m', 10.0))
+        antenna_height = round(antenna_height)
         with QSignalBlocker(self.antenna_height_spin):
             self.antenna_height_spin.setValue(antenna_height)
 
@@ -1570,13 +1568,13 @@ class MainWindow(QMainWindow):
             x_text = self.control_point_x_widget.coordinate_edit.text()
             y_text = self.control_point_y_widget.coordinate_edit.text()
             logger.info(
-                "UI control point set: enabled=%s, x_src=%d -> edit='%s', y_src=%d -> edit='%s', antenna_h=%.1f",
+                "UI control point set: enabled=%s, x_src=%d -> edit='%s', y_src=%d -> edit='%s', antenna_h=%d",
                 control_point_enabled,
                 control_point_x,
                 x_text,
                 control_point_y,
                 y_text,
-                antenna_height,
+                int(antenna_height),
             )
         except Exception:
             logger.exception('Failed to log control point UI update')

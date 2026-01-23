@@ -7,7 +7,7 @@ from pyproj import CRS, Transformer
 
 from constants import (
     GRID_COLOR,
-    GRID_CROSS_LENGTH_PX,
+    GRID_CROSS_LENGTH_M,
     GRID_FONT_BOLD,
     GRID_FONT_PATH,
     GRID_FONT_PATH_BOLD,
@@ -19,8 +19,11 @@ from constants import (
     GRID_TEXT_OUTLINE_COLOR,
     GRID_TEXT_OUTLINE_WIDTH,
     LEGEND_BACKGROUND_COLOR,
-    LEGEND_BORDER_WIDTH_PX,
-    LEGEND_GRID_GAP_PADDING_PX,
+    LEGEND_BACKGROUND_PADDING_M,
+    LEGEND_BORDER_WIDTH_M,
+    LEGEND_GRID_GAP_PADDING_M,
+    LEGEND_HEIGHT_MAX_RATIO,
+    LEGEND_HEIGHT_MIN_RATIO,
     LEGEND_HEIGHT_RATIO,
     LEGEND_HORIZONTAL_POSITION_RATIO,
     LEGEND_LABEL_FONT_MAX_PX,
@@ -28,10 +31,11 @@ from constants import (
     LEGEND_LABEL_FONT_RATIO,
     LEGEND_MARGIN_RATIO,
     LEGEND_MIN_HEIGHT_GRID_SQUARES,
-    LEGEND_MIN_MAP_HEIGHT_KM_FOR_RATIO,
+    LEGEND_MIN_MAP_HEIGHT_M_FOR_RATIO,
     LEGEND_NUM_LABELS,
-    LEGEND_TEXT_OFFSET_PX,
-    LEGEND_TEXT_OUTLINE_WIDTH_PX,
+    LEGEND_TEXT_OFFSET_M,
+    LEGEND_TEXT_OUTLINE_WIDTH_M,
+    LEGEND_TITLE_OFFSET_RATIO,
     LEGEND_VERTICAL_OFFSET_RATIO,
     LEGEND_WIDTH_TO_HEIGHT_RATIO,
     MIN_POINTS_FOR_LINE,
@@ -373,14 +377,14 @@ def calculate_adaptive_grid_font_size(mpp: float) -> int:
 
     """
     from constants import (
-        GRID_LABEL_FONT_KM,
+        GRID_LABEL_FONT_M,
         GRID_LABEL_FONT_MAX_PX,
         GRID_LABEL_FONT_MIN_PX,
     )
 
     try:
         # Целевой физический размер в метрах → размер в пикселях
-        px = round((GRID_LABEL_FONT_KM * 1000.0) / max(1e-9, mpp))
+        px = round(GRID_LABEL_FONT_M / max(1e-9, mpp))
     except Exception:
         px = 86  # Fallback на старое значение по умолчанию
 
@@ -388,10 +392,10 @@ def calculate_adaptive_grid_font_size(mpp: float) -> int:
     px = max(GRID_LABEL_FONT_MIN_PX, min(px, GRID_LABEL_FONT_MAX_PX))
 
     logger.info(
-        'Адаптивный размер шрифта сетки: %d px (mpp=%.6f, target=%.3f km, range=[%d,%d])',
+        'Адаптивный размер шрифта сетки: %d px (mpp=%.6f, target=%.1f м, range=[%d,%d])',
         px,
         mpp,
-        GRID_LABEL_FONT_KM,
+        GRID_LABEL_FONT_M,
         GRID_LABEL_FONT_MIN_PX,
         GRID_LABEL_FONT_MAX_PX,
     )
@@ -535,7 +539,8 @@ def draw_axis_aligned_km_grid(
 
     def draw_cross_at_intersection(x_px: float, y_px: float) -> None:
         """Рисует крестик в точке пересечения линий сетки."""
-        half = GRID_CROSS_LENGTH_PX // 2
+        cross_len_px = max(1, round(GRID_CROSS_LENGTH_M * ppm))
+        half = max(1, cross_len_px // 2)
         cross_width = 1  # Толщина крестика всегда 1 пиксель
         # Вертикальная линия крестика
         draw.line(
@@ -771,6 +776,8 @@ def draw_elevation_legend(
     center_lat_wgs: float,
     zoom: int,
     scale: int = STATIC_SCALE,
+    title: str | None = None,
+    label_step_m: float | None = None,
 ) -> tuple[int, int, int, int]:
     """
     Рисует адаптивную легенду высот в правом нижнем углу карты.
@@ -791,6 +798,37 @@ def draw_elevation_legend(
         Кортеж (x1, y1, x2, y2) - границы легенды с отступом для разрыва сетки
 
     """
+    def _wrap_legend_title(
+        draw_obj: ImageDraw.ImageDraw,
+        text: str,
+        title_font: ImageFont.ImageFont,
+        max_width_px: int,
+    ) -> list[str]:
+        def _text_width(candidate: str) -> int:
+            bbox = draw_obj.textbbox((0, 0), candidate, font=title_font, anchor='lt')
+            return bbox[2] - bbox[0]
+
+        words = text.split()
+        if not words:
+            return [text]
+
+        lines: list[str] = []
+        current = ''
+        for word in words:
+            candidate = word if not current else f'{current} {word}'
+            if _text_width(candidate) <= max_width_px:
+                current = candidate
+                continue
+
+            if current:
+                lines.append(current)
+
+            current = word
+
+        if current:
+            lines.append(current)
+        return lines
+
     draw = ImageDraw.Draw(img)
     w, h = img.size
 
@@ -798,19 +836,21 @@ def draw_elevation_legend(
     mpp = meters_per_pixel(center_lat_wgs, zoom, scale=scale)
     ppm = 1.0 / mpp if mpp > 0 else 0.0
 
-    # Рассчитываем высоту карты в километрах
-    map_height_km = (h * mpp) / 1000.0
+    # Рассчитываем высоту карты в метрах
+    map_height_m = h * mpp
 
     # Определяем высоту легенды: 10% от высоты карты, но не менее 1 км квадрата
-    if map_height_km < LEGEND_MIN_MAP_HEIGHT_KM_FOR_RATIO:
+    if map_height_m < LEGEND_MIN_MAP_HEIGHT_M_FOR_RATIO:
         # Для малых карт: минимум 1 километровый квадрат
         legend_height = int(LEGEND_MIN_HEIGHT_GRID_SQUARES * GRID_STEP_M * ppm)
     else:
         # Для больших карт: 10% от высоты
         legend_height = int(h * LEGEND_HEIGHT_RATIO)
 
-    # Обеспечиваем минимальную читаемость
-    legend_height = max(legend_height, 100)
+    # Ограничиваем высоту легенды долей высоты карты
+    min_legend_height = max(1, int(h * LEGEND_HEIGHT_MIN_RATIO))
+    max_legend_height = max(min_legend_height, int(h * LEGEND_HEIGHT_MAX_RATIO))
+    legend_height = max(min_legend_height, min(legend_height, max_legend_height))
 
     # Рассчитываем остальные размеры пропорционально высоте легенды
     legend_width = int(legend_height * LEGEND_WIDTH_TO_HEIGHT_RATIO)
@@ -819,6 +859,19 @@ def draw_elevation_legend(
     # Рассчитываем адаптивный размер шрифта
     font_size = int(legend_height * LEGEND_LABEL_FONT_RATIO)
     font_size = max(LEGEND_LABEL_FONT_MIN_PX, min(font_size, LEGEND_LABEL_FONT_MAX_PX))
+
+    # Загружаем шрифт для подписей и заголовка
+    try:
+        font = load_grid_font(font_size)
+    except Exception:
+        font = ImageFont.load_default()
+
+    title_lines = None
+    title_gap_px = 0
+    title_line_height = 0
+    title_line_gap_px = 0
+    title_block_width = 0
+    title_block_height = 0
 
     # Рассчитываем размер одного квадрата сетки в пикселях
     grid_square_px = GRID_STEP_M * ppm
@@ -849,17 +902,61 @@ def draw_elevation_legend(
 
     # Рисуем фон легенды (полупрозрачный белый прямоугольник)
     # Фон на 20% больше легенды в обоих направлениях, легенда по центру фона
-    legend_total_width = legend_width + LEGEND_TEXT_OFFSET_PX + text_width_estimate
-    legend_total_height = legend_height
+    text_offset_px = max(1, round(LEGEND_TEXT_OFFSET_M * ppm))
+    legend_total_width = legend_width + text_offset_px + text_width_estimate
+    title_extra_offset_px = 0
+    if title:
+        title_gap_px = max(1, round(LEGEND_TEXT_OFFSET_M * ppm))
+        max_title_width = legend_total_width
+        title_lines = _wrap_legend_title(draw, title, font, max_title_width)
+        title_sizes = [draw.textbbox((0, 0), line, font=font, anchor='lt') for line in title_lines]
+        title_line_height = max(1, max(bbox[3] - bbox[1] for bbox in title_sizes))
+        title_line_gap_px = max(0, round(title_line_height * 0.15))
+        title_block_width = max(bbox[2] - bbox[0] for bbox in title_sizes)
+        title_block_height = title_line_height * len(title_lines) + title_line_gap_px * (len(title_lines) - 1)
+        title_extra_offset_px = max(1, int(legend_height * LEGEND_TITLE_OFFSET_RATIO))
+    legend_total_width = max(legend_total_width, title_block_width)
+    legend_total_height = legend_height + (
+        title_block_height + title_gap_px + title_extra_offset_px if title_lines else 0
+    )
 
     # Увеличиваем фон на 20% (коэффициент 1.2), добавляя по 10% с каждой стороны
-    bg_padding_x = int(legend_total_width * 0.10)
-    bg_padding_y = int(legend_total_height * 0.10)
+    bg_padding_px = max(1, round(LEGEND_BACKGROUND_PADDING_M * ppm))
+    bg_padding_x = max(int(legend_total_width * 0.10), bg_padding_px)
+    bg_padding_y = max(int(legend_total_height * 0.10), bg_padding_px)
+
+    title_x = legend_x
+    title_y = legend_y
+    if title_lines:
+        title_y = legend_y - title_gap_px - title_block_height - title_extra_offset_px
 
     bg_x1 = legend_x - bg_padding_x
-    bg_y1 = legend_y - bg_padding_y
+    bg_y1 = title_y - bg_padding_y
     bg_x2 = legend_x + legend_total_width + bg_padding_x
     bg_y2 = legend_y + legend_height + bg_padding_y
+
+    # Сдвигаем легенду внутрь изображения, если фон выходит за границы
+    shift_x = 0
+    if bg_x1 < 0:
+        shift_x = -bg_x1
+    if bg_x2 + shift_x > w:
+        shift_x = w - bg_x2
+
+    shift_y = 0
+    if bg_y1 < 0:
+        shift_y = -bg_y1
+    if bg_y2 + shift_y > h:
+        shift_y = h - bg_y2
+
+    if shift_x or shift_y:
+        legend_x += shift_x
+        legend_y += shift_y
+        title_x += shift_x
+        title_y += shift_y
+        bg_x1 += shift_x
+        bg_x2 += shift_x
+        bg_y1 += shift_y
+        bg_y2 += shift_y
 
     # Рисуем фон через альфа-композитинг
     if img.mode != 'RGBA':
@@ -921,29 +1018,42 @@ def draw_elevation_legend(
             )
 
     # Рисуем рамку вокруг цветовой полосы
+    border_width_px = max(1, round(LEGEND_BORDER_WIDTH_M * ppm))
     draw.rectangle(
         [legend_x, legend_y, legend_x + legend_width, legend_y + legend_height],
         outline=(0, 0, 0),
-        width=LEGEND_BORDER_WIDTH_PX,
+        width=border_width_px,
     )
 
-    # Добавляем подписи высот
-    try:
-        font = load_grid_font(font_size)
-    except Exception:
-        font = ImageFont.load_default()
+    # Добавляем заголовок легенды
+    if title_lines:
+        title_line_step = title_line_height + title_line_gap_px
+        for index, line in enumerate(title_lines):
+            line_y = title_y + index * title_line_step
+            draw_text_with_outline(
+                draw,
+                (title_x, line_y),
+                line,
+                font=font,
+                fill=(0, 0, 0),
+                outline=(255, 255, 255),
+                outline_width=max(1, round(LEGEND_TEXT_OUTLINE_WIDTH_M * ppm)),
+                anchor='lt',
+            )
 
     # Рисуем метки высоты
     for i in range(LEGEND_NUM_LABELS):
         t = i / (LEGEND_NUM_LABELS - 1) if LEGEND_NUM_LABELS > 1 else 0.0
         elevation = min_elevation_m + (max_elevation_m - min_elevation_m) * t
+        if label_step_m:
+            elevation = round(elevation / label_step_m) * label_step_m
         label_text = f'{int(elevation)} м'
 
         # Позиция метки (снизу вверх)
         label_y = legend_y + legend_height - int(t * legend_height)
 
         # Рисуем текст справа от цветовой полосы с обводкой для читаемости
-        text_x = legend_x + legend_width + LEGEND_TEXT_OFFSET_PX
+        text_x = legend_x + legend_width + text_offset_px
         draw_text_with_outline(
             draw,
             (text_x, label_y),
@@ -951,13 +1061,13 @@ def draw_elevation_legend(
             font=font,
             fill=(0, 0, 0),
             outline=(255, 255, 255),
-            outline_width=LEGEND_TEXT_OUTLINE_WIDTH_PX,
+            outline_width=max(1, round(LEGEND_TEXT_OUTLINE_WIDTH_M * ppm)),
             anchor='lm',
         )
 
     # Возвращаем границы легенды с отступом для разрыва линий сетки
     # Используем увеличенные размеры фона плюс дополнительный отступ
-    gap_padding = LEGEND_GRID_GAP_PADDING_PX
+    gap_padding = max(1, round(LEGEND_GRID_GAP_PADDING_M * ppm))
     return (
         bg_x1 - gap_padding,
         bg_y1 - gap_padding,

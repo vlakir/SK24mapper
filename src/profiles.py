@@ -4,13 +4,10 @@ from pathlib import Path
 
 import tomlkit
 
+from constants import CONTROL_POINT_PRECISION_TOLERANCE_M
 from domen import MapSettings
 
 logger = logging.getLogger(__name__)
-
-# Tolerance for control point coordinate precision checks (meters)
-CONTROL_POINT_PRECISION_TOLERANCE_M = 1e-6
-
 
 def _user_profiles_dir() -> Path:
     """

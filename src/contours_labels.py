@@ -10,16 +10,16 @@ from constants import (
     CONTOUR_INDEX_EVERY,
     CONTOUR_LABEL_BG_PADDING,
     CONTOUR_LABEL_BG_RGBA,
-    CONTOUR_LABEL_EDGE_MARGIN_PX,
+    CONTOUR_LABEL_EDGE_MARGIN_M,
     CONTOUR_LABEL_FONT_BOLD,
-    CONTOUR_LABEL_FONT_KM,
+    CONTOUR_LABEL_FONT_M,
     CONTOUR_LABEL_FONT_MAX_PX,
     CONTOUR_LABEL_FONT_MIN_PX,
     CONTOUR_LABEL_FONT_PATH,
     CONTOUR_LABEL_FONT_SIZE,
     CONTOUR_LABEL_FORMAT,
     CONTOUR_LABEL_INDEX_ONLY,
-    CONTOUR_LABEL_MIN_SEG_LEN_PX,
+    CONTOUR_LABEL_MIN_SEG_LEN_M,
     CONTOUR_LABEL_OUTLINE_COLOR,
     CONTOUR_LABEL_OUTLINE_WIDTH,
     CONTOUR_LABEL_SPACING_M,
@@ -27,6 +27,7 @@ from constants import (
     CONTOUR_LABELS_ENABLED,
     GRID_FONT_PATH,
     GRID_FONT_PATH_BOLD,
+    MIN_POLYLINE_POINTS,
 )
 
 """Unified contour labeling utilities.
@@ -43,8 +44,6 @@ if TYPE_CHECKING:
     from PIL.Image import Image as PILImage
 
 logger = logging.getLogger(__name__)
-
-MIN_POLYLINE_POINTS = 2
 
 
 def draw_contour_labels(
@@ -81,7 +80,7 @@ def draw_contour_labels(
 
     def get_font_px() -> int:
         try:
-            px = round((CONTOUR_LABEL_FONT_KM * 1000.0) / max(1e-9, mpp))
+            px = round(CONTOUR_LABEL_FONT_M / max(1e-9, mpp))
         except Exception:
             px = CONTOUR_LABEL_FONT_SIZE
         # clamp to readable range
@@ -109,10 +108,10 @@ def draw_contour_labels(
         if not font_reported:
             font_reported = True
             logger.info(
-                'Настройки шрифта подписей: size_px=%d (mpp=%.6f, km=%.3f, clamp=[%d,%d]), bold=%s, path=%s',
+                'Настройки шрифта подписей: size_px=%d (mpp=%.6f, target=%.1f м, clamp=[%d,%d]), bold=%s, path=%s',
                 size,
                 mpp,
-                CONTOUR_LABEL_FONT_KM,
+                CONTOUR_LABEL_FONT_M,
                 int(CONTOUR_LABEL_FONT_MIN_PX),
                 int(CONTOUR_LABEL_FONT_MAX_PX),
                 CONTOUR_LABEL_FONT_BOLD,
@@ -133,10 +132,12 @@ def draw_contour_labels(
         return not (ax1 <= bx0 or bx1 <= ax0 or ay1 <= by0 or by1 <= ay0)
 
     spacing_px = max(1, round(CONTOUR_LABEL_SPACING_M / max(1e-9, mpp)))
+    min_seg_px = max(1, round(CONTOUR_LABEL_MIN_SEG_LEN_M / max(1e-9, mpp)))
+    edge_margin_px = max(1, round(CONTOUR_LABEL_EDGE_MARGIN_M / max(1e-9, mpp)))
 
     logger.info(
         'Подписи изолиний: старт (levels=%d, img=%dx%d, seed_ds=%d, dry_run=%s). '
-        'Пороги: spacing_m=%.1f (spacing_px=%d), min_seg=%d, edge=%d, outline=%d, gap_bg=%s',
+        'Пороги: spacing_m=%.1f (spacing_px=%d), min_seg_m=%.1f (min_seg_px=%d), edge_m=%.1f (edge_px=%d), outline=%d, gap_bg=%s',
         len(levels),
         w,
         h,
@@ -144,8 +145,10 @@ def draw_contour_labels(
         dry_run,
         float(CONTOUR_LABEL_SPACING_M),
         int(spacing_px),
-        int(CONTOUR_LABEL_MIN_SEG_LEN_PX),
-        int(CONTOUR_LABEL_EDGE_MARGIN_PX),
+        float(CONTOUR_LABEL_MIN_SEG_LEN_M),
+        int(min_seg_px),
+        float(CONTOUR_LABEL_EDGE_MARGIN_M),
+        int(edge_margin_px),
         int(CONTOUR_LABEL_OUTLINE_WIDTH),
         bool(CONTOUR_LABEL_BG_RGBA),
     )
@@ -190,9 +193,7 @@ def draw_contour_labels(
                 length = math.hypot(dx, dy)
                 seg_l_list.append(length)
                 total_len += length
-            if total_len < max(
-                CONTOUR_LABEL_MIN_SEG_LEN_PX, spacing_px * 0.8
-            ):
+            if total_len < max(min_seg_px, spacing_px * 0.8):
                 level_skipped_short += 1
                 total_skipped_short += 1
                 continue
@@ -228,12 +229,8 @@ def draw_contour_labels(
                     ang_rad -= math.pi
 
                 if not (
-                    CONTOUR_LABEL_EDGE_MARGIN_PX
-                    <= px
-                    <= w - CONTOUR_LABEL_EDGE_MARGIN_PX
-                    and CONTOUR_LABEL_EDGE_MARGIN_PX
-                    <= py
-                    <= h - CONTOUR_LABEL_EDGE_MARGIN_PX
+                    edge_margin_px <= px <= w - edge_margin_px
+                    and edge_margin_px <= py <= h - edge_margin_px
                 ):
                     level_skipped_edge += 1
                     total_skipped_edge += 1

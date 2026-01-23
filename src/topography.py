@@ -14,8 +14,10 @@ from pyproj import CRS, Transformer
 from pyproj.transformer import TransformerGroup
 
 from constants import (
+    _DEM_CACHE_MAX_SIZE,
     EARTH_RADIUS_M,
     EAST_VECTOR_SAMPLE_M,
+    ELEVATION_LEGEND_STEP_M,
     ELEV_MIN_RANGE_M,
     ELEV_PCTL_HI,
     ELEV_PCTL_LO,
@@ -528,7 +530,6 @@ def decode_terrain_rgb_to_elevation_m(img: Image.Image) -> np.ndarray:
 
 # Кэш для декодированных DEM-тайлов (~400 MB при 100 тайлах 512x512 float32)
 _dem_tile_cache: dict[tuple[int, int, int], np.ndarray] = {}
-_DEM_CACHE_MAX_SIZE = 100
 
 
 def get_cached_dem_tile(z: int, x: int, y: int) -> np.ndarray | None:
@@ -680,13 +681,19 @@ def colorize_dem_to_image(
         lo = mid - min_range_m / 2.0
         hi = mid + min_range_m / 2.0
 
+    step_m = ELEVATION_LEGEND_STEP_M
+    lo_rounded = math.floor(lo / step_m) * step_m
+    hi_rounded = math.ceil(hi / step_m) * step_m
+    if hi_rounded <= lo_rounded:
+        hi_rounded = lo_rounded + step_m
+
     # Строим LUT
     lut_size = 2048
     lut = _build_elevation_lut(ELEVATION_COLOR_RAMP, lut_size)
 
     # Нормализация и индексация — полностью векторизовано
-    inv_range = (lut_size - 1) / (hi - lo) if hi > lo else 0.0
-    indices = ((dem_arr - lo) * inv_range).astype(np.int32)
+    inv_range = (lut_size - 1) / (hi_rounded - lo_rounded) if hi_rounded > lo_rounded else 0.0
+    indices = ((dem_arr - lo_rounded) * inv_range).astype(np.int32)
     indices = np.clip(indices, 0, lut_size - 1)
 
     # Применяем LUT — векторизованная операция

@@ -5,7 +5,11 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from constants import (
+    CONTOUR_SMOOTHING_FACTOR,
+    CONTOUR_SMOOTHING_ITERATIONS,
+    CONTOUR_SMOOTHING_STRENGTH,
     MARCHING_SQUARES_CENTER_WEIGHT,
+    MIN_GRID_SIZE,
     MIN_POINTS_FOR_SMOOTHING,
     MS_AMBIGUOUS_CASES,
     MS_CONNECT_LEFT_BOTTOM,
@@ -19,22 +23,8 @@ from constants import (
     SEED_POLYLINE_QUANT_FACTOR,
 )
 
-# Импорт с дефолтами для обратной совместимости
-try:
-    from constants import (
-        CONTOUR_SMOOTHING_FACTOR,
-        CONTOUR_SMOOTHING_ITERATIONS,
-        CONTOUR_SMOOTHING_STRENGTH,
-    )
-except ImportError:
-    CONTOUR_SMOOTHING_FACTOR = 5
-    CONTOUR_SMOOTHING_STRENGTH = 2.0
-    CONTOUR_SMOOTHING_ITERATIONS = 2
-
 if TYPE_CHECKING:
     from collections.abc import Iterable
-
-MIN_GRID_SIZE = 2
 
 
 @dataclass(frozen=True)

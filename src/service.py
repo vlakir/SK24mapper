@@ -17,18 +17,18 @@ from pyproj import Transformer
 from constants import (
     ASYNC_MAX_CONCURRENCY,
     CENTER_CROSS_COLOR,
-    CENTER_CROSS_LENGTH_PX,
-    CENTER_CROSS_LINE_WIDTH_PX,
+    CENTER_CROSS_LENGTH_M,
+    CENTER_CROSS_LINE_WIDTH_M,
     CONTOUR_BLOCK_EDGE_PAD_PX,
     CONTOUR_COLOR,
     CONTOUR_INDEX_COLOR,
     CONTOUR_INDEX_EVERY,
     CONTOUR_INDEX_WIDTH,
     CONTOUR_INTERVAL_M,
-    CONTOUR_LABEL_EDGE_MARGIN_PX,
+    CONTOUR_LABEL_EDGE_MARGIN_M,
     CONTOUR_LABEL_GAP_ENABLED,
-    CONTOUR_LABEL_GAP_PADDING,
-    CONTOUR_LABEL_MIN_SEG_LEN_PX,
+    CONTOUR_LABEL_GAP_PADDING_M,
+    CONTOUR_LABEL_MIN_SEG_LEN_M,
     CONTOUR_LABEL_SPACING_M,
     CONTOUR_LABELS_ENABLED,
     CONTOUR_LOG_MEMORY_EVERY_TILES,
@@ -39,6 +39,7 @@ from constants import (
     CONTROL_POINT_SIZE_M,
     DOWNLOAD_CONCURRENCY,
     EARTH_RADIUS_M,
+    ELEVATION_LEGEND_STEP_M,
     ELEVATION_USE_RETINA,
     GRID_COLOR,
     GRID_STEP_M,
@@ -469,10 +470,15 @@ async def download_satellite_rectangle(
                     p_hi=ELEV_PCTL_HI,
                     min_range_m=ELEV_MIN_RANGE_M,
                 )
-                inv = 1.0 / (hi - lo) if hi > lo else 0.0
+                step_m = ELEVATION_LEGEND_STEP_M
+                lo_rounded = math.floor(lo / step_m) * step_m
+                hi_rounded = math.ceil(hi / step_m) * step_m
+                if hi_rounded <= lo_rounded:
+                    hi_rounded = lo_rounded + step_m
+                inv = 1.0 / (hi_rounded - lo_rounded)
                 # Сохраняем диапазон высот для легенды
-                elev_min_m = lo
-                elev_max_m = hi
+                elev_min_m = lo_rounded
+                elev_max_m = hi_rounded
 
                 # Pass B: render directly to output image using cached tiles (no network)
                 result = Image.new('RGB', (crop_rect[2], crop_rect[3]))
@@ -515,7 +521,7 @@ async def download_satellite_rectangle(
                     ar = 0.1 * 65536.0 * inv
                     ag = 0.1 * 256.0 * inv
                     ab = 0.1 * 1.0 * inv
-                    a0 = (-10000.0 - lo) * inv
+                    a0 = (-10000.0 - lo_rounded) * inv
 
                     while True:
                         item = await queue.get()
@@ -918,15 +924,20 @@ async def download_satellite_rectangle(
                             logger.warning(
                                 'Подписи изогипс: dry_run вернул 0 кандидатов — проверьте пороги (spacing=%d,min_len=%d,edge=%d) и геометрию полилиний',
                                 int(CONTOUR_LABEL_SPACING_M),
-                                int(CONTOUR_LABEL_MIN_SEG_LEN_PX),
-                                int(CONTOUR_LABEL_EDGE_MARGIN_PX),
+                                int(CONTOUR_LABEL_MIN_SEG_LEN_M),
+                                int(CONTOUR_LABEL_EDGE_MARGIN_M),
                             )
 
                         # Создаем разрывы линий контуров в местах подписей
 
                         if CONTOUR_LABEL_GAP_ENABLED and label_bboxes:
                             draw = ImageDraw.Draw(result)
-                            gap_padding = int(CONTOUR_LABEL_GAP_PADDING)
+                            gap_padding = max(
+                                1,
+                                round(
+                                    CONTOUR_LABEL_GAP_PADDING_M / max(1e-9, mpp)
+                                ),
+                            )
                             for bbox in label_bboxes:
                                 x0, y0, x1, y1 = bbox
                                 # Расширяем область на gap_padding
@@ -1513,7 +1524,10 @@ async def download_satellite_rectangle(
 
                     if CONTOUR_LABEL_GAP_ENABLED and overlay_label_bboxes:
                         draw_overlay = ImageDraw.Draw(overlay)
-                        gap_padding = int(CONTOUR_LABEL_GAP_PADDING)
+                        gap_padding = max(
+                            1,
+                            round(CONTOUR_LABEL_GAP_PADDING_M / max(1e-9, mpp)),
+                        )
                         for bbox in overlay_label_bboxes:
                             x0, y0, x1, y1 = bbox
                             # Расширяем область на gap_padding
@@ -1655,6 +1669,8 @@ async def download_satellite_rectangle(
                 center_lat_wgs=center_lat_wgs,
                 zoom=zoom,
                 scale=eff_scale,
+                title='Высота',
+                label_step_m=ELEVATION_LEGEND_STEP_M,
             )
             legend_elapsed = time.monotonic() - legend_start_time
             logger.info('Рисование легенды высот — завершено (%.2fs)', legend_elapsed)
@@ -1674,6 +1690,8 @@ async def download_satellite_rectangle(
                 center_lat_wgs=center_lat_wgs,
                 zoom=zoom,
                 scale=eff_scale,
+                title='Минимальная высота БпЛА',
+                label_step_m=ELEVATION_LEGEND_STEP_M,
             )
             legend_elapsed = time.monotonic() - legend_start_time
             logger.info(
@@ -1705,10 +1723,13 @@ async def download_satellite_rectangle(
         )
 
         # Draw the cross at the image center
+        mpp_center = meters_per_pixel(center_lat_wgs, zoom, scale=eff_scale)
+        ppm_center = 1.0 / mpp_center if mpp_center > 0 else 0.0
         cx = result.width // 2
         cy = result.height // 2
-        half = max(1, int(CENTER_CROSS_LENGTH_PX) // 2)
-        line_w = max(1, int(CENTER_CROSS_LINE_WIDTH_PX))
+        length_px = max(1, round(CENTER_CROSS_LENGTH_M * ppm_center))
+        half = max(1, length_px // 2)
+        line_w = max(1, round(CENTER_CROSS_LINE_WIDTH_M * ppm_center))
         draw = ImageDraw.Draw(result)
         color = tuple(CENTER_CROSS_COLOR)
         draw.line([(cx, cy - half), (cx, cy + half)], fill=color, width=line_w)
@@ -1857,7 +1878,7 @@ async def download_satellite_rectangle(
 
                 # Рисуем название контрольной точки с высотой антенны
                 cp_name = getattr(settings, 'control_point_name', '')
-                antenna_h = getattr(settings, 'antenna_height_m', 10.0)
+                antenna_h = round(getattr(settings, 'antenna_height_m', 10.0))
 
                 # Формируем текст: "<Название> (hант = <высота>)" или "(hант = <высота>)" если имя пустое
                 # Размер шрифта такой же как у подписей сетки (в метрах → пиксели)
@@ -1908,7 +1929,7 @@ async def download_satellite_rectangle(
                 height_parts = [
                     ('(h', False),
                     ('ант', True),  # подстрочный индекс
-                    (f' = {antenna_h:.1f} м)', False),
+                    (f' = {int(antenna_h)} м)', False),
                 ]
 
                 draw_label_with_subscript_bg(

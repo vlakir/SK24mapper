@@ -14,7 +14,7 @@ from constants import (
     MAP_TYPE_LABELS_RU,
     MAPBOX_STYLE_BY_TYPE,
     MAX_GK_ZONE,
-    MAX_SIDE_SIZE,
+    MAX_SIDE_SIZE_M,
     MapType,
     RETINA_FACTOR,
     SK42_VALID_LAT_MAX,
@@ -153,7 +153,7 @@ class TestNumericConstants:
 
     def test_max_side_size(self):
         """Max side size should be reasonable."""
-        assert MAX_SIDE_SIZE > 0
+        assert MAX_SIDE_SIZE_M > 0
 
 
 class TestGKConstants:

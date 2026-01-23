@@ -14,7 +14,8 @@ from typing import TYPE_CHECKING
 import cv2
 import numpy as np
 
-from constants import CONTOUR_PARALLEL_WORKERS
+from constants import CONTOUR_PARALLEL_WORKERS, CONTOUR_SEED_SMOOTHING
+from contours.seeds import simple_smooth_polyline
 
 if TYPE_CHECKING:
     pass
@@ -123,10 +124,17 @@ def _build_contours_for_level(
             # Субпиксельное уточнение позиций
             refined = _refine_contour_subpixel(pts, dem, level)
             if len(refined) >= 3:
-                polylines.append(refined)
+                if CONTOUR_SEED_SMOOTHING:
+                    refined = simple_smooth_polyline(refined)
+                if len(refined) >= 3:
+                    polylines.append(refined)
         else:
             # Просто конвертируем в список кортежей
-            polylines.append([(float(p[0]), float(p[1])) for p in pts])
+            poly = [(float(p[0]), float(p[1])) for p in pts]
+            if CONTOUR_SEED_SMOOTHING:
+                poly = simple_smooth_polyline(poly)
+            if len(poly) >= 3:
+                polylines.append(poly)
     
     return polylines
 
