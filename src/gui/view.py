@@ -37,12 +37,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from constants import (
+from shared.constants import (
     MAP_TYPE_LABELS_RU,
     MIN_DECIMALS_FOR_SMALL_STEP,
     MapType,
 )
-from diagnostics import (
+from shared.diagnostics import (
     log_comprehensive_diagnostics,
     log_memory_usage,
     log_thread_status,
@@ -50,174 +50,37 @@ from diagnostics import (
 from gui.controller import MilMapperController
 from gui.model import EventData, MilMapperModel, ModelEvent, Observer
 from gui.preview_window import OptimizedImageView
-from profiles import ensure_profiles_dir
-from progress import (
+from domain.profiles import ensure_profiles_dir
+from shared.progress import (
     cleanup_all_progress_resources,
     set_preview_image_callback,
     set_spinner_callbacks,
 )
-from status_bar_proxy import StatusBarProxy
+from gui.status_bar import StatusBarProxy
+from gui.widgets import (
+    CoordinateInputWidget,
+    GridSettingsWidget,
+    HelmertSettingsWidget,
+    ModalOverlay,
+    OldCoordinateInputWidget,
+    OutputSettingsWidget,
+)
+from gui.workers import DownloadWorker
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
-class DownloadWorker(QThread):
-    """Worker thread for map download operations."""
 
-    finished = Signal(bool, str)  # success, error_message
-    progress_update = Signal(int, int, str)  # done, total, label
-    preview_ready = Signal(object)  # PIL Image object
+class _ViewObserver(Observer):
+    """Adapter to avoid QWidget.update signature clash with Observer.update."""
 
-    def __init__(self, controller: MilMapperController) -> None:
-        super().__init__()
-        self._controller = controller
+    def __init__(self, handler: Callable[[EventData], None]) -> None:
+        self._handler = handler
 
-    def run(self) -> None:
-        """Execute download in background thread."""
-        logger.info('DownloadWorker thread started')
-        log_thread_status('worker thread start')
-        log_memory_usage('worker thread start')
-
-        try:
-            # Setup thread-safe callbacks that emit signals instead of direct UI updates
-            def preview_callback(img_obj: object) -> bool:
-                """Handle preview image from map generation."""
-                try:
-                    if isinstance(img_obj, Image.Image):
-                        self.preview_ready.emit(img_obj)
-                        return True
-                    return False
-                except Exception as e:
-                    logger.warning(f'Failed to process preview image: {e}')
-                    return False
-
-            # Setup progress system with thread-safe callbacks
-
-            set_spinner_callbacks(
-                lambda label: self.progress_update.emit(0, 0, label),
-                lambda label: None,
-            )
-            set_preview_image_callback(preview_callback)
-
-            # Import and set progress callback for ConsoleProgress updates
-            from progress import set_progress_callback
-
-            set_progress_callback(
-                lambda done, total, label: self.progress_update.emit(done, total, label)
-            )
-
-            # Run the actual download
-            log_memory_usage('before download sync call')
-            self._controller.start_map_download_sync()
-            log_memory_usage('after download sync call')
-
-            self.finished.emit(True, '')
-            logger.info('DownloadWorker thread completed successfully')
-
-        except Exception as e:
-            logger.exception(f'DownloadWorker thread failed: {e}')
-            log_memory_usage('worker thread error')
-            self.finished.emit(False, str(e))
-        finally:
-            log_thread_status('worker thread end')
-            log_memory_usage('worker thread end')
-
-
-class OldCoordinateInputWidget(QWidget):
-    """Widget for coordinate input with old 4-digit format (high/low fields)."""
-
-    def __init__(self, label: str, high_value: int = 0, low_value: int = 0) -> None:
-        super().__init__()
-        self._setup_ui(label, high_value, low_value)
-
-    def _setup_ui(self, label: str, high_value: int, low_value: int) -> None:
-        """Setup coordinate input UI."""
-        layout = QHBoxLayout()
-        layout.setContentsMargins(0, 0, 0, 0)
-
-        # Label
-        label_widget = QLabel(label)
-        label_widget.setMinimumWidth(80)
-        layout.addWidget(label_widget)
-
-        # High value input
-        self.high_spin = QSpinBox()
-        self.high_spin.setRange(0, 99)
-        self.high_spin.setValue(high_value)
-        self.high_spin.setToolTip(f'Старшие разряды для {label}')
-        layout.addWidget(self.high_spin)
-
-        # Low value input
-        self.low_spin = QSpinBox()
-        self.low_spin.setRange(0, 999)
-        self.low_spin.setValue(low_value)
-        self.low_spin.setToolTip(f'Младшие разряды для {label}')
-        layout.addWidget(self.low_spin)
-
-        self.setLayout(layout)
-
-    def get_values(self) -> tuple[int, int]:
-        """Get high and low values."""
-        return self.high_spin.value(), self.low_spin.value()
-
-    def set_values(self, high: int, low: int) -> None:
-        """Set high and low values."""
-        self.high_spin.setValue(high)
-        self.low_spin.setValue(low)
-
-
-class CoordinateInputWidget(QWidget):
-    """Widget for coordinate input with simple QLineEdit (0-9999999)."""
-
-    def __init__(self, label: str, high_value: int = 0, low_value: int = 0) -> None:
-        super().__init__()
-        # Convert high/low format to coordinate value for initial display
-        coordinate_value = high_value * 100000 + low_value * 1000
-        self._setup_ui(label, coordinate_value)
-
-    def _setup_ui(self, label: str, coordinate_value: int) -> None:
-        """Setup coordinate input UI."""
-        layout = QHBoxLayout()
-        layout.setContentsMargins(0, 0, 0, 0)
-
-        # Label
-        label_widget = QLabel(label)
-        label_widget.setMinimumWidth(80)
-        layout.addWidget(label_widget)
-
-        # Simple coordinate input using QLineEdit
-        self.coordinate_edit = QLineEdit()
-        self.coordinate_edit.setText(str(coordinate_value))
-        self.coordinate_edit.setToolTip(f'Координата для {label} (0-9999999)')
-        layout.addWidget(self.coordinate_edit)
-
-        self.setLayout(layout)
-
-    def get_coordinate(self) -> int:
-        """Get the current coordinate value as entered by user."""
-        try:
-            text = self.coordinate_edit.text().strip()
-            return int(text) if text else 0
-        except ValueError:
-            return 0
-
-    def set_coordinate(self, coordinate: int) -> None:
-        """Set the coordinate value directly."""
-        self.coordinate_edit.setText(str(coordinate))
-
-    def get_values(self) -> tuple[int, int]:
-        """Get high and low values for backward compatibility."""
-        coordinate = self.get_coordinate()
-        high = coordinate // 100000
-        low = (coordinate % 100000) // 1000
-        return high, low
-
-    def set_values(self, high: int, low: int) -> None:
-        """Set high and low values for backward compatibility."""
-        coordinate_value = high * 100000 + low * 1000
-        self.set_coordinate(coordinate_value)
+    def update(self, event_data: EventData) -> None:
+        self._handler(event_data)
 
 
 class GridSettingsWidget(QWidget):
@@ -1404,7 +1267,7 @@ class MainWindow(QMainWindow):
         try:
             set_preview_image_callback(None)
             set_spinner_callbacks(None, None)
-            from progress import set_progress_callback as _set_prog
+            from shared.progress import set_progress_callback as _set_prog
 
             _set_prog(None)
         except Exception as e:
@@ -1927,7 +1790,7 @@ class MainWindow(QMainWindow):
     def _open_profile(self) -> None:
         """Open profile file from disk and load settings."""
         # Default directory: profiles dir (user or local)
-        from profiles import ensure_profiles_dir
+        from domain.profiles import ensure_profiles_dir
 
         default_dir = ensure_profiles_dir()
         file_path, _ = QFileDialog.getOpenFileName(
@@ -2060,3 +1923,4 @@ def create_application() -> tuple[
     window = MainWindow(model, controller)
 
     return app, window, model, controller
+

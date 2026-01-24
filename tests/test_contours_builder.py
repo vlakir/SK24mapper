@@ -2,7 +2,7 @@
 
 import pytest
 
-from contours_builder import (
+from contours.builder import (
     BuildOpts,
     ContourLevels,
     CoordMap,

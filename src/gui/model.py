@@ -8,7 +8,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from domen import MapSettings
+from domain.models import MapSettings
 
 logger = logging.getLogger(__name__)
 

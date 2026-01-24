@@ -2,8 +2,8 @@
 import pytest
 from PIL import Image
 from pyproj import CRS, Transformer
-from image import draw_axis_aligned_km_grid, draw_elevation_legend
-from topography import (
+from imaging import draw_axis_aligned_km_grid, draw_elevation_legend
+from geo.topography import (
     build_transformers_sk42, crs_sk42_geog, compute_grid,
     compute_xyz_coverage, decode_terrain_rgb_to_elevation_m,
     colorize_dem_to_image

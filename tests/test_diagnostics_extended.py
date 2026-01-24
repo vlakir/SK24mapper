@@ -2,7 +2,7 @@
 import pytest
 import logging
 from unittest.mock import MagicMock, AsyncMock, patch
-from diagnostics import (
+from shared.diagnostics import (
     get_memory_info, get_thread_info, get_file_descriptor_info,
     get_sqlite_info, get_system_load, ResourceMonitor,
     log_memory_usage, log_thread_status, log_comprehensive_diagnostics,
@@ -61,7 +61,7 @@ class TestDiagnostics:
 
     @pytest.mark.asyncio
     async def test_run_deep_verification_mock(self):
-        with patch('diagnostics._make_cached_session_for_diag') as mock_session_factory:
+        with patch('shared.diagnostics._make_cached_session_for_diag') as mock_session_factory:
             mock_session = AsyncMock()
             # Context manager for the session
             mock_session_factory.return_value.__aenter__.return_value = mock_session
@@ -80,7 +80,7 @@ class TestDiagnostics:
             pass
 
     def test_ensure_writable_dir(self, tmp_path):
-        from diagnostics import _ensure_writable_dir
+        from shared.diagnostics import _ensure_writable_dir
         path = tmp_path / "test_dir"
         _ensure_writable_dir(path)
         assert path.exists()

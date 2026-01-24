@@ -2,7 +2,7 @@
 
 import pytest
 
-from geometry import tile_overlap_rect_common
+from geo.geometry import tile_overlap_rect_common
 
 
 class TestTileOverlapRectCommon:

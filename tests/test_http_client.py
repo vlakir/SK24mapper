@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from http_client import (
+from infrastructure.http.client import (
     cleanup_sqlite_cache,
     make_http_session,
     resolve_cache_dir,
@@ -83,9 +83,9 @@ class TestMakeHttpSession:
         mock_cached_session.close = AsyncMock()
         mock_conn = MagicMock()
 
-        with patch('http_client.SQLiteBackend', return_value=mock_backend), \
-             patch('http_client.CachedSession', return_value=mock_cached_session), \
-             patch('http_client.sqlite3.connect', return_value=mock_conn):
+        with patch('infrastructure.http.client.SQLiteBackend', return_value=mock_backend), \
+             patch('infrastructure.http.client.CachedSession', return_value=mock_cached_session), \
+             patch('infrastructure.http.client.sqlite3.connect', return_value=mock_conn):
             tmpdir = tempfile.mkdtemp()
             cache_dir = Path(tmpdir) / 'cache'
             session = make_http_session(cache_dir)
@@ -109,9 +109,8 @@ class TestValidateStyleApi:
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=None)
 
-        with patch('http_client.aiohttp.TCPConnector'), \
-             patch('http_client.aiohttp.ClientSession', return_value=mock_session), \
-             patch('http_client.SQLiteBackend'):
+        with patch('infrastructure.http.client.aiohttp.TCPConnector'), \
+             patch('infrastructure.http.client.aiohttp.ClientSession', return_value=mock_session):
             with pytest.raises(RuntimeError):
                 await validate_style_api('invalid_key_12345', 'mapbox/satellite-v9')
 
@@ -140,8 +139,7 @@ class TestValidateTerrainApi:
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=None)
 
-        with patch('http_client.aiohttp.TCPConnector'), \
-             patch('http_client.aiohttp.ClientSession', return_value=mock_session), \
-             patch('http_client.SQLiteBackend'):
+        with patch('infrastructure.http.client.aiohttp.TCPConnector'), \
+             patch('infrastructure.http.client.aiohttp.ClientSession', return_value=mock_session):
             with pytest.raises(RuntimeError):
                 await validate_terrain_api('invalid_key_12345')

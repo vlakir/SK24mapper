@@ -5,7 +5,7 @@ import math
 import pytest
 from PIL import Image
 
-from topography import (
+from geo.topography import (
     choose_zoom_with_limit,
     compute_grid,
     compute_percentiles,

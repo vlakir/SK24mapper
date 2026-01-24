@@ -1,11 +1,35 @@
+"""Package initializer for contours.
+
+Re-exports common API for contour generation and labeling.
+"""
 from __future__ import annotations
 
-from contours_labels import draw_contour_labels as draw_contour_labels
+from .builder import (
+    BuildOpts,
+    ContourLevels,
+    CoordMap,
+    Sampling,
+    SeedGrid,
+)
+from .helpers import (
+    TileOverlapParams,
+    tile_overlap_rect,
+    tx_ty_from_index,
+)
+from .labels import draw_contour_labels
+from .labels_overlay import draw_contour_labels_overlay
+from .seeds import build_seed_polylines
 
-from .labels_overlay import draw_contour_labels_overlay as draw_contour_labels_overlay
-from .seeds import build_seed_polylines as build_seed_polylines
-
-"""
-Package initializer for contours.
-Re-exports common API and ensures `from contours import draw_contour_labels` works.
-"""
+__all__ = [
+    'BuildOpts',
+    'ContourLevels',
+    'CoordMap',
+    'Sampling',
+    'SeedGrid',
+    'TileOverlapParams',
+    'build_seed_polylines',
+    'draw_contour_labels',
+    'draw_contour_labels_overlay',
+    'tile_overlap_rect',
+    'tx_ty_from_index',
+]

@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from tiles_executor import run_tiles
+from tiles.executor import run_tiles
 
 
 class TestRunTiles:

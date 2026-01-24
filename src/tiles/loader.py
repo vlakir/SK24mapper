@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 
 import aiohttp
 
-from constants import (
+from shared.constants import (
     ASYNC_MAX_CONCURRENCY,
     DOWNLOAD_CONCURRENCY,
     ELEVATION_USE_RETINA,
@@ -24,7 +24,7 @@ from constants import (
     MapType,
     map_type_to_style_id,
 )
-from topography import (
+from geo.topography import (
     async_fetch_terrain_rgb_tile,
     async_fetch_xyz_tile,
     decode_terrain_rgb_to_elevation_m,
@@ -171,3 +171,5 @@ class TileFetcher:
         """Загружает пакет DEM-тайлов."""
         tasks = [self.fetch_dem(x, y) for x, y in tile_coords]
         return await asyncio.gather(*tasks)
+
+

@@ -3,7 +3,7 @@
 import pytest
 from PIL import Image
 
-from preview import publish_preview_image
+from gui.preview import publish_preview_image
 
 
 class TestPublishPreviewImage:

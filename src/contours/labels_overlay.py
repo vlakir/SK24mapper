@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from contours_labels import draw_contour_labels
+from contours.labels import draw_contour_labels
 
 if TYPE_CHECKING:
     from PIL import Image

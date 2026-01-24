@@ -3,7 +3,7 @@
 import pytest
 from PIL import Image
 
-from contours_labels import draw_contour_labels
+from contours.labels import draw_contour_labels
 
 
 class TestDrawContourLabels:

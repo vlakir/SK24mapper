@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from image_io import build_save_kwargs, save_jpeg
+from imaging.io import build_save_kwargs, save_jpeg
 
 
 class TestBuildSaveKwargs:

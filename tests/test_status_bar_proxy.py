@@ -1,7 +1,7 @@
 
 import pytest
 from unittest.mock import MagicMock
-from status_bar_proxy import StatusBarProxy
+from gui.status_bar import StatusBarProxy
 from PySide6.QtCore import Qt
 
 def test_status_bar_proxy_emit():

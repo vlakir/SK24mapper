@@ -4,7 +4,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from constants import (
+from shared.constants import (
     CONTOUR_SMOOTHING_FACTOR,
     CONTOUR_SMOOTHING_ITERATIONS,
     CONTOUR_SMOOTHING_STRENGTH,
@@ -246,3 +246,4 @@ def simple_smooth_polyline(
         smoothed = new_points
 
     return smoothed
+

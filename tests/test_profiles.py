@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from profiles import (
+from domain.profiles import (
     CONTROL_POINT_PRECISION_TOLERANCE_M,
     _user_profiles_dir,
     delete_profile,
@@ -16,7 +16,7 @@ from profiles import (
     profile_path,
     save_profile,
 )
-from domen import MapSettings
+from domain.models import MapSettings
 
 
 def create_test_settings(**overrides):

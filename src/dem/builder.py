@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from topography import assemble_dem, get_cached_dem_tile, cache_dem_tile
+from geo.topography import assemble_dem, get_cached_dem_tile, cache_dem_tile
 
 
 def build_dem_from_tiles(

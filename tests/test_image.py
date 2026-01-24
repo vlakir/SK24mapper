@@ -3,7 +3,7 @@
 import pytest
 from PIL import Image, ImageDraw
 
-from image import (
+from imaging import (
     apply_white_mask,
     assemble_and_crop,
     calculate_adaptive_grid_font_size,

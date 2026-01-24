@@ -11,9 +11,9 @@ from typing import Any
 import tomlkit
 from dotenv import load_dotenv
 
-from diagnostics import ResourceMonitor, log_memory_usage
+from shared.diagnostics import ResourceMonitor, log_memory_usage
 from gui.model import MilMapperModel, ModelEvent
-from profiles import ensure_profiles_dir, list_profiles, load_profile, save_profile
+from domain.profiles import ensure_profiles_dir, list_profiles, load_profile, save_profile
 from service import download_satellite_rectangle
 
 logger = logging.getLogger(__name__)
@@ -272,7 +272,7 @@ class MilMapperController:
         with ResourceMonitor('MAP_DOWNLOAD'):
             try:
                 # Глубокая проверка перед стартом
-                from diagnostics import run_deep_verification
+                from shared.diagnostics import run_deep_verification
 
                 try:
                     await run_deep_verification(
@@ -343,6 +343,19 @@ class MilMapperController:
     def start_map_download_sync(self) -> None:
         """Запуск загрузки карты в синхронном контексте (обёртка над async)."""
         asyncio.run(self.start_map_download())
+
+    def download_map(self) -> bool:
+        """Синхронный метод загрузки карты для DownloadWorker.
+        
+        Returns:
+            True если загрузка успешна, False в случае ошибки.
+        """
+        try:
+            self.start_map_download_sync()
+            return True
+        except Exception as e:
+            logger.exception(f'download_map failed: {e}')
+            raise
 
     def get_available_profiles(self) -> list[str]:
         """Получение списка доступных профилей (по именам файлов TOML)."""

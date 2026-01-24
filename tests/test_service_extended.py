@@ -2,7 +2,7 @@
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 from service import download_satellite_rectangle
-from domen import MapSettings
+from domain.models import MapSettings
 from PIL import Image
 
 @pytest.fixture
@@ -20,10 +20,10 @@ def base_settings():
 
 class TestService:
     @pytest.mark.asyncio
-    @patch('service._make_http_session')
-    @patch('service._validate_api_and_connectivity', new_callable=AsyncMock)
-    @patch('service._validate_terrain_api', new_callable=AsyncMock)
-    @patch('service.compute_xyz_coverage')
+    @patch('services.map_download_service._make_http_session')
+    @patch('services.map_download_service._validate_api_and_connectivity', new_callable=AsyncMock)
+    @patch('services.map_download_service._validate_terrain_api', new_callable=AsyncMock)
+    @patch('services.tile_coverage.compute_xyz_coverage')
     async def test_download_satellite_rectangle_basic(self, mock_grid, mock_terrain_val, mock_style_val, mock_session, base_settings, tmp_path):
         # Setup mocks
         mock_session.return_value.__aenter__.return_value = AsyncMock()
@@ -31,7 +31,7 @@ class TestService:
         # mock_grid returns (tiles, tiles_grid, crop_rect, map_params)
         mock_grid.return_value = (
             [], # tiles
-            [], # tiles_grid
+            (0, 0), # tiles_grid (tiles_x, tiles_y)
             (0, 0, 256, 256), # crop_rect
             {} # map_params
         )
@@ -40,7 +40,7 @@ class TestService:
         
         # We need to mock more things inside download_satellite_rectangle because it's a huge function
         # For a basic test, let's just ensure it calls the validation functions
-        with patch('service.Image.new') as mock_image_new:
+        with patch('services.map_download_service.Image.new') as mock_image_new:
             mock_img = MagicMock()
             mock_image_new.return_value = mock_img
             

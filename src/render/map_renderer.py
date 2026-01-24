@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 from PIL import Image
 
-from topography import colorize_dem_to_image
+from geo.topography import colorize_dem_to_image
 
 if TYPE_CHECKING:
     pass
@@ -125,3 +125,4 @@ class MapRenderer:
     def clear(self) -> None:
         """Очищает все слои."""
         self.layers.clear()
+

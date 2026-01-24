@@ -3,7 +3,7 @@
 import time
 from unittest.mock import MagicMock
 
-from progress import (
+from shared.progress import (
     ConsoleProgress,
     LiveSpinner,
     SingleLineRenderer,

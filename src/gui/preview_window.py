@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from constants import PREVIEW_ROTATION_ANGLE
+from shared.constants import PREVIEW_ROTATION_ANGLE
 
 if TYPE_CHECKING:
     from PIL import Image
@@ -237,3 +237,4 @@ class OptimizedImageView(QGraphicsView):
             if current_scale > self._fit_to_window_scale:
                 factor = current_scale / self._fit_to_window_scale
                 self.scale(factor, factor)
+

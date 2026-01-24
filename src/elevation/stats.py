@@ -5,10 +5,10 @@ import logging
 import random
 from typing import TYPE_CHECKING
 
-from constants import CONTOUR_LOG_MEMORY_EVERY_TILES
-from contours_helpers import tx_ty_from_index
-from geometry import tile_overlap_rect_common as _tile_overlap_rect_common
-from topography import compute_percentiles, decode_terrain_rgb_to_elevation_m
+from shared.constants import CONTOUR_LOG_MEMORY_EVERY_TILES
+from contours.helpers import tx_ty_from_index
+from geo.geometry import tile_overlap_rect_common as _tile_overlap_rect_common
+from geo.topography import compute_percentiles, decode_terrain_rgb_to_elevation_m
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Iterable
@@ -107,7 +107,7 @@ async def sample_elevation_percentiles(
         tile_count += 1
         if tile_count % CONTOUR_LOG_MEMORY_EVERY_TILES == 0:
             try:
-                from diagnostics import log_memory_usage
+                from shared.diagnostics import log_memory_usage
 
                 log_memory_usage(f'elev pass1 after {tile_count} tiles')
             except Exception as e:
@@ -134,3 +134,5 @@ def compute_elevation_range(
         lo = mid - 0.5 * min_range_m
         hi = mid + 0.5 * min_range_m
     return lo, hi
+
+

@@ -2,7 +2,7 @@
 
 import pytest
 
-from elevation_provider import TileKey
+from elevation.provider import TileKey
 
 
 class TestTileKey:

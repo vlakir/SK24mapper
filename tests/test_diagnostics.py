@@ -2,7 +2,7 @@
 
 import pytest
 
-from diagnostics import (
+from shared.diagnostics import (
     ResourceMonitor,
     get_file_descriptor_info,
     get_memory_info,

@@ -5,7 +5,7 @@ from pathlib import Path
 from PIL import Image
 from io import BytesIO
 from unittest.mock import MagicMock, AsyncMock, patch
-from elevation_provider import ElevationTileProvider, TileKey
+from elevation.provider import ElevationTileProvider, TileKey
 
 @pytest.fixture
 def mock_client():
@@ -77,7 +77,7 @@ class TestElevationTileProvider:
         
         mock_img = Image.new('RGB', (256, 256), color=(10, 20, 30))
         
-        with patch('elevation_provider.async_fetch_terrain_rgb_tile', new_callable=AsyncMock) as mock_fetch:
+        with patch('elevation.provider.async_fetch_terrain_rgb_tile', new_callable=AsyncMock) as mock_fetch:
             mock_fetch.return_value = mock_img
             
             raw = await provider._fetch_raw(provider._key(10, 1, 1))

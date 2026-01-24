@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 import cv2
 import numpy as np
 
-from constants import CONTOUR_PARALLEL_WORKERS, CONTOUR_SEED_SMOOTHING
+from shared.constants import CONTOUR_PARALLEL_WORKERS, CONTOUR_SEED_SMOOTHING
 from contours.seeds import simple_smooth_polyline
 
 if TYPE_CHECKING:
@@ -193,3 +193,4 @@ def build_seed_polylines(
             )
     
     return polylines_by_level
+

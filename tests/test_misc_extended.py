@@ -2,9 +2,9 @@
 import pytest
 from pathlib import Path
 from PIL import Image
-from geometry import tile_overlap_rect_common
-from image_io import build_save_kwargs, save_jpeg
-from domen import MapSettings
+from geo.geometry import tile_overlap_rect_common
+from imaging.io import build_save_kwargs, save_jpeg
+from domain.models import MapSettings
 
 def test_tile_overlap_rect_common():
     # Tile at (0,0), size 256. Crop rect (10, 10, 100, 100) -> overlap should be (10, 10, 110, 110)

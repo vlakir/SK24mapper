@@ -2,7 +2,7 @@
 
 import pytest
 
-from contours_helpers import TileOverlapParams, tile_overlap_rect, tx_ty_from_index
+from contours.helpers import TileOverlapParams, tile_overlap_rect, tx_ty_from_index
 
 
 class TestTileOverlapParams:

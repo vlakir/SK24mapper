@@ -12,8 +12,8 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from constants import EARTH_RADIUS_M, RADIO_HORIZON_REFRACTION_K
-from radio_horizon import (
+from shared.constants import EARTH_RADIUS_M, RADIO_HORIZON_REFRACTION_K
+from services.radio_horizon import (
     _bilinear_interpolate,
     _trace_line_of_sight,
     colorize_radio_horizon,
@@ -432,3 +432,4 @@ class TestComputeDownsampleFactor:
         # 20000×20000 = 400M > 16M×16 = 256M, нужен factor 8
         factor = compute_downsample_factor(20000, 20000, max_pixels=16_000_000)
         assert factor == 8
+

@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from constants import (
+from shared.constants import (
     COORD_DIMENSIONS,
     CSV_COLUMNS_REQUIRED,
     EPSG_SK42_GK_BASE,
@@ -599,3 +599,4 @@ def _build_sk42_gk_crs(zone: int) -> CRS:
 
 if __name__ == '__main__':
     main()
+

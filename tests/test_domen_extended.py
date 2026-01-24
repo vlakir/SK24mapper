@@ -2,7 +2,7 @@
 
 import pytest
 
-from domen import MapSettings
+from domain.models import MapSettings
 
 
 def create_settings(**overrides):

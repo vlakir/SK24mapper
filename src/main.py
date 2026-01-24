@@ -10,7 +10,7 @@ from pathlib import Path
 from PySide6.QtCore import QLocale
 from PySide6.QtGui import QIcon
 
-from diagnostics import log_comprehensive_diagnostics, log_memory_usage
+from shared.diagnostics import log_comprehensive_diagnostics, log_memory_usage
 from gui.view import create_application
 
 logger = logging.getLogger(__name__)

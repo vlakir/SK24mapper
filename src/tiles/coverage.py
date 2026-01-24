@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from geometry import tile_overlap_rect_common as _tile_overlap_rect_common
-from topography import compute_xyz_coverage as _compute_xyz_coverage
+from geo.geometry import tile_overlap_rect_common as _tile_overlap_rect_common
+from geo.topography import compute_xyz_coverage as _compute_xyz_coverage
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -54,3 +54,4 @@ def iter_overlapping_tiles(
         ty = idx // tiles_x
         if _tile_overlap_rect_common(tx, ty, crop_rect, tile_px) is not None:
             yield (idx, (tile_x_world, tile_y_world))
+

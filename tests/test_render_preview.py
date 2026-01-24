@@ -3,7 +3,7 @@ import pytest
 from unittest.mock import MagicMock, patch
 from PIL import Image
 from render.compose import compose_final_image, save_image
-from preview import publish_preview_image
+from gui.preview import publish_preview_image
 
 def test_compose_final_image():
     img = Image.new('RGB', (100, 100), color='white')
@@ -29,7 +29,7 @@ def test_save_image(mock_save, tmp_path):
     save_image(img, path)
     assert mock_save.call_count == 2
 
-@patch('preview._publish_preview_image')
+@patch('gui.preview._publish_preview_image')
 def test_publish_preview_image(mock_pub):
     img = MagicMock()
     publish_preview_image(img)

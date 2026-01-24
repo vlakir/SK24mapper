@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from image import rotate_keep_size
-from image_io import build_save_kwargs as _build_save_kwargs
-from image_io import save_jpeg as _save_jpeg
+from imaging import rotate_keep_size
+from imaging.io import build_save_kwargs as _build_save_kwargs
+from imaging.io import save_jpeg as _save_jpeg
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -35,7 +35,7 @@ def save_image(
 ) -> None:
     if save_kwargs is None:
         # Fallback: try to infer default save kwargs
-        from profiles import MapSettings  # type: ignore[attr-defined]
+        from domain.profiles import MapSettings  # type: ignore[attr-defined]
 
         try:
             save_kwargs = _build_save_kwargs(path, MapSettings())  # type: ignore[arg-type]

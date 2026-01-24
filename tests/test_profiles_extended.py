@@ -1,8 +1,8 @@
 
 import pytest
 from pathlib import Path
-from profiles import list_profiles, load_profile, save_profile, delete_profile, _user_profiles_dir
-from domen import MapSettings
+from domain.profiles import list_profiles, load_profile, save_profile, delete_profile, _user_profiles_dir
+from domain.models import MapSettings
 
 @pytest.fixture
 def temp_profiles_dir(tmp_path, monkeypatch):

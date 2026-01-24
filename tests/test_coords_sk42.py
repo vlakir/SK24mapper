@@ -2,7 +2,7 @@
 
 import pytest
 
-from coords_sk42 import build_sk42_gk_crs, determine_zone, validate_sk42_bounds
+from geo.coords_sk42 import build_sk42_gk_crs, determine_zone, validate_sk42_bounds
 
 
 class TestDetermineZone:

@@ -1,6 +1,6 @@
 """Tests for constants module."""
 
-from constants import (
+from shared.constants import (
     ADDITIVE_RATIO,
     DESIRED_ZOOM,
     DOWNLOAD_CONCURRENCY,
@@ -197,3 +197,4 @@ class TestSK42Bounds:
         moscow_lat = 55.75
         assert SK42_VALID_LON_MIN <= moscow_lon <= SK42_VALID_LON_MAX
         assert SK42_VALID_LAT_MIN <= moscow_lat <= SK42_VALID_LAT_MAX
+
