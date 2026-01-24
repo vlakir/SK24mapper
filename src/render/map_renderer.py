@@ -8,13 +8,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import numpy as np
 from PIL import Image
 
 from geo.topography import colorize_dem_to_image
 
 if TYPE_CHECKING:
-    pass
+    import numpy as np
 
 
 def render_elevation_map(
@@ -34,6 +33,7 @@ def render_elevation_map(
 
     Returns:
         PIL Image с раскрашенной картой высот
+
     """
     return colorize_dem_to_image(dem, p_lo, p_hi, min_range_m)
 
@@ -53,6 +53,7 @@ def blend_images(
 
     Returns:
         Смешанное изображение
+
     """
     if base.size != overlay.size:
         overlay = overlay.resize(base.size, Image.Resampling.LANCZOS)
@@ -80,6 +81,7 @@ def composite_with_mask(
 
     Returns:
         Результат композиции
+
     """
     if base.size != overlay.size:
         overlay = overlay.resize(base.size, Image.Resampling.LANCZOS)
@@ -116,13 +118,11 @@ class MapRenderer:
             result = result.convert('RGBA')
 
         for layer in self.layers[1:]:
-            if layer.mode != 'RGBA':
-                layer = layer.convert('RGBA')
-            result = Image.alpha_composite(result, layer)
+            layer_rgba = layer.convert('RGBA') if layer.mode != 'RGBA' else layer
+            result = Image.alpha_composite(result, layer_rgba)
 
         return result.convert('RGB')
 
     def clear(self) -> None:
         """Очищает все слои."""
         self.layers.clear()
-

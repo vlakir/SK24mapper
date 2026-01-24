@@ -271,6 +271,10 @@ async def run_deep_verification(*, api_key: str, settings: Any) -> None:
     import aiohttp
     from PIL import Image
 
+    from geo.topography import (
+        colorize_dem_to_image,
+        decode_terrain_rgb_to_elevation_m,
+    )
     from shared.constants import (
         HTTP_CACHE_DIR,
         MAPBOX_STATIC_BASE,
@@ -278,10 +282,6 @@ async def run_deep_verification(*, api_key: str, settings: Any) -> None:
         MapType,
         default_map_type,
         map_type_to_style_id,
-    )
-    from geo.topography import (
-        colorize_dem_to_image,
-        decode_terrain_rgb_to_elevation_m,
     )
 
     # 1) API key presence
@@ -694,5 +694,3 @@ if not _PSUTIL_AVAILABLE:
     logger.warning(
         'psutil library not available - memory and system monitoring will be limited',
     )
-
-

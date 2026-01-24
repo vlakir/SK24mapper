@@ -1,8 +1,11 @@
 """Legend drawing utilities - elevation legend for maps."""
+
 import logging
 
 from PIL import Image, ImageDraw, ImageFont
 
+from geo.topography import meters_per_pixel
+from imaging.text import draw_text_with_outline, load_grid_font
 from shared.constants import (
     GRID_STEP_M,
     LEGEND_BACKGROUND_COLOR,
@@ -27,8 +30,6 @@ from shared.constants import (
     LEGEND_WIDTH_TO_HEIGHT_RATIO,
     STATIC_SCALE,
 )
-from imaging.text import draw_text_with_outline, load_grid_font
-from geo.topography import meters_per_pixel
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,7 @@ def draw_elevation_legend(
         Кортеж (x1, y1, x2, y2) - границы легенды с отступом для разрыва сетки
 
     """
+
     def _wrap_legend_title(
         draw_obj: ImageDraw.ImageDraw,
         text: str,
@@ -73,7 +75,7 @@ def draw_elevation_legend(
     ) -> list[str]:
         def _text_width(candidate: str) -> int:
             bbox = draw_obj.textbbox((0, 0), candidate, font=title_font, anchor='lt')
-            return bbox[2] - bbox[0]
+            return int(bbox[2] - bbox[0])
 
         words = text.split()
         if not words:
@@ -176,11 +178,15 @@ def draw_elevation_legend(
         title_gap_px = max(1, round(LEGEND_TEXT_OFFSET_M * ppm))
         max_title_width = legend_total_width
         title_lines = _wrap_legend_title(draw, title, font, max_title_width)
-        title_sizes = [draw.textbbox((0, 0), line, font=font, anchor='lt') for line in title_lines]
-        title_line_height = max(1, max(bbox[3] - bbox[1] for bbox in title_sizes))
+        title_sizes = [
+            draw.textbbox((0, 0), line, font=font, anchor='lt') for line in title_lines
+        ]
+        title_line_height = int(max(1, *(bbox[3] - bbox[1] for bbox in title_sizes)))
         title_line_gap_px = max(0, round(title_line_height * 0.15))
-        title_block_width = max(bbox[2] - bbox[0] for bbox in title_sizes)
-        title_block_height = title_line_height * len(title_lines) + title_line_gap_px * (len(title_lines) - 1)
+        title_block_width = int(max(bbox[2] - bbox[0] for bbox in title_sizes))
+        title_block_height = title_line_height * len(
+            title_lines
+        ) + title_line_gap_px * (len(title_lines) - 1)
         title_extra_offset_px = max(1, int(legend_height * LEGEND_TITLE_OFFSET_RATIO))
     legend_total_width = max(legend_total_width, title_block_width)
     legend_total_height = legend_height + (
@@ -309,7 +315,6 @@ def draw_elevation_legend(
             )
 
     # Рисуем метки высоты
-    from shared.constants import LEGEND_NUM_LABELS
     for i in range(LEGEND_NUM_LABELS):
         t = i / (LEGEND_NUM_LABELS - 1) if LEGEND_NUM_LABELS > 1 else 0.0
         elevation = min_elevation_m + (max_elevation_m - min_elevation_m) * t
@@ -342,5 +347,3 @@ def draw_elevation_legend(
         bg_x2 + gap_padding,
         bg_y2 + gap_padding,
     )
-
-

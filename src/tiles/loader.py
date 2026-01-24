@@ -10,13 +10,14 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING
 
-import aiohttp
-
+from geo.topography import (
+    async_fetch_terrain_rgb_tile,
+    async_fetch_xyz_tile,
+    decode_terrain_rgb_to_elevation_m,
+)
 from shared.constants import (
-    ASYNC_MAX_CONCURRENCY,
     DOWNLOAD_CONCURRENCY,
     ELEVATION_USE_RETINA,
-    MAPBOX_STYLE_BY_TYPE,
     RADIO_HORIZON_USE_RETINA,
     TILE_SIZE,
     XYZ_TILE_SIZE,
@@ -24,15 +25,11 @@ from shared.constants import (
     MapType,
     map_type_to_style_id,
 )
-from geo.topography import (
-    async_fetch_terrain_rgb_tile,
-    async_fetch_xyz_tile,
-    decode_terrain_rgb_to_elevation_m,
-)
 
 if TYPE_CHECKING:
-    from PIL import Image
+    import aiohttp
     import numpy as np
+    from PIL import Image
 
 logger = logging.getLogger(__name__)
 
@@ -73,12 +70,15 @@ async def fetch_map_tile(
     Args:
         client: HTTP-клиент
         api_key: API-ключ Mapbox
-        z, x, y: Координаты тайла
+        z: Координата тайла по оси Z
+        x: Координата тайла по оси X
+        y: Координата тайла по оси Y
         map_type: Тип карты
         use_retina: Использовать retina-разрешение
 
     Returns:
         PIL Image тайла
+
     """
     style_id = get_style_id(map_type)
     return await async_fetch_xyz_tile(
@@ -100,11 +100,14 @@ async def fetch_dem_tile(
     Args:
         client: HTTP-клиент
         api_key: API-ключ Mapbox
-        z, x, y: Координаты тайла
+        z: Координата тайла по оси Z
+        x: Координата тайла по оси X
+        y: Координата тайла по оси Y
         use_retina: Использовать retina-разрешение
 
     Returns:
         numpy array с высотами (float32)
+
     """
     img = await async_fetch_terrain_rgb_tile(
         client, api_key, z, x, y, use_retina=use_retina
@@ -171,5 +174,3 @@ class TileFetcher:
         """Загружает пакет DEM-тайлов."""
         tasks = [self.fetch_dem(x, y) for x, y in tile_coords]
         return await asyncio.gather(*tasks)
-
-

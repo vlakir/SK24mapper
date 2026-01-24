@@ -6,7 +6,9 @@ import pytest
 from PIL import Image
 
 from geo.topography import (
+    build_transformers_sk42,
     choose_zoom_with_limit,
+    colorize_dem_to_image,
     compute_grid,
     compute_percentiles,
     compute_xyz_coverage,
@@ -392,3 +394,27 @@ class TestComputeGridExtended:
         assert len(map_params) == 7
         # Check first element (mpp) is positive
         assert map_params[0] > 0
+
+
+class TestTopographySk42AndDem:
+    """Additional tests for SK-42 transformers and DEM helpers."""
+
+    def test_build_transformers_sk42_with_helmert(self):
+        """Should build transformers when Helmert params provided."""
+        helmert = (1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0)
+        t_sk42_to_wgs, t_wgs_to_sk42 = build_transformers_sk42(helmert)
+        assert t_sk42_to_wgs is not None
+        assert t_wgs_to_sk42 is not None
+
+    def test_decode_terrain_rgb_to_elevation_m(self):
+        """Should decode elevation values from terrain RGB."""
+        img = Image.new('RGB', (10, 10), color=(1, 2, 3))
+        elev = decode_terrain_rgb_to_elevation_m(img)
+        assert elev[0][0] == pytest.approx(-3394.9, rel=1e-3)
+
+    def test_colorize_dem_to_image(self):
+        """Should return an image from DEM data."""
+        dem = [[0.0, 500.0], [1000.0, 1500.0]]
+        img = colorize_dem_to_image(dem)
+        assert isinstance(img, Image.Image)
+        assert img.size == (2, 2)

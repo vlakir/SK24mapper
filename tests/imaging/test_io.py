@@ -58,3 +58,15 @@ class TestBuildSaveKwargs:
         assert kwargs['exif'] == b''
 
 
+class TestSaveJpeg:
+    """Tests for save_jpeg function."""
+
+    def test_save_jpeg(self, tmp_path):
+        """Should save JPEG without errors."""
+        img = Image.new('RGB', (50, 50), color='red')
+        path = tmp_path / "test.jpg"
+        save_kwargs = build_save_kwargs(path)
+        save_jpeg(img, path, save_kwargs)
+        assert path.exists()
+
+

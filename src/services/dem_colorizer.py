@@ -14,24 +14,25 @@ def colorize_dem_tile_numpy(
 ) -> np.ndarray:
     """
     Colorize a DEM tile using numpy for performance.
-    
+
     Args:
         dem_rgb: RGB array from terrain-rgb tile (HxWx3, uint8)
         lo_rounded: Lower elevation bound (meters)
         hi_rounded: Upper elevation bound (meters)
         color_mapper: ColorMapper instance with precomputed LUT
-        
+
     Returns:
         Colorized RGB array (HxWx3, uint8)
+
     """
     inv = 1.0 / (hi_rounded - lo_rounded) if hi_rounded > lo_rounded else 1.0
-    
+
     # Precompute linear coefficients for t = ar*R + ag*G + ab*B + a0
     ar = 0.1 * 65536.0 * inv
     ag = 0.1 * 256.0 * inv
     ab = 0.1 * 1.0 * inv
     a0 = (-10000.0 - lo_rounded) * inv
-    
+
     # Compute normalized elevation t
     t = (
         ar * dem_rgb[..., 0].astype(np.float32)
@@ -39,7 +40,7 @@ def colorize_dem_tile_numpy(
         + ab * dem_rgb[..., 2].astype(np.float32)
         + a0
     )
-    
+
     # Clamp and map to LUT
     lut = color_mapper.lut
     lut_size = len(lut)
@@ -48,7 +49,7 @@ def colorize_dem_tile_numpy(
         0,
         lut_size - 1,
     )
-    
+
     # Build output RGB from LUT
     lut_arr = np.array(lut, dtype=np.uint8)
     return lut_arr[indices]
@@ -65,7 +66,7 @@ def colorize_dem_overlap(
 ) -> tuple[np.ndarray, int, int]:
     """
     Colorize a portion of DEM tile defined by overlap rectangle.
-    
+
     Args:
         dem_img: PIL Image of DEM tile (RGB terrain-rgb format)
         overlap: (x0, y0, x1, y1) in global pixel coordinates
@@ -74,13 +75,14 @@ def colorize_dem_overlap(
         lo_rounded: Lower elevation bound (meters)
         hi_rounded: Upper elevation bound (meters)
         color_mapper: ColorMapper instance
-        
+
     Returns:
         Tuple of (colorized_array, dest_x, dest_y) where dest coords are
         relative to crop origin
+
     """
     x0, y0, x1, y1 = overlap
-    
+
     # Extract overlap region from tile
     arr = np.asarray(dem_img, dtype=np.uint8)
     sub = arr[
@@ -88,8 +90,8 @@ def colorize_dem_overlap(
         x0 - tile_base_x : x1 - tile_base_x,
         :3,
     ]
-    
+
     # Colorize
     colorized = colorize_dem_tile_numpy(sub, lo_rounded, hi_rounded, color_mapper)
-    
+
     return colorized, x0, y0

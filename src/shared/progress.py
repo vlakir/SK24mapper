@@ -6,38 +6,9 @@ import time
 from collections.abc import Callable
 from typing import ClassVar
 
+from shared.constants import DEFAULT_WRITER, SingleLineRenderer
+
 logger = logging.getLogger(__name__)
-
-
-class SingleLineRenderer:
-    """Потокобезопасный рендерер для вывода в одну строку."""
-
-    def __init__(self, *, single_line: bool = True) -> None:
-        self.single_line = single_line
-        self._last_len = 0
-        self._lock = threading.Lock()
-
-    def clear_line(self) -> None:
-        """Полностью очистить текущую строку прогресса."""
-        with self._lock:
-            if self.single_line and self._last_len > 0:
-                # Console output removed - GUI callbacks handle progress display
-                self._last_len = 0
-
-    def write_line(self, msg: str) -> None:
-        """Перерисовать текущую строку прогресса."""
-        with self._lock:
-            if self.single_line:
-                max(0, self._last_len - len(msg))
-                # Console output removed - GUI callbacks handle progress display
-            else:
-                # Console output removed - GUI callbacks handle progress display
-                pass
-            self._last_len = len(msg)
-
-
-# Экземпляр по умолчанию (можно передать свой при создании классов)
-DEFAULT_WRITER = SingleLineRenderer()
 
 
 # Глобальные колбэки для интеграции с GUI (опционально)

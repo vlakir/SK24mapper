@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from geo.topography import assemble_dem, get_cached_dem_tile, cache_dem_tile
+from geo.topography import assemble_dem, cache_dem_tile, get_cached_dem_tile
 
 
 def build_dem_from_tiles(
@@ -30,6 +30,7 @@ def build_dem_from_tiles(
 
     Returns:
         Собранная и обрезанная матрица высот (numpy array, float32)
+
     """
     return assemble_dem(tiles_data, tiles_x, tiles_y, eff_tile_px, crop_rect)
 
@@ -47,6 +48,7 @@ def downsample_dem_for_seed(
 
     Returns:
         (seed_dem как list[list[float]], seed_h, seed_w)
+
     """
     h, w = dem.shape
     seed_h = (h + downsample_factor - 1) // downsample_factor
@@ -78,6 +80,7 @@ def compute_elevation_levels(
 
     Returns:
         (список уровней, min высота, max высота)
+
     """
     import math
 
@@ -128,11 +131,14 @@ class DEMCache:
         Получает тайл из кэша или загружает через fetch_func.
 
         Args:
-            z, x, y: Координаты тайла
+            z: Уровень масштаба тайла
+            x: Координата X тайла
+            y: Координата Y тайла
             fetch_func: Функция загрузки (должна вернуть np.ndarray)
 
         Returns:
             DEM-тайл
+
         """
         cached = get_cached_dem_tile(z, x, y)
         if cached is not None:
@@ -141,4 +147,3 @@ class DEMCache:
         dem = fetch_func()
         cache_dem_tile(z, x, y, dem)
         return dem
-

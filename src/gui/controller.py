@@ -11,10 +11,15 @@ from typing import Any
 import tomlkit
 from dotenv import load_dotenv
 
-from shared.diagnostics import ResourceMonitor, log_memory_usage
+from domain.profiles import (
+    ensure_profiles_dir,
+    list_profiles,
+    load_profile,
+    save_profile,
+)
 from gui.model import MilMapperModel, ModelEvent
-from domain.profiles import ensure_profiles_dir, list_profiles, load_profile, save_profile
 from service import download_satellite_rectangle
+from shared.diagnostics import ResourceMonitor, log_memory_usage
 
 logger = logging.getLogger(__name__)
 
@@ -345,10 +350,12 @@ class MilMapperController:
         asyncio.run(self.start_map_download())
 
     def download_map(self) -> bool:
-        """Синхронный метод загрузки карты для DownloadWorker.
-        
+        """
+        Синхронный метод загрузки карты для DownloadWorker.
+
         Returns:
             True если загрузка успешна, False в случае ошибки.
+
         """
         try:
             self.start_map_download_sync()

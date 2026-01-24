@@ -1,4 +1,5 @@
 """Download worker thread."""
+
 from __future__ import annotations
 
 import logging

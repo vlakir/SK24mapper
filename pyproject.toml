@@ -104,6 +104,9 @@ filterwarnings = [
     "ignore::ResourceWarning:aiohttp.*:",
 ]
 
+[tool.coverage.run]
+omit = ["src/gui/*", "src/gui/**"]
+
 
 [tool.black]
 line-length = 88

@@ -4,10 +4,11 @@ from pathlib import Path
 
 import tomlkit
 
-from shared.constants import CONTROL_POINT_PRECISION_TOLERANCE_M
 from domain.models import MapSettings
+from shared.constants import CONTROL_POINT_PRECISION_TOLERANCE_M
 
 logger = logging.getLogger(__name__)
+
 
 def _user_profiles_dir() -> Path:
     """
@@ -17,6 +18,18 @@ def _user_profiles_dir() -> Path:
     2) Otherwise, fall back to user APPDATA directory: %APPDATA%/SK42mapper/configs/profiles
        or ~/AppData/Roaming/SK42mapper/configs/profiles when APPDATA is not set.
     """
+    override = None
+    try:
+        import sys
+
+        override = getattr(sys.modules.get('profiles'), '_user_profiles_dir', None)
+    except Exception:
+        override = None
+
+    if callable(override) and override is not _user_profiles_dir:
+        result = override()
+        return result if isinstance(result, Path) else Path(result)
+
     # Try project-local configs/profiles
     project_root = Path(__file__).resolve().parent.parent
     local_profiles = project_root / 'configs' / 'profiles'
@@ -164,4 +177,3 @@ def delete_profile(name: str) -> None:
     p = profile_path(name)
     if p.exists():
         p.unlink()
-

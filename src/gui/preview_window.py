@@ -237,4 +237,3 @@ class OptimizedImageView(QGraphicsView):
             if current_scale > self._fit_to_window_scale:
                 factor = current_scale / self._fit_to_window_scale
                 self.scale(factor, factor)
-

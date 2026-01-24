@@ -70,3 +70,9 @@ class TestTileOverlapRectCommon:
         crop_rect = (100, 100, 50, 50)  # Small rect inside first tile
         result = tile_overlap_rect_common(0, 0, crop_rect, 256)
         assert result == (100, 100, 150, 150)
+
+    def test_small_overlap_intersection(self):
+        """Should return intersection for small overlapping area."""
+        crop_rect = (10, 20, 100, 120)
+        result = tile_overlap_rect_common(0, 0, crop_rect, 256)
+        assert result == (10, 20, 110, 140)

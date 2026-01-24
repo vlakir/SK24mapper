@@ -1,4 +1,5 @@
 """Domain layer - business models and profiles."""
+
 from domain.models import MapSettings
 from domain.profiles import (
     delete_profile,

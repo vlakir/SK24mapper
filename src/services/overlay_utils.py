@@ -33,12 +33,17 @@ def composite_overlay_on_base(
 
     Returns:
         Composited RGB image
+
     """
     from PIL import Image as PILImage
 
     # Resize overlay if needed
     if target_size and overlay.size != target_size:
-        logger.info('Масштабирование overlay до размера базы: %s -> %s', overlay.size, target_size)
+        logger.info(
+            'Масштабирование overlay до размера базы: %s -> %s',
+            overlay.size,
+            target_size,
+        )
         overlay = overlay.resize(target_size, PILImage.Resampling.BICUBIC)
 
     # Convert base to RGBA for compositing
@@ -75,6 +80,7 @@ def blend_with_grayscale_base(
 
     Returns:
         Blended RGBA image
+
     """
     from PIL import Image as PILImage
 
@@ -112,6 +118,7 @@ def create_contour_gap_at_labels(
         overlay: RGBA overlay image to modify
         label_bboxes: List of (x0, y0, x1, y1) bounding boxes for labels
         gap_padding: Padding around each label bbox in pixels
+
     """
     from PIL import ImageDraw
 

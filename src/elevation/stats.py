@@ -5,10 +5,10 @@ import logging
 import random
 from typing import TYPE_CHECKING
 
-from shared.constants import CONTOUR_LOG_MEMORY_EVERY_TILES
 from contours.helpers import tx_ty_from_index
 from geo.geometry import tile_overlap_rect_common as _tile_overlap_rect_common
 from geo.topography import compute_percentiles, decode_terrain_rgb_to_elevation_m
+from shared.constants import CONTOUR_LOG_MEMORY_EVERY_TILES
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Iterable
@@ -57,7 +57,7 @@ async def sample_elevation_percentiles(
     samples: list[float] = []
     seen_count = 0
     tile_count = 0
-    tile_cache: dict[tuple[int, int], Image.Image] = {} if cache_tiles else {}
+    tile_cache: dict[tuple[int, int], Image.Image] | None = {} if cache_tiles else None
 
     async def _step_progress() -> None:
         if on_progress is not None:
@@ -78,11 +78,11 @@ async def sample_elevation_percentiles(
         else:
             async with semaphore:
                 img = await get_tile_image(tile_x_world, tile_y_world)
-        
+
         # Cache tile if requested
-        if cache_tiles:
+        if cache_tiles and tile_cache is not None:
             tile_cache[(tile_x_world, tile_y_world)] = img
-        
+
         dem_tile = decode_terrain_rgb_to_elevation_m(img)
         # iterate coarse grid (approx 32x32) within tile to limit CPU
         h = len(dem_tile)
@@ -134,5 +134,3 @@ def compute_elevation_range(
         lo = mid - 0.5 * min_range_m
         hi = mid + 0.5 * min_range_m
     return lo, hi
-
-

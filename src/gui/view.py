@@ -29,7 +29,6 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSlider,
-    QSpinBox,
     QSplitter,
     QStatusBar,
     QTabWidget,
@@ -37,6 +36,16 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from domain.profiles import ensure_profiles_dir
+from gui.controller import MilMapperController
+from gui.model import EventData, MilMapperModel, ModelEvent, Observer
+from gui.preview_window import OptimizedImageView
+from gui.status_bar import StatusBarProxy
+from gui.widgets import (
+    CoordinateInputWidget,
+    OldCoordinateInputWidget,
+)
+from gui.workers import DownloadWorker
 from shared.constants import (
     MAP_TYPE_LABELS_RU,
     MIN_DECIMALS_FOR_SMALL_STEP,
@@ -47,25 +56,11 @@ from shared.diagnostics import (
     log_memory_usage,
     log_thread_status,
 )
-from gui.controller import MilMapperController
-from gui.model import EventData, MilMapperModel, ModelEvent, Observer
-from gui.preview_window import OptimizedImageView
-from domain.profiles import ensure_profiles_dir
 from shared.progress import (
     cleanup_all_progress_resources,
     set_preview_image_callback,
     set_spinner_callbacks,
 )
-from gui.status_bar import StatusBarProxy
-from gui.widgets import (
-    CoordinateInputWidget,
-    GridSettingsWidget,
-    HelmertSettingsWidget,
-    ModalOverlay,
-    OldCoordinateInputWidget,
-    OutputSettingsWidget,
-)
-from gui.workers import DownloadWorker
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -224,16 +219,6 @@ class OutputSettingsWidget(QWidget):
         layout.addWidget(self.quality_label, 0, 2)
 
         self.setLayout(layout)
-
-
-class _ViewObserver(Observer):
-    """Adapter to bridge model events to the view without name clashes with QWidget.update."""
-
-    def __init__(self, handler: Callable[[EventData], None]) -> None:
-        self._handler = handler
-
-    def update(self, event_data: EventData) -> None:  # type: ignore[override]
-        self._handler(event_data)
 
 
 class HelmertSettingsWidget(QWidget):
@@ -1085,7 +1070,7 @@ class MainWindow(QMainWindow):
             'control_point_x': control_point_x,
             'control_point_y': control_point_y,
             'control_point_name': self.control_point_name_edit.text(),
-            'antenna_height_m': int(round(self.antenna_height_spin.value())),
+            'antenna_height_m': round(self.antenna_height_spin.value()),
             'max_flight_height_m': self.max_flight_height_spin.value(),
         }
 
@@ -1923,4 +1908,3 @@ def create_application() -> tuple[
     window = MainWindow(model, controller)
 
     return app, window, model, controller
-

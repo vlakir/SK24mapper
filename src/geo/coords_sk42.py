@@ -62,4 +62,3 @@ def validate_sk42_bounds(lng: float, lat: float) -> None:
             'Карта не будет сформирована.'
         )
         raise SystemExit(msg)
-

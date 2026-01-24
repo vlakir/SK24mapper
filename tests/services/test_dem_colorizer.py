@@ -71,7 +71,7 @@ class TestColorizeDemOverlap:
         # Create a 4x4 DEM tile image
         dem_data = np.zeros((4, 4, 3), dtype=np.uint8)
         dem_data[:, :] = [1, 134, 160]  # ~0m elevation
-        dem_img = Image.fromarray(dem_data, mode='RGB')
+        dem_img = Image.fromarray(dem_data)
         
         # Extract 2x2 overlap from center
         overlap = (1, 1, 3, 3)  # x0, y0, x1, y1
@@ -92,7 +92,7 @@ class TestColorizeDemOverlap:
         mapper = ColorMapper(color_ramp)
         
         dem_data = np.ones((4, 4, 3), dtype=np.uint8) * 128
-        dem_img = Image.fromarray(dem_data, mode='RGB')
+        dem_img = Image.fromarray(dem_data)
         
         # Tile starts at (100, 100) in global coords
         overlap = (101, 101, 103, 103)

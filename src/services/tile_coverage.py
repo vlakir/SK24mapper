@@ -5,14 +5,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from shared.constants import ROTATION_PAD_MIN_PX, ROTATION_PAD_RATIO
 from geo.topography import compute_xyz_coverage, estimate_crop_size_px
+from shared.constants import ROTATION_PAD_MIN_PX, ROTATION_PAD_RATIO
 
 
 @dataclass
 class TileCoverage:
     """Result of tile coverage calculation."""
-    
+
     tiles: list[tuple[int, int]]
     tiles_x: int
     tiles_y: int
@@ -31,8 +31,9 @@ def compute_tile_coverage(
     zoom: int,
     eff_scale: int,
 ) -> TileCoverage:
-    """Compute tile coverage for given map parameters.
-    
+    """
+    Compute tile coverage for given map parameters.
+
     Args:
         center_lat_wgs: Center latitude in WGS84
         center_lng_wgs: Center longitude in WGS84
@@ -40,9 +41,10 @@ def compute_tile_coverage(
         height_m: Map height in meters
         zoom: Zoom level
         eff_scale: Effective scale factor (1 or 2 for retina)
-        
+
     Returns:
         TileCoverage with all computed values
+
     """
     # Estimate target size
     target_w_px, target_h_px, _ = estimate_crop_size_px(
@@ -52,11 +54,11 @@ def compute_tile_coverage(
         zoom,
         eff_scale,
     )
-    
+
     # Calculate padding for rotation
     base_pad = round(min(target_w_px, target_h_px) * ROTATION_PAD_RATIO)
     pad_px = max(base_pad, ROTATION_PAD_MIN_PX)
-    
+
     # Compute XYZ tile coverage
     tiles, (tiles_x, tiles_y), crop_rect, map_params = compute_xyz_coverage(
         center_lat=center_lat_wgs,
@@ -67,7 +69,7 @@ def compute_tile_coverage(
         eff_scale=eff_scale,
         pad_px=pad_px,
     )
-    
+
     return TileCoverage(
         tiles=tiles,
         tiles_x=tiles_x,

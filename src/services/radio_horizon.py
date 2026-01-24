@@ -29,20 +29,12 @@ from shared.constants import (
     RADIO_HORIZON_GRID_STEP_THRESHOLD_PIXELS_LARGE,
     RADIO_HORIZON_GRID_STEP_THRESHOLD_PIXELS_MEDIUM,
     RADIO_HORIZON_GRID_STEP_THRESHOLD_PIXELS_SMALL,
-    RADIO_HORIZON_INTERPOLATION_EDGE_EPSILON,
     RADIO_HORIZON_LEGEND_UNIT_LABEL,
-    RADIO_HORIZON_LOS_MIN_DISTANCE_PX_SQ,
-    RADIO_HORIZON_LOS_STEP_DIVISOR,
-    RADIO_HORIZON_LOS_STEPS_MAX,
-    RADIO_HORIZON_LOS_STEPS_MIN,
     RADIO_HORIZON_LUT_SIZE,
     RADIO_HORIZON_MAX_DEM_PIXELS,
-    RADIO_HORIZON_MAX_ELEVATION_ANGLE_INIT,
-    RADIO_HORIZON_MAX_ELEVATION_ANGLE_NO_DATA_THRESHOLD,
     RADIO_HORIZON_MAX_HEIGHT_M,
     RADIO_HORIZON_MIN_HEIGHT_M,
     RADIO_HORIZON_REFRACTION_K,
-    RADIO_HORIZON_TARGET_HEIGHT_CLEARANCE_M,
     RADIO_HORIZON_UNREACHABLE_COLOR,
 )
 
@@ -192,10 +184,8 @@ def _trace_line_of_sight_numba(
 
     # Количество шагов
     num_steps_calc = int(dist_px / los_step_divisor)
-    if num_steps_calc < los_steps_min:
-        num_steps_calc = los_steps_min
-    if num_steps_calc > los_steps_max:
-        num_steps_calc = los_steps_max
+    num_steps_calc = max(num_steps_calc, los_steps_min)
+    num_steps_calc = min(num_steps_calc, los_steps_max)
     num_steps = num_steps_calc
 
     # Максимальный угол затенения
@@ -224,8 +214,7 @@ def _trace_line_of_sight_numba(
         # Угол от антенны до текущей точки рельефа
         height_diff = effective_height - antenna_abs_height
         elevation_angle = height_diff / curr_dist_m
-        if elevation_angle > max_elevation_angle:
-            max_elevation_angle = elevation_angle
+        max_elevation_angle = max(max_elevation_angle, elevation_angle)
 
     if max_elevation_angle < no_data_threshold:
         return 0.0
@@ -266,12 +255,10 @@ def _compute_grid_values_parallel(
 
     for gr in prange(grid_h):
         row = gr * grid_step
-        if row > h - 1:
-            row = h - 1
+        row = min(row, h - 1)
         for gc in range(grid_w):
             col = gc * grid_step
-            if col > w - 1:
-                col = w - 1
+            col = min(col, w - 1)
             grid_values[gr, gc] = _trace_line_of_sight_numba(
                 dem,
                 antenna_row,
@@ -554,7 +541,7 @@ def compute_and_colorize_radio_horizon(
 
             rgb[row, col] = lut[idx]
 
-    return Image.fromarray(rgb, mode='RGB')
+    return Image.fromarray(rgb)
 
 
 def get_radio_horizon_legend_params(
@@ -624,4 +611,3 @@ def _trace_line_of_sight(
         h,
         w,
     )
-

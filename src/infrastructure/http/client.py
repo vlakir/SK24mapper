@@ -145,4 +145,3 @@ async def validate_terrain_api(api_key: str) -> None:
     except (TimeoutError, aiohttp.ClientConnectorError, aiohttp.ClientOSError):
         msg = 'Нет соединения с интернетом или сервер недоступен. Проверьте подключение к сети.'
         raise RuntimeError(msg) from None
-

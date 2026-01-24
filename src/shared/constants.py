@@ -1,3 +1,4 @@
+import threading
 from enum import Enum
 
 # Базовый URL Mapbox Static Images API
@@ -171,10 +172,6 @@ HTTP_CACHE_STALE_IF_ERROR_HOURS = 72
 # --- Толщина обводки текста сетки (перенесено из профиля в constants)
 GRID_TEXT_OUTLINE_WIDTH = 2
 
-# --- GUI limits
-# Максимальный размер стороны участка (м)
-MAX_SIDE_SIZE_M = 60000
-
 # --- Применимость СК-42 (примерные границы области применения)
 # Долготы (в градусах восточной долготы), примерно охватывающие территорию бывшего СССР
 SK42_VALID_LON_MIN = 19.0
@@ -237,6 +234,15 @@ ELEVATION_COLOR_RAMP = [
 # --- Контуры (Этап 3)
 # Интервал между изогипсами (метры)
 CONTOUR_INTERVAL_M = 10.0
+# Базовый размер карты для адаптации параметров изолиний (метры)
+CONTOUR_ADAPTIVE_BASE_MAP_SIZE_M = 15000.0
+# Степень влияния размера карты на масштабирование параметров изолиний
+CONTOUR_ADAPTIVE_ALPHA = 0.6
+# Клампы коэффициента масштабирования
+CONTOUR_ADAPTIVE_MIN_SCALE = 0.7
+CONTOUR_ADAPTIVE_MAX_SCALE = 2.5
+# Степень влияния масштабирования на размер шрифта подписей
+CONTOUR_LABEL_FONT_SCALE_ALPHA = 0.5
 # Downsample factor for global low-res DEM seed (integer >= 2)
 CONTOUR_SEED_DOWNSAMPLE = 12
 # Optional spline smoothing for seed polylines (not mandatory for MVP)
@@ -253,19 +259,19 @@ MIN_POINTS_FOR_SMOOTHING = 3
 CONTOUR_PARALLEL_WORKERS = 4
 # Цвет обычных изогипс (RGB)
 CONTOUR_COLOR = (30, 30, 30)
-# Толщина обычных изогипс в пикселях (задаётся здесь)
+# Толщина обычных изогипс в метрах на местности (переводится в пиксели по mpp)
 CONTOUR_WIDTH = 4
 # Каждая N‑я изогипса считается «индексной» (выделенной)
 CONTOUR_INDEX_EVERY = 5
 # Цвет индексных изогипс (RGB)
 CONTOUR_INDEX_COLOR = (20, 20, 20)
-# Толщина индексных изогипс в пикселях (задаётся здесь)
+# Толщина индексных изогипс в метрах на местности (переводится в пиксели по mpp)
 CONTOUR_INDEX_WIDTH = 6
 # --- Подписи изогипс
 CONTOUR_LABELS_ENABLED = True
 CONTOUR_LABEL_INDEX_ONLY = False
 # Интервал между подписями в метрах (пересчитывается в пиксели по текущему масштабу)
-CONTOUR_LABEL_SPACING_M = 1000
+CONTOUR_LABEL_SPACING_M = 2000
 # Минимальная длина сегмента для размещения подписи (метры)
 CONTOUR_LABEL_MIN_SEG_LEN_M = 40
 # Отступ подписей от границ изображения (метры)
@@ -305,9 +311,6 @@ EAST_VECTOR_SAMPLE_M = 200.0
 # --- Вспомогательные константы для подписей сетки
 GRID_LABEL_THOUSAND_DIV = 1000
 GRID_LABEL_MOD = 100
-# Доля шага сетки для смещения подписей от линий сетки (0.0 - на линии, 0.5 - в центре квадрата)
-GRID_LABEL_OFFSET_FRACTION = 0.125  # 1/8 шага сетки
-
 # --- Общие константы для валидаторов/обработчиков GUI
 # Минимальное число аргументов команды скролла (tk Scrollbar callback)
 MIN_DECIMALS_FOR_SMALL_STEP = 2
@@ -324,16 +327,19 @@ MAX_SCALE_PPM = 1000
 # видимости тонких линий
 PREVIEW_ROTATION_ANGLE = 0.0
 
-# --- Константы интерфейса пользователя (GUI)
-# Допуск для сравнения чисел с плавающей точкой
-FLOAT_COMPARISON_TOLERANCE = 0.0001
-# Пороговое значение байтов для перевода в килобайты (1024 байта = 1 КБ)
-BYTES_TO_KB_THRESHOLD = 1024
-# Коэффициент конвертации байтов в килобайты (делитель)
-BYTES_CONVERSION_FACTOR = 1024.0
+# --- События модели (GUI)
+MODEL_EVENT_SETTINGS_CHANGED = 'SETTINGS_CHANGED'
+MODEL_EVENT_PROFILE_LOADED = 'PROFILE_LOADED'
+MODEL_EVENT_PROFILE_SAVED = 'PROFILE_SAVED'
+MODEL_EVENT_DOWNLOAD_STARTED = 'DOWNLOAD_STARTED'
+MODEL_EVENT_DOWNLOAD_PROGRESS = 'DOWNLOAD_PROGRESS'
+MODEL_EVENT_DOWNLOAD_COMPLETED = 'DOWNLOAD_COMPLETED'
+MODEL_EVENT_DOWNLOAD_FAILED = 'DOWNLOAD_FAILED'
+MODEL_EVENT_PREVIEW_UPDATED = 'PREVIEW_UPDATED'
+MODEL_EVENT_WARNING_OCCURRED = 'WARNING_OCCURRED'
+MODEL_EVENT_ERROR_OCCURRED = 'ERROR_OCCURRED'
 
 HTTP_OK = 200
-HTTP_BAD_REQUEST = 400
 HTTP_UNAUTHORIZED = 401
 HTTP_FORBIDDEN = 403
 # Availability flags for optional libs
@@ -353,7 +359,7 @@ CONTROL_POINT_SIZE_M = 100.0
 # Цвет контрольной точки (треугольника) — ярко-красный
 CONTROL_POINT_COLOR = (255, 0, 0)
 # Порог допустимой неточности для определения совпадения точек (метры)
-CONTROL_POINT_PRECISION_TOLERANCE_M = 2.0
+CONTROL_POINT_PRECISION_TOLERANCE_M = 0.1
 # Минимальный отступ подписи от треугольника контрольной точки (пиксели)
 CONTROL_POINT_LABEL_GAP_MIN_PX = 8
 # Коэффициент отступа подписи от треугольника (доля от размера треугольника)
@@ -466,8 +472,6 @@ _DEM_CACHE_MAX_SIZE = 100
 # --- Радиогоризонт (Radio Horizon)
 # Использовать ретина-тайлы для радиогоризонта (False = 256px, экономит память в 4 раза)
 RADIO_HORIZON_USE_RETINA = False
-# Размер блока для потоковой обработки (пиксели)
-RADIO_HORIZON_BLOCK_SIZE = 2048
 # Цветовая шкала для карты радиогоризонта: (t, (R, G, B))
 # t — нормализованное значение от 0.0 (0 м) до 1.0 (RADIO_HORIZON_MAX_HEIGHT_M)
 RADIO_HORIZON_COLOR_RAMP: list[tuple[float, tuple[int, int, int]]] = [
@@ -524,3 +528,26 @@ RADIO_HORIZON_GRID_STEP_SMALL = 8
 RADIO_HORIZON_LEGEND_UNIT_LABEL = 'м'
 # Минимальная высота для легенды радиогоризонта
 RADIO_HORIZON_MIN_HEIGHT_M = 0.0
+
+
+# --- Консольный вывод прогресса (fallback для CLI)
+class SingleLineRenderer:
+    def __init__(self, *, single_line: bool = True) -> None:
+        self._lock = threading.Lock()
+        self._last_len = 0
+        self.single_line = single_line
+
+    def clear_line(self) -> None:
+        with self._lock:
+            if self.single_line and self._last_len > 0:
+                self._last_len = 0
+
+    def write_line(self, msg: str) -> None:
+        with self._lock:
+            if self.single_line:
+                self._last_len = max(self._last_len, len(msg))
+            else:
+                self._last_len = 0
+
+
+DEFAULT_WRITER = SingleLineRenderer()

@@ -1,4 +1,5 @@
 """Output settings widget."""
+
 from __future__ import annotations
 
 from PySide6.QtCore import Qt

@@ -31,12 +31,12 @@ from shared.constants import (
     GK_ZONE_CM_OFFSET_DEG,
     GK_ZONE_WIDTH_DEG,
     GK_ZONE_X_PREFIX_DIV,
+    MAX_GK_ZONE,
     MAX_ROTATION_ARCSEC,
     MAX_SCALE_PPM,
     MAX_TRANSLATION_M,
-    MAX_GK_ZONE,
-    MIN_POINTS_FOR_HELMERT,
     MIN_POINT_PAIRS,
+    MIN_POINTS_FOR_HELMERT,
     SK42_CODE,
     WGS84_CODE,
 )
@@ -599,4 +599,3 @@ def _build_sk42_gk_crs(zone: int) -> CRS:
 
 if __name__ == '__main__':
     main()
-

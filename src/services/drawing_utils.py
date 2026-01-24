@@ -12,7 +12,7 @@ import math
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from PIL import Image, ImageDraw, ImageFont
+    from PIL import ImageDraw
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +36,7 @@ def draw_control_point_marker(
 
     Returns:
         Y coordinate of the marker bottom (for label positioning)
+
     """
     cx, cy = center
     h_tri = size_px
@@ -67,6 +68,7 @@ def draw_center_cross(
         length_px: Length of each arm of the cross
         width_px: Line width in pixels
         color: Line color (R, G, B)
+
     """
     cx, cy = center
     half_len = length_px // 2
@@ -104,6 +106,7 @@ def compute_rotated_position(
 
     Returns:
         (new_x, new_y) rotated coordinates
+
     """
     rotation_rad = math.radians(-rotation_deg)
     cos_rot = math.cos(rotation_rad)

@@ -1,4 +1,5 @@
 """HTTP client infrastructure."""
+
 from infrastructure.http.client import (
     cleanup_sqlite_cache,
     make_http_session,

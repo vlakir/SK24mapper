@@ -9,6 +9,18 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from domain.models import MapSettings
+from shared.constants import (
+    MODEL_EVENT_DOWNLOAD_COMPLETED,
+    MODEL_EVENT_DOWNLOAD_FAILED,
+    MODEL_EVENT_DOWNLOAD_PROGRESS,
+    MODEL_EVENT_DOWNLOAD_STARTED,
+    MODEL_EVENT_ERROR_OCCURRED,
+    MODEL_EVENT_PREVIEW_UPDATED,
+    MODEL_EVENT_PROFILE_LOADED,
+    MODEL_EVENT_PROFILE_SAVED,
+    MODEL_EVENT_SETTINGS_CHANGED,
+    MODEL_EVENT_WARNING_OCCURRED,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -16,16 +28,16 @@ logger = logging.getLogger(__name__)
 class ModelEvent(str, Enum):
     """События, которые генерирует модель."""
 
-    SETTINGS_CHANGED = 'settings_changed'
-    PROFILE_LOADED = 'profile_loaded'
-    PROFILE_SAVED = 'profile_saved'
-    DOWNLOAD_STARTED = 'download_started'
-    DOWNLOAD_PROGRESS = 'download_progress'
-    DOWNLOAD_COMPLETED = 'download_completed'
-    DOWNLOAD_FAILED = 'download_failed'
-    PREVIEW_UPDATED = 'preview_updated'
-    WARNING_OCCURRED = 'warning_occurred'
-    ERROR_OCCURRED = 'error_occurred'
+    SETTINGS_CHANGED = MODEL_EVENT_SETTINGS_CHANGED
+    PROFILE_LOADED = MODEL_EVENT_PROFILE_LOADED
+    PROFILE_SAVED = MODEL_EVENT_PROFILE_SAVED
+    DOWNLOAD_STARTED = MODEL_EVENT_DOWNLOAD_STARTED
+    DOWNLOAD_PROGRESS = MODEL_EVENT_DOWNLOAD_PROGRESS
+    DOWNLOAD_COMPLETED = MODEL_EVENT_DOWNLOAD_COMPLETED
+    DOWNLOAD_FAILED = MODEL_EVENT_DOWNLOAD_FAILED
+    PREVIEW_UPDATED = MODEL_EVENT_PREVIEW_UPDATED
+    WARNING_OCCURRED = MODEL_EVENT_WARNING_OCCURRED
+    ERROR_OCCURRED = MODEL_EVENT_ERROR_OCCURRED
 
 
 class EventData(BaseModel):

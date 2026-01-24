@@ -3,7 +3,6 @@ import logging
 import math
 from collections.abc import Sequence
 from contextlib import suppress
-from functools import lru_cache
 from http import HTTPStatus
 from io import BytesIO
 
@@ -17,11 +16,11 @@ from shared.constants import (
     _DEM_CACHE_MAX_SIZE,
     EARTH_RADIUS_M,
     EAST_VECTOR_SAMPLE_M,
-    ELEVATION_LEGEND_STEP_M,
     ELEV_MIN_RANGE_M,
     ELEV_PCTL_HI,
     ELEV_PCTL_LO,
     ELEVATION_COLOR_RAMP,
+    ELEVATION_LEGEND_STEP_M,
     HTTP_5XX_MAX,
     HTTP_5XX_MIN,
     HTTP_BACKOFF_FACTOR,
@@ -669,10 +668,10 @@ def colorize_dem_to_image(
     # Выборка для перцентилей: используем равномерную подвыборку
     step_y = max(1, h // 200)
     step_x = max(1, w // 200)
-    samples = dem_arr[::step_y, ::step_x].flatten()
+    samples: np.ndarray = dem_arr[::step_y, ::step_x].ravel()
 
     if len(samples) == 0:
-        samples = dem_arr.flatten()[:10000]
+        samples = dem_arr.ravel()[:10000]
 
     lo, hi = compute_percentiles(samples.tolist(), p_lo, p_hi)
 
@@ -692,14 +691,16 @@ def colorize_dem_to_image(
     lut = _build_elevation_lut(ELEVATION_COLOR_RAMP, lut_size)
 
     # Нормализация и индексация — полностью векторизовано
-    inv_range = (lut_size - 1) / (hi_rounded - lo_rounded) if hi_rounded > lo_rounded else 0.0
+    inv_range = (
+        (lut_size - 1) / (hi_rounded - lo_rounded) if hi_rounded > lo_rounded else 0.0
+    )
     indices = ((dem_arr - lo_rounded) * inv_range).astype(np.int32)
     indices = np.clip(indices, 0, lut_size - 1)
 
     # Применяем LUT — векторизованная операция
     rgb = lut[indices]
 
-    return Image.fromarray(rgb, mode='RGB')
+    return Image.fromarray(rgb)
 
 
 def latlng_to_final_pixel(
@@ -758,4 +759,3 @@ def compute_rotation_deg_for_east_axis(
 
     angle_rad = math.atan2(vy, vx)
     return -math.degrees(angle_rad)
-

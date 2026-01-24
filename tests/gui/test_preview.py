@@ -1,5 +1,7 @@
 """Tests for preview module."""
 
+from unittest.mock import MagicMock, patch
+
 import pytest
 from PIL import Image
 
@@ -26,3 +28,10 @@ class TestPublishPreviewImage:
         img = Image.new('RGB', (200, 200), color='green')
         # Should not raise
         publish_preview_image(img)
+
+    @patch('gui.preview._publish_preview_image')
+    def test_publish_preview_image_calls_impl(self, mock_pub):
+        """Should call underlying publish function."""
+        img = MagicMock()
+        publish_preview_image(img)
+        mock_pub.assert_called_once_with(img)

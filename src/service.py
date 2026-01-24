@@ -1,4 +1,5 @@
-"""Map download service - backward compatibility wrapper.
+"""
+Map download service - backward compatibility wrapper.
 
 This module provides the original download_satellite_rectangle function
 as a wrapper around the new MapDownloadService for backward compatibility.
@@ -9,8 +10,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from shared.constants import MAX_ZOOM
 from services.map_download_service import MapDownloadService
+from shared.constants import MAX_ZOOM
 
 if TYPE_CHECKING:
     from domain.models import MapSettings
@@ -28,10 +29,11 @@ async def download_satellite_rectangle(
     max_zoom: int = MAX_ZOOM,
     settings: MapSettings | None = None,
 ) -> str:
-    """Download satellite/map rectangle - backward compatibility wrapper.
-    
+    """
+    Download satellite/map rectangle - backward compatibility wrapper.
+
     This function delegates to MapDownloadService for actual processing.
-    
+
     Args:
         center_x_sk42_gk: Center X in SK-42 Gauss-Kruger (easting)
         center_y_sk42_gk: Center Y in SK-42 Gauss-Kruger (northing)
@@ -41,9 +43,10 @@ async def download_satellite_rectangle(
         output_path: Output file path
         max_zoom: Maximum zoom level
         settings: Map settings
-        
+
     Returns:
         Output file path
+
     """
     service = MapDownloadService(api_key)
     return await service.download(

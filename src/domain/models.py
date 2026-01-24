@@ -150,4 +150,3 @@ class MapSettings(BaseModel):
         if any(v is None for v in vals):
             return None
         return vals  # type: ignore[return-value]
-

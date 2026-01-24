@@ -108,6 +108,25 @@ class TestMapSettingsControlPoint:
         settings = create_settings()
         assert settings.control_point_y == 7440000
 
+
+class TestMapSettingsValidation:
+    """Additional validation tests for MapSettings."""
+
+    def test_settings_creation_with_valid_values(self):
+        """Should create settings with valid values."""
+        settings = create_settings(
+            from_x_high=54,
+            from_y_high=74,
+            to_x_high=54,
+            to_y_high=74,
+            from_x_low=12,
+            from_y_low=35,
+            to_x_low=22,
+            to_y_low=49,
+            output_path="test.jpg",
+        )
+        assert settings.from_x_high == 54
+
     def test_control_point_x_sk42_gk(self):
         """Control point X SK42 GK should be calculated."""
         settings = create_settings(control_point_x=5415000, control_point_y=7440000)

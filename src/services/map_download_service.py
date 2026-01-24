@@ -8,10 +8,47 @@ import gc
 import logging
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from PIL import Image
 
+from domain.models import MapSettings
+from geo.topography import (
+    ELEVATION_COLOR_RAMP,
+    choose_zoom_with_limit,
+    effective_scale_for_xyz,
+    latlng_to_pixel_xy,
+    meters_per_pixel,
+)
+from gui.preview import publish_preview_image
+from imaging import (
+    center_crop,
+    draw_axis_aligned_km_grid,
+    draw_elevation_legend,
+    draw_label_with_bg,
+    draw_label_with_subscript_bg,
+    load_grid_font,
+    rotate_keep_size,
+)
+from imaging.io import build_save_kwargs as _build_save_kwargs
+from imaging.io import save_jpeg as _save_jpeg
+from infrastructure.http.client import cleanup_sqlite_cache as _cleanup_sqlite_cache
+from infrastructure.http.client import make_http_session as _make_http_session
+from infrastructure.http.client import resolve_cache_dir as _resolve_cache_dir
+from infrastructure.http.client import (
+    validate_style_api as _validate_api_and_connectivity,
+)
+from infrastructure.http.client import validate_terrain_api as _validate_terrain_api
+from services.coordinate_transformer import (
+    CoordinateTransformer,
+    validate_control_point_bounds,
+)
+from services.map_context import MapDownloadContext
+from services.map_postprocessing import (
+    compute_control_point_image_coords,
+    draw_center_cross_on_image,
+    draw_control_point_triangle,
+)
+from services.tile_coverage import compute_tile_coverage
 from shared.constants import (
     ASYNC_MAX_CONCURRENCY,
     CONTROL_POINT_LABEL_GAP_MIN_PX,
@@ -31,46 +68,8 @@ from shared.constants import (
     default_map_type,
     map_type_to_style_id,
 )
-from domain.models import MapSettings
-from geo.topography import (
-    ELEVATION_COLOR_RAMP,
-    choose_zoom_with_limit,
-    compute_rotation_deg_for_east_axis,
-    effective_scale_for_xyz,
-    latlng_to_pixel_xy,
-    meters_per_pixel,
-)
-from imaging import (
-    center_crop,
-    draw_axis_aligned_km_grid,
-    draw_elevation_legend,
-    draw_label_with_bg,
-    draw_label_with_subscript_bg,
-    load_grid_font,
-    rotate_keep_size,
-)
-from imaging.io import build_save_kwargs as _build_save_kwargs
-from imaging.io import save_jpeg as _save_jpeg
-from infrastructure.http.client import cleanup_sqlite_cache as _cleanup_sqlite_cache
-from infrastructure.http.client import make_http_session as _make_http_session
-from infrastructure.http.client import resolve_cache_dir as _resolve_cache_dir
-from infrastructure.http.client import validate_style_api as _validate_api_and_connectivity
-from infrastructure.http.client import validate_terrain_api as _validate_terrain_api
-from gui.preview import publish_preview_image
 from shared.diagnostics import log_memory_usage, log_thread_status
 from shared.progress import LiveSpinner
-
-from services.coordinate_transformer import CoordinateTransformer, validate_control_point_bounds
-from services.map_context import MapDownloadContext
-from services.map_postprocessing import (
-    compute_control_point_image_coords,
-    draw_center_cross_on_image,
-    draw_control_point_triangle,
-)
-from services.tile_coverage import compute_tile_coverage
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 
@@ -79,10 +78,12 @@ class MapDownloadService:
     """Main service for downloading and generating maps."""
 
     def __init__(self, api_key: str):
-        """Initialize service with API key.
-        
+        """
+        Initialize service with API key.
+
         Args:
             api_key: Mapbox API key
+
         """
         self.api_key = api_key
 
@@ -96,8 +97,9 @@ class MapDownloadService:
         max_zoom: int = MAX_ZOOM,
         settings: MapSettings | None = None,
     ) -> str:
-        """Download and generate map.
-        
+        """
+        Download and generate map.
+
         Args:
             center_x_sk42_gk: Center X in SK-42 Gauss-Kruger (easting)
             center_y_sk42_gk: Center Y in SK-42 Gauss-Kruger (northing)
@@ -106,9 +108,10 @@ class MapDownloadService:
             output_path: Output file path
             max_zoom: Maximum zoom level
             settings: Map settings
-            
+
         Returns:
             Output file path
+
         """
         overall_start_time = time.monotonic()
         logger.info('=== ОБЩИЙ ТАЙМЕР: старт MapDownloadService.download ===')
@@ -134,7 +137,9 @@ class MapDownloadService:
         try:
             async with session_ctx as client:
                 ctx.client = client
-                ctx.semaphore = asyncio.Semaphore(DOWNLOAD_CONCURRENCY or ASYNC_MAX_CONCURRENCY)
+                ctx.semaphore = asyncio.Semaphore(
+                    DOWNLOAD_CONCURRENCY or ASYNC_MAX_CONCURRENCY
+                )
 
                 # Select and run processor
                 ctx.result = await self._run_processor(ctx)
@@ -194,22 +199,29 @@ class MapDownloadService:
             mt_enum = default_map_type()
 
         # Determine style and flags
-        style_id, is_elev_color, is_elev_contours, is_radio_horizon = await self._determine_map_type(
-            mt_enum, settings
-        )
+        (
+            style_id,
+            is_elev_color,
+            is_elev_contours,
+            is_radio_horizon,
+        ) = await self._determine_map_type(mt_enum, settings)
 
         # Determine scale
         if is_elev_color or is_elev_contours:
             eff_scale = effective_scale_for_xyz(256, use_retina=ELEVATION_USE_RETINA)
         elif is_radio_horizon:
-            eff_scale = effective_scale_for_xyz(256, use_retina=RADIO_HORIZON_USE_RETINA)
+            eff_scale = effective_scale_for_xyz(
+                256, use_retina=RADIO_HORIZON_USE_RETINA
+            )
         else:
-            eff_scale = effective_scale_for_xyz(XYZ_TILE_SIZE, use_retina=XYZ_USE_RETINA)
+            eff_scale = effective_scale_for_xyz(
+                XYZ_TILE_SIZE, use_retina=XYZ_USE_RETINA
+            )
 
         # Coordinate transformation
         sp = LiveSpinner('Подготовка: создание трансформеров')
         sp.start()
-        
+
         custom_helmert = getattr(settings, 'custom_helmert', None)
         coord_transformer = CoordinateTransformer(
             center_x_gk=center_x_sk42_gk,
@@ -217,9 +229,9 @@ class MapDownloadService:
             helmert_params=custom_helmert,
         )
         coord_result = coord_transformer.get_result()
-        
+
         sp.stop('Подготовка: трансформеры готовы')
-        
+
         # Store transformer for later rotation calculation
         _coord_transformer = coord_transformer
 
@@ -322,24 +334,34 @@ class MapDownloadService:
         is_elev_contours = False
         is_radio_horizon = False
 
-        if mt_enum in (MapType.SATELLITE, MapType.HYBRID, MapType.STREETS, MapType.OUTDOORS):
+        if mt_enum in (
+            MapType.SATELLITE,
+            MapType.HYBRID,
+            MapType.STREETS,
+            MapType.OUTDOORS,
+        ):
             style_id = map_type_to_style_id(mt_enum)
             logger.info(
                 'Тип карты: %s; style_id=%s; tile_size=%s; retina=%s',
-                mt_enum, style_id, XYZ_TILE_SIZE, XYZ_USE_RETINA,
+                mt_enum,
+                style_id,
+                XYZ_TILE_SIZE,
+                XYZ_USE_RETINA,
             )
             await _validate_api_and_connectivity(self.api_key, style_id)
         elif mt_enum == MapType.ELEVATION_COLOR:
             logger.info(
                 'Тип карты: %s (Terrain-RGB, цветовая шкала); retina=%s',
-                mt_enum, ELEVATION_USE_RETINA,
+                mt_enum,
+                ELEVATION_USE_RETINA,
             )
             is_elev_color = True
             await _validate_terrain_api(self.api_key)
         elif mt_enum == MapType.ELEVATION_CONTOURS:
             logger.info(
                 'Тип карты: %s (Terrain-RGB, контуры); retina=%s',
-                mt_enum, ELEVATION_USE_RETINA,
+                mt_enum,
+                ELEVATION_USE_RETINA,
             )
             is_elev_contours = True
             await _validate_terrain_api(self.api_key)
@@ -349,7 +371,9 @@ class MapDownloadService:
                 raise ValueError(msg)
             logger.info(
                 'Тип карты: %s (радиогоризонт); высота антенны=%s м; retina=%s',
-                mt_enum, settings.antenna_height_m, ELEVATION_USE_RETINA,
+                mt_enum,
+                settings.antenna_height_m,
+                ELEVATION_USE_RETINA,
             )
             is_radio_horizon = True
             await _validate_terrain_api(self.api_key)
@@ -367,16 +391,21 @@ class MapDownloadService:
         """Run appropriate processor based on map type."""
         if ctx.is_elev_color:
             from services.processors.elevation_color import process_elevation_color
+
             return await process_elevation_color(ctx)
-        elif ctx.is_elev_contours:
-            from services.processors.elevation_contours import process_elevation_contours
+        if ctx.is_elev_contours:
+            from services.processors.elevation_contours import (
+                process_elevation_contours,
+            )
+
             return await process_elevation_contours(ctx)
-        elif ctx.is_radio_horizon:
+        if ctx.is_radio_horizon:
             from services.processors.radio_horizon import process_radio_horizon
+
             return await process_radio_horizon(ctx)
-        else:
-            from services.processors.xyz_tiles import process_xyz_tiles
-            return await process_xyz_tiles(ctx)
+        from services.processors.xyz_tiles import process_xyz_tiles
+
+        return await process_xyz_tiles(ctx)
 
     async def _postprocess(self, ctx: MapDownloadContext) -> None:
         """Apply post-processing to the result image."""
@@ -396,7 +425,9 @@ class MapDownloadService:
         sp.start()
         try:
             prev_result = result
-            result = rotate_keep_size(prev_result, ctx.rotation_deg, fill=(255, 255, 255))
+            result = rotate_keep_size(
+                prev_result, ctx.rotation_deg, fill=(255, 255, 255)
+            )
             with contextlib.suppress(Exception):
                 prev_result.close()
         finally:
@@ -442,7 +473,7 @@ class MapDownloadService:
     ) -> Image.Image:
         """Apply contour overlay to the result image."""
         from services.processors.elevation_contours import apply_contours_to_image
-        
+
         logger.info('Наложение изолиний на карту — старт')
         try:
             result = await apply_contours_to_image(ctx, result)
@@ -519,7 +550,9 @@ class MapDownloadService:
                 ctx.settings.control_point_x_sk42_gk,
                 ctx.settings.control_point_y_sk42_gk,
             )
-            cp_lng_wgs, cp_lat_wgs = ctx.t_sk42_to_wgs.transform(cp_lng_sk42, cp_lat_sk42)
+            cp_lng_wgs, cp_lat_wgs = ctx.t_sk42_to_wgs.transform(
+                cp_lng_sk42, cp_lat_sk42
+            )
 
             # Compute image coordinates
             cx_img, cy_img = compute_control_point_image_coords(
@@ -537,15 +570,22 @@ class MapDownloadService:
 
             # Check if in bounds
             if 0 <= cx_img < result.width and 0 <= cy_img < result.height:
-                mpp = meters_per_pixel(ctx.center_lat_wgs, ctx.zoom, scale=ctx.eff_scale)
-                draw_control_point_triangle(result, cx_img, cy_img, mpp, ctx.rotation_deg)
+                mpp = meters_per_pixel(
+                    ctx.center_lat_wgs, ctx.zoom, scale=ctx.eff_scale
+                )
+                draw_control_point_triangle(
+                    result, cx_img, cy_img, mpp, ctx.rotation_deg
+                )
 
                 # Draw label
                 self._draw_control_point_label(ctx, result, cx_img, cy_img, mpp)
             else:
                 logger.warning(
                     'Контрольная точка вне кадра: (%.2f, %.2f) not in [0..%d]x[0..%d]',
-                    cx_img, cy_img, result.width, result.height,
+                    cx_img,
+                    cy_img,
+                    result.width,
+                    result.height,
                 )
         except Exception as e:
             logger.warning('Не удалось нарисовать контрольную точку: %s', e)
@@ -560,7 +600,7 @@ class MapDownloadService:
     ) -> None:
         """Draw control point label for radio horizon maps."""
         from PIL import ImageDraw
-        
+
         try:
             ppm = 1.0 / mpp if mpp > 0 else 0.0
             font_size_px = max(12, round(ctx.settings.grid_font_size_m * ppm))
@@ -576,7 +616,10 @@ class MapDownloadService:
             tri_size_px = max(5, round(CONTROL_POINT_SIZE_M * ppm))
             label_x = int(cx_img)
             # Отступ от нижней вершины треугольника: половина размера + дополнительный зазор
-            label_gap_px = max(CONTROL_POINT_LABEL_GAP_MIN_PX, round(tri_size_px * CONTROL_POINT_LABEL_GAP_RATIO))
+            label_gap_px = max(
+                CONTROL_POINT_LABEL_GAP_MIN_PX,
+                round(tri_size_px * CONTROL_POINT_LABEL_GAP_RATIO),
+            )
             current_y = int(cy_img + tri_size_px / 2 + label_gap_px + bg_padding_px)
 
             # Name line
@@ -707,8 +750,9 @@ async def download_map(
     max_zoom: int = MAX_ZOOM,
     settings: MapSettings | None = None,
 ) -> str:
-    """Convenience function for downloading maps.
-    
+    """
+    Convenience function for downloading maps.
+
     This is a wrapper around MapDownloadService for backward compatibility.
     """
     service = MapDownloadService(api_key)

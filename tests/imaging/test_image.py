@@ -2,12 +2,16 @@
 
 import pytest
 from PIL import Image, ImageDraw
+from pyproj import CRS, Transformer
 
+from geo.topography import crs_sk42_geog
 from imaging import (
     apply_white_mask,
     assemble_and_crop,
     calculate_adaptive_grid_font_size,
     center_crop,
+    draw_axis_aligned_km_grid,
+    draw_elevation_legend,
     draw_label_with_bg,
     draw_text_with_outline,
     load_grid_font,
@@ -291,3 +295,99 @@ class TestCalculateAdaptiveGridFontSize:
         """Should handle very large mpp."""
         size = calculate_adaptive_grid_font_size(100.0)
         assert size > 0
+
+
+@pytest.fixture
+def sk42_gk_crs():
+    """Return example SK-42 GK CRS."""
+    return CRS.from_string(
+        "+proj=tmerc +lat_0=0 +lon_0=39 +k=1 +x_0=7500000 +y_0=0 +ellps=krass +units=m +no_defs"
+    )
+
+
+@pytest.fixture
+def sk42_to_wgs_transformer():
+    """Return transformer from SK-42 to WGS-84."""
+    return Transformer.from_crs(crs_sk42_geog, "EPSG:4326", always_xy=True)
+
+
+class TestDrawAxisAlignedKmGrid:
+    """Tests for draw_axis_aligned_km_grid function."""
+
+    def test_draw_grid_full(self, sk42_gk_crs, sk42_to_wgs_transformer):
+        """Should draw grid when enabled."""
+        img = Image.new('RGB', (1000, 1000), color='white')
+        draw_axis_aligned_km_grid(
+            img,
+            center_lat_sk42=55.75,
+            center_lng_sk42=37.62,
+            center_lat_wgs=55.75,
+            center_lng_wgs=37.62,
+            zoom=12,
+            crs_sk42_gk=sk42_gk_crs,
+            t_sk42_to_wgs=sk42_to_wgs_transformer,
+            display_grid=True,
+        )
+        pixels = list(img.getdata())
+        non_white = [p for p in pixels if p != (255, 255, 255)]
+        assert len(non_white) > 0
+
+    def test_draw_grid_crosses_only(self, sk42_gk_crs, sk42_to_wgs_transformer):
+        """Should draw only crosses when grid disabled."""
+        img = Image.new('RGB', (1000, 1000), color='white')
+        draw_axis_aligned_km_grid(
+            img,
+            center_lat_sk42=55.75,
+            center_lng_sk42=37.62,
+            center_lat_wgs=55.75,
+            center_lng_wgs=37.62,
+            zoom=12,
+            crs_sk42_gk=sk42_gk_crs,
+            t_sk42_to_wgs=sk42_to_wgs_transformer,
+            display_grid=False,
+        )
+        pixels = list(img.getdata())
+        non_white = [p for p in pixels if p != (255, 255, 255)]
+        assert len(non_white) > 0
+
+    def test_draw_grid_with_legend_bounds(self, sk42_gk_crs, sk42_to_wgs_transformer):
+        """Should work with legend bounds provided."""
+        img = Image.new('RGB', (1000, 1000), color='white')
+        legend_bounds = (100, 100, 400, 400)
+        draw_axis_aligned_km_grid(
+            img,
+            center_lat_sk42=55.75,
+            center_lng_sk42=37.62,
+            center_lat_wgs=55.75,
+            center_lng_wgs=37.62,
+            zoom=12,
+            crs_sk42_gk=sk42_gk_crs,
+            t_sk42_to_wgs=sk42_to_wgs_transformer,
+            display_grid=True,
+            legend_bounds=legend_bounds,
+        )
+        assert img.size == (1000, 1000)
+
+
+class TestDrawElevationLegend:
+    """Tests for draw_elevation_legend function."""
+
+    def test_draw_elevation_legend_basic(self):
+        """Should draw legend without errors."""
+        img = Image.new('RGB', (1000, 1000), color='white')
+        color_ramp = [
+            (0.0, (0, 0, 255)),
+            (0.5, (0, 255, 0)),
+            (1.0, (255, 0, 0)),
+        ]
+        draw_elevation_legend(
+            img,
+            color_ramp=color_ramp,
+            min_elevation_m=0,
+            max_elevation_m=1000,
+            center_lat_wgs=55.75,
+            zoom=12,
+        )
+        pixels = list(img.getdata())
+        non_white = [p for p in pixels if p != (255, 255, 255)]
+        assert len(non_white) > 0

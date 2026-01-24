@@ -1,10 +1,17 @@
 """Grid drawing utilities - kilometer grid for SK-42 coordinate system."""
+
 import logging
 import math
 
 from PIL import Image, ImageDraw
 from pyproj import CRS, Transformer
 
+from geo.topography import crs_sk42_geog, latlng_to_pixel_xy, meters_per_pixel
+from imaging.text import (
+    calculate_adaptive_grid_font_size,
+    draw_label_with_bg,
+    load_grid_font,
+)
 from shared.constants import (
     GRID_COLOR,
     GRID_CROSS_LENGTH_M,
@@ -15,13 +22,7 @@ from shared.constants import (
     MIN_POINTS_FOR_LINE,
     STATIC_SCALE,
 )
-from imaging.text import (
-    calculate_adaptive_grid_font_size,
-    draw_label_with_bg,
-    load_grid_font,
-)
 from shared.progress import ConsoleProgress
-from geo.topography import crs_sk42_geog, latlng_to_pixel_xy, meters_per_pixel
 
 logger = logging.getLogger(__name__)
 
@@ -373,5 +374,3 @@ def draw_axis_aligned_km_grid(
             x_m += step_m
 
     grid_progress.close()
-
-

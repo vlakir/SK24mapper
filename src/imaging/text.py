@@ -1,4 +1,5 @@
 """Text rendering utilities - fonts, labels, outlines."""
+
 import logging
 import math
 
@@ -249,4 +250,3 @@ def calculate_adaptive_grid_font_size(mpp: float) -> int:
     )
 
     return px
-

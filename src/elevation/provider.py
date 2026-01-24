@@ -6,8 +6,11 @@ from pathlib import Path
 import aiohttp
 from PIL import Image
 
+from geo.topography import (
+    async_fetch_terrain_rgb_tile,
+    decode_terrain_rgb_to_elevation_m,
+)
 from shared.constants import HTTP_CACHE_DIR
-from geo.topography import async_fetch_terrain_rgb_tile, decode_terrain_rgb_to_elevation_m
 
 
 @dataclass(frozen=True)
@@ -158,5 +161,3 @@ class ElevationTileProvider:
         dem2 = decode_terrain_rgb_to_elevation_m(img)
         self._mem_dem[key] = dem2
         return dem2
-
-

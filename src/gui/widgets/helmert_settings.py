@@ -1,4 +1,5 @@
 """Helmert transformation settings widget."""
+
 from __future__ import annotations
 
 from PySide6.QtCore import QSignalBlocker
@@ -144,4 +145,3 @@ class HelmertSettingsWidget(QWidget):
                     continue
                 widget.setValue(float(val))
         self._update_enabled_state(enabled)
-

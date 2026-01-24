@@ -14,6 +14,8 @@ from shared.constants import CONTOUR_LOG_MEMORY_EVERY_TILES
 from shared.diagnostics import log_memory_usage
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
     import aiohttp
     from PIL import Image
 
@@ -30,7 +32,7 @@ async def fetch_xyz_tiles_batch(
     tile_size: int,
     use_retina: bool,
     semaphore: asyncio.Semaphore,
-    on_progress: callable | None = None,
+    on_progress: Callable[[int], Awaitable[None]] | None = None,
 ) -> list[tuple[int, Image.Image]]:
     """
     Fetch a batch of XYZ tiles concurrently.
@@ -48,6 +50,7 @@ async def fetch_xyz_tiles_batch(
 
     Returns:
         List of (index, image) tuples sorted by index
+
     """
     from geo.topography import async_fetch_xyz_tile
 
@@ -80,5 +83,3 @@ async def fetch_xyz_tiles_batch(
     results = await asyncio.gather(*tasks)
     results.sort(key=lambda t: t[0])
     return results
-
-

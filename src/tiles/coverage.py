@@ -54,4 +54,3 @@ def iter_overlapping_tiles(
         ty = idx // tiles_x
         if _tile_overlap_rect_common(tx, ty, crop_rect, tile_px) is not None:
             yield (idx, (tile_x_world, tile_y_world))
-

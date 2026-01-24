@@ -2,11 +2,12 @@
 
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from PIL import Image
 
-from render.compose import compose_final_image
+from render.compose import compose_final_image, save_image
 
 
 class TestComposeFinalImage:
@@ -65,5 +66,21 @@ class TestComposeFinalImage:
         img = Image.new('RGB', (1000, 800), color='orange')
         result = compose_final_image(img, rotate_deg=15.0)
         assert result.size == (1000, 800)
+
+
+class TestSaveImage:
+    """Tests for save_image function."""
+
+    @patch('render.compose._save_jpeg')
+    def test_save_image(self, mock_save, tmp_path):
+        """Should call save function with/without explicit kwargs."""
+        img = Image.new('RGB', (10, 10))
+        path = tmp_path / "test.jpg"
+
+        save_image(img, path, save_kwargs={'quality': 90})
+        mock_save.assert_called_once()
+
+        save_image(img, path)
+        assert mock_save.call_count == 2
 
 

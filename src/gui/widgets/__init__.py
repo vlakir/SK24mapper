@@ -1,4 +1,5 @@
 """GUI widgets package."""
+
 from gui.widgets.coordinate_input import CoordinateInputWidget, OldCoordinateInputWidget
 from gui.widgets.grid_settings import GridSettingsWidget
 from gui.widgets.helmert_settings import HelmertSettingsWidget

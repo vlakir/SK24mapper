@@ -55,6 +55,10 @@ def draw_contour_labels(
     mpp: float,
     *,
     dry_run: bool = False,
+    label_spacing_m: float | None = None,
+    label_min_seg_len_m: float | None = None,
+    label_edge_margin_m: float | None = None,
+    label_font_m: float | None = None,
 ) -> list[tuple[int, int, int, int]]:
     """
     Place contour labels on image and/or compute their bounding boxes.
@@ -70,6 +74,21 @@ def draw_contour_labels(
 
     w, h = img.size
 
+    label_spacing_m = (
+        label_spacing_m if label_spacing_m is not None else CONTOUR_LABEL_SPACING_M
+    )
+    label_min_seg_len_m = (
+        label_min_seg_len_m
+        if label_min_seg_len_m is not None
+        else CONTOUR_LABEL_MIN_SEG_LEN_M
+    )
+    label_edge_margin_m = (
+        label_edge_margin_m
+        if label_edge_margin_m is not None
+        else CONTOUR_LABEL_EDGE_MARGIN_M
+    )
+    label_font_m = label_font_m if label_font_m is not None else CONTOUR_LABEL_FONT_M
+
     # font (chosen dynamically based on meters-per-pixel)
     fp = CONTOUR_LABEL_FONT_PATH or (
         GRID_FONT_PATH_BOLD if CONTOUR_LABEL_FONT_BOLD else GRID_FONT_PATH
@@ -80,7 +99,7 @@ def draw_contour_labels(
 
     def get_font_px() -> int:
         try:
-            px = round(CONTOUR_LABEL_FONT_M / max(1e-9, mpp))
+            px = round(label_font_m / max(1e-9, mpp))
         except Exception:
             px = CONTOUR_LABEL_FONT_SIZE
         # clamp to readable range
@@ -111,7 +130,7 @@ def draw_contour_labels(
                 'Настройки шрифта подписей: size_px=%d (mpp=%.6f, target=%.1f м, clamp=[%d,%d]), bold=%s, path=%s',
                 size,
                 mpp,
-                CONTOUR_LABEL_FONT_M,
+                label_font_m,
                 int(CONTOUR_LABEL_FONT_MIN_PX),
                 int(CONTOUR_LABEL_FONT_MAX_PX),
                 CONTOUR_LABEL_FONT_BOLD,
@@ -131,9 +150,9 @@ def draw_contour_labels(
         bx0, by0, bx1, by1 = b
         return not (ax1 <= bx0 or bx1 <= ax0 or ay1 <= by0 or by1 <= ay0)
 
-    spacing_px = max(1, round(CONTOUR_LABEL_SPACING_M / max(1e-9, mpp)))
-    min_seg_px = max(1, round(CONTOUR_LABEL_MIN_SEG_LEN_M / max(1e-9, mpp)))
-    edge_margin_px = max(1, round(CONTOUR_LABEL_EDGE_MARGIN_M / max(1e-9, mpp)))
+    spacing_px = max(1, round(label_spacing_m / max(1e-9, mpp)))
+    min_seg_px = max(1, round(label_min_seg_len_m / max(1e-9, mpp)))
+    edge_margin_px = max(1, round(label_edge_margin_m / max(1e-9, mpp)))
 
     logger.info(
         'Подписи изолиний: старт (levels=%d, img=%dx%d, seed_ds=%d, dry_run=%s). '
@@ -143,11 +162,11 @@ def draw_contour_labels(
         h,
         int(seed_ds),
         dry_run,
-        float(CONTOUR_LABEL_SPACING_M),
+        float(label_spacing_m),
         int(spacing_px),
-        float(CONTOUR_LABEL_MIN_SEG_LEN_M),
+        float(label_min_seg_len_m),
         int(min_seg_px),
-        float(CONTOUR_LABEL_EDGE_MARGIN_M),
+        float(label_edge_margin_m),
         int(edge_margin_px),
         int(CONTOUR_LABEL_OUTLINE_WIDTH),
         bool(CONTOUR_LABEL_BG_RGBA),
@@ -329,4 +348,3 @@ def draw_contour_labels(
     )
 
     return placed
-

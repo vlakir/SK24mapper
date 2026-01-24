@@ -246,4 +246,3 @@ def simple_smooth_polyline(
         smoothed = new_points
 
     return smoothed
-
