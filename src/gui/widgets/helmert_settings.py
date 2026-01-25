@@ -75,8 +75,10 @@ class HelmertSettingsWidget(QWidget):
         layout.addWidget(info, row, 0, 1, 4)
 
         self.setLayout(layout)
-        self._update_enabled_state(False)
-        self.enable_cb.toggled.connect(self._update_enabled_state)
+        self._update_enabled_state(enabled=False)
+        self.enable_cb.toggled.connect(
+            lambda checked: self._update_enabled_state(enabled=checked)
+        )
 
     def _cfg_spin(
         self,
@@ -92,7 +94,7 @@ class HelmertSettingsWidget(QWidget):
         w.setValue(default)
         w.setEnabled(False)
 
-    def _update_enabled_state(self, enabled: bool) -> None:
+    def _update_enabled_state(self, *, enabled: bool) -> None:
         # When checkbox toggled, enable/disable fields
         for w in (self.dx, self.dy, self.dz, self.rx, self.ry, self.rz, self.ds):
             w.setEnabled(bool(enabled))
@@ -144,4 +146,4 @@ class HelmertSettingsWidget(QWidget):
                     # leave default if None
                     continue
                 widget.setValue(float(val))
-        self._update_enabled_state(enabled)
+        self._update_enabled_state(enabled=enabled)

@@ -21,6 +21,8 @@ if TYPE_CHECKING:
 
     from services.map_context import MapDownloadContext
 
+import asyncio
+
 logger = logging.getLogger(__name__)
 
 
@@ -59,8 +61,6 @@ async def process_xyz_tiles(ctx: MapDownloadContext) -> Image.Image:
             if tile_count % CONTOUR_LOG_MEMORY_EVERY_TILES == 0:
                 log_memory_usage(f'after {tile_count} tiles')
             return idx, img
-
-    import asyncio
 
     tasks = [bound_fetch(pair) for pair in enumerate(ctx.tiles)]
     results = await asyncio.gather(*tasks)

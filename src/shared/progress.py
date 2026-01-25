@@ -6,17 +6,54 @@ import time
 from collections.abc import Callable
 from typing import ClassVar
 
-from shared.constants import DEFAULT_WRITER, SingleLineRenderer
-
 logger = logging.getLogger(__name__)
+
+
+# --- Консольный вывод прогресса (fallback для CLI)
+class SingleLineRenderer:
+    def __init__(self, *, single_line: bool = True) -> None:
+        self._lock = threading.Lock()
+        self._last_len = 0
+        self.single_line = single_line
+
+    def clear_line(self) -> None:
+        with self._lock:
+            if self.single_line and self._last_len > 0:
+                self._last_len = 0
+
+    def write_line(self, msg: str) -> None:
+        with self._lock:
+            if self.single_line:
+                self._last_len = max(self._last_len, len(msg))
+            else:
+                self._last_len = 0
+
+
+default_writer = SingleLineRenderer()
 
 
 # Глобальные колбэки для интеграции с GUI (опционально)
 class _CbStore:
-    progress: Callable[[int, int, str], None] | None = None
-    spinner_start: Callable[[str], None] | None = None
-    spinner_stop: Callable[[str], None] | None = None
-    preview_image: Callable[[object], None] | None = None
+    progress: ClassVar[Callable[[int, int, str], None] | None] = None
+    spinner_start: ClassVar[Callable[[str], None] | None] = None
+    spinner_stop: ClassVar[Callable[[str], None] | None] = None
+    preview_image: ClassVar[Callable[[object], None] | None] = None
+
+
+def get_progress_callback() -> Callable[[int, int, str], None] | None:
+    return _CbStore.progress
+
+
+def get_spinner_start_callback() -> Callable[[str], None] | None:
+    return _CbStore.spinner_start
+
+
+def get_spinner_stop_callback() -> Callable[[str], None] | None:
+    return _CbStore.spinner_stop
+
+
+def get_preview_image_callback() -> Callable[[object], None] | None:
+    return _CbStore.preview_image
 
 
 def set_progress_callback(cb: Callable[[int, int, str], None] | None) -> None:
@@ -45,7 +82,7 @@ def publish_preview_image(img: object) -> bool:
     Возвращает True, если колбэк был установлен и вызван без исключений.
     Тип img — PIL.Image.Image (используем object во избежание жёсткой зависимости).
     """
-    cb = _CbStore.preview_image
+    cb = get_preview_image_callback()
     if cb is not None:
         try:
             cb(img)
@@ -66,10 +103,9 @@ def cleanup_all_progress_resources() -> None:
     _spinner_registry.stop_all()
 
     # Очищаем все глобальные колбэки
-    _CbStore.progress = None
-    _CbStore.spinner_start = None
-    _CbStore.spinner_stop = None
-    _CbStore.preview_image = None
+    set_progress_callback(None)
+    set_spinner_callbacks(None, None)
+    set_preview_image_callback(None)
 
 
 def force_stop_all_spinners() -> None:
@@ -91,8 +127,11 @@ class LiveSpinner:
         self.label = label
         self.interval = interval
         self._stop = threading.Event()
-        self._writer = writer or DEFAULT_WRITER
+        self._writer = writer or default_writer
         self._th = threading.Thread(target=self._run, daemon=True)
+
+    def is_stopped(self) -> bool:
+        return self._stop.is_set()
 
     def _run(self) -> None:
         self._writer.clear_line()
@@ -105,9 +144,10 @@ class LiveSpinner:
 
     def start(self) -> None:
         # Сообщаем GUI о начале неопределённой операции
-        if _CbStore.spinner_start is not None:
+        cb_start = get_spinner_start_callback()
+        if cb_start is not None:
             with contextlib.suppress(Exception):
-                _CbStore.spinner_start(self.label)
+                cb_start(self.label)
         # Регистрируем спиннер в глобальном реестре
         _spinner_registry.register(self)
         self._th.start()
@@ -117,14 +157,16 @@ class LiveSpinner:
         # Ждем завершения потока с таймаутом
         self._th.join(timeout=1.0)
         if self._th.is_alive():
-            # Если поток не завершился, помечаем его как daemon для принудительного завершения
+            # Если поток не завершился, помечаем его как daemon для принудительного
+            # завершения
             self._th.daemon = True
         # Удаляем спиннер из реестра
         _spinner_registry.unregister(self)
         # Сообщаем GUI о завершении неопределённой операции
-        if _CbStore.spinner_stop is not None:
+        cb_stop = get_spinner_stop_callback()
+        if cb_stop is not None:
             with contextlib.suppress(Exception):
-                _CbStore.spinner_stop(self.label)
+                cb_stop(self.label)
         if final_message is not None:
             self._writer.write_line(final_message)
 
@@ -155,7 +197,7 @@ class _SpinnerRegistry:
 
         for spinner in spinners_copy:
             try:
-                if not spinner._stop.is_set():
+                if not spinner.is_stopped():
                     spinner.stop(final_message=None)
             except Exception as e:
                 # Log errors during forced spinner shutdown but don't raise
@@ -179,7 +221,7 @@ class ConsoleProgress:
         self.done = 0
         self.start = time.monotonic()
         self.label = label
-        self._writer = writer or DEFAULT_WRITER
+        self._writer = writer or default_writer
         self._lock: asyncio.Lock | None
         try:
             self._lock = asyncio.Lock()
@@ -210,9 +252,10 @@ class ConsoleProgress:
         )
         self._writer.write_line(msg)
         # Сообщаем GUI о прогрессе
-        if _CbStore.progress is not None:
+        cb = get_progress_callback()
+        if cb is not None:
             with contextlib.suppress(Exception):
-                _CbStore.progress(self.done, self.total, self.label)
+                cb(self.done, self.total, self.label)
 
     def step_sync(self, n: int = 1) -> None:
         self.done = min(self.total, self.done + n)

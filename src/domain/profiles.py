@@ -1,5 +1,6 @@
 import logging
 import os
+import sys
 from pathlib import Path
 
 import tomlkit
@@ -14,14 +15,14 @@ def _user_profiles_dir() -> Path:
     """
     Determine profiles directory.
 
-    1) If <project_root>/configs/profiles exists, use it (useful for portable/run-from-repo setups).
-    2) Otherwise, fall back to user APPDATA directory: %APPDATA%/SK42mapper/configs/profiles
-       or ~/AppData/Roaming/SK42mapper/configs/profiles when APPDATA is not set.
+    1) If <project_root>/configs/profiles exists, use it (useful for
+       portable/run-from-repo setups).
+    2) Otherwise, fall back to user APPDATA directory:
+       %APPDATA%/SK42mapper/configs/profiles or
+       ~/AppData/Roaming/SK42mapper/configs/profiles when APPDATA is not set.
     """
     override = None
     try:
-        import sys
-
         override = getattr(sys.modules.get('profiles'), '_user_profiles_dir', None)
     except Exception:
         override = None
@@ -125,13 +126,16 @@ def load_profile(name_or_path: str) -> MapSettings:
                 or dy > CONTROL_POINT_PRECISION_TOLERANCE_M
             ):
                 logger.error(
-                    'Control point GK mismatch: Δx=%.6f Δy=%.6f (precision issue likely)',
+                    'Control point GK mismatch: Δx=%.6f Δy=%.6f '
+                    '(precision issue likely)',
                     dx,
                     dy,
                 )
             else:
                 logger.info(
-                    'Control point GK verification passed (Δx=%.6g, Δy=%.6g)', dx, dy
+                    'Control point GK verification passed (Δx=%.6g, Δy=%.6g)',
+                    dx,
+                    dy,
                 )
     except Exception:
         logger.exception('Failed to verify control point precision')
@@ -145,8 +149,9 @@ def save_profile(name: str, settings: MapSettings) -> Path:
     try:
         logger.info(
             (
-                "save_profile('%s') → %s; from(xH=%s,xL=%s,yH=%s,yL=%s) → BL(%.3f, %.3f); "
-                'to(xH=%s,xL=%s,yH=%s,yL=%s) → TR(%.3f, %.3f)'
+                "save_profile('%s') → %s; from(xH=%s,xL=%s,yH=%s,yL=%s) "
+                '→ BL(%.3f, %.3f); to(xH=%s,xL=%s,yH=%s,yL=%s) → '
+                'TR(%.3f, %.3f)'
             ),
             name,
             str(path),

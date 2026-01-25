@@ -1,12 +1,19 @@
 """
 Модуль сборки DEM (Digital Elevation Model) из тайлов.
 
-Содержит функции для сшивки DEM-тайлов и подготовки матрицы высот.
+Содержит функции для сшивки DEM-тайлов и подготовки матрицы
+высот.
 """
 
 from __future__ import annotations
 
+import math
+from typing import TYPE_CHECKING
+
 import numpy as np
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 from geo.topography import assemble_dem, cache_dem_tile, get_cached_dem_tile
 
@@ -82,8 +89,6 @@ def compute_elevation_levels(
         (список уровней, min высота, max высота)
 
     """
-    import math
-
     # Находим min/max
     valid_mask = np.isfinite(dem)
     if not np.any(valid_mask):
@@ -125,7 +130,7 @@ class DEMCache:
         z: int,
         x: int,
         y: int,
-        fetch_func,
+        fetch_func: Callable[[], np.ndarray],
     ) -> np.ndarray:
         """
         Получает тайл из кэша или загружает через fetch_func.

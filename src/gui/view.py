@@ -8,7 +8,13 @@ from typing import TYPE_CHECKING, Any
 
 from PIL import Image
 from PySide6.QtCore import QObject, QSignalBlocker, Qt, QThread, Signal, Slot
-from PySide6.QtGui import QAction, QPixmapCache
+from PySide6.QtGui import (
+    QAction,
+    QCloseEvent,
+    QPixmapCache,
+    QResizeEvent,
+    QShowEvent,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -61,9 +67,12 @@ from shared.progress import (
     set_preview_image_callback,
     set_spinner_callbacks,
 )
+from shared.progress import set_progress_callback as _set_prog
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+    from domain.models import MapSettings
 
 logger = logging.getLogger(__name__)
 
@@ -94,12 +103,15 @@ class GridSettingsWidget(QWidget):
         self.display_grid_cb.setChecked(True)
         self.display_grid_cb.setToolTip(
             'Если включено: рисуются линии сетки и подписи.\n'
-            'Если выключено: рисуются только крестики в точках пересечения без подписей.'
+            'Если выключено: рисуются только крестики в точках пересечения '
+            'без подписей.'
         )
         layout.addWidget(self.display_grid_cb, 0, 0, 1, 2)  # Растянуть на 2 колонки
 
         # Connect checkbox to enable/disable handler
-        self.display_grid_cb.toggled.connect(self._on_display_grid_toggled)
+        self.display_grid_cb.toggled.connect(
+            lambda checked: self._on_display_grid_toggled(checked=checked)
+        )
 
         # Grid width (in meters)
         self.width_label = QLabel('Толщина линий (м):')
@@ -151,7 +163,7 @@ class GridSettingsWidget(QWidget):
 
         self.setLayout(layout)
 
-    def _on_display_grid_toggled(self, checked: bool) -> None:
+    def _on_display_grid_toggled(self, *, checked: bool) -> None:
         """Enable/disable grid parameters based on display_grid checkbox state."""
         self.width_label.setEnabled(checked)
         self.width_spin.setEnabled(checked)
@@ -189,7 +201,7 @@ class GridSettingsWidget(QWidget):
             self.display_grid_cb.setChecked(bool(settings.get('display_grid', True)))
 
         # Manually trigger enable/disable logic since signal was blocked
-        self._on_display_grid_toggled(self.display_grid_cb.isChecked())
+        self._on_display_grid_toggled(checked=self.display_grid_cb.isChecked())
 
 
 class OutputSettingsWidget(QWidget):
@@ -288,8 +300,10 @@ class HelmertSettingsWidget(QWidget):
         layout.addWidget(info, row, 0, 1, 4)
 
         self.setLayout(layout)
-        self._update_enabled_state(False)
-        self.enable_cb.toggled.connect(self._update_enabled_state)
+        self._update_enabled_state(enabled=False)
+        self.enable_cb.toggled.connect(
+            lambda checked: self._update_enabled_state(enabled=checked)
+        )
 
     def _cfg_spin(
         self,
@@ -305,7 +319,7 @@ class HelmertSettingsWidget(QWidget):
         w.setValue(default)
         w.setEnabled(False)
 
-    def _update_enabled_state(self, enabled: bool) -> None:
+    def _update_enabled_state(self, *, enabled: bool) -> None:
         # When checkbox toggled, enable/disable fields
         for w in (self.dx, self.dy, self.dz, self.rx, self.ry, self.rz, self.ds):
             w.setEnabled(bool(enabled))
@@ -357,24 +371,27 @@ class HelmertSettingsWidget(QWidget):
                     # leave default if None
                     continue
                 widget.setValue(float(val))
-        self._update_enabled_state(enabled)
+        self._update_enabled_state(enabled=enabled)
 
 
 class ModalOverlay(QWidget):
-    """Semi-transparent overlay widget to shade parent window during modal operations."""
+    """
+    Semi-transparent overlay widget to shade parent window during modal
+    operations.
+    """
 
-    def __init__(self, parent=None):
+    def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         # Make widget transparent for mouse events but visible
-        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, on=True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, on=True)
         # Set dark semi-transparent background
         self.setStyleSheet('background-color: rgba(0, 0, 0, 80);')
         # Position at top-left of parent
         self.move(0, 0)
         self.hide()
 
-    def showEvent(self, event) -> None:
+    def showEvent(self, event: QShowEvent) -> None:
         """Resize overlay to cover entire parent on show."""
         super().showEvent(event)
         parent = self.parent()
@@ -384,7 +401,7 @@ class ModalOverlay(QWidget):
             # Ensure overlay is on top of all siblings
             self.raise_()
 
-    def resizeToParent(self) -> None:
+    def resize_to_parent(self) -> None:
         """Manually resize to match parent (call when parent resizes)."""
         parent = self.parent()
         if parent and isinstance(parent, QWidget) and self.isVisible():
@@ -413,7 +430,8 @@ class MainWindow(QMainWindow):
         # Image state
         self._base_image: Image.Image | None = None
 
-        # Guard flag to prevent model updates while UI is being populated programmatically
+        # Guard flag to prevent model updates while UI is being populated
+        # programmatically
         self._ui_sync_in_progress: bool = False
 
         self._setup_ui()
@@ -482,7 +500,7 @@ class MainWindow(QMainWindow):
         self._progress_bar.setMaximumWidth(200)
         self._progress_bar.setMaximumHeight(20)
         self._progress_bar.setVisible(False)
-        self._progress_bar.setRange(0, 0)  # Indeterminate mode by default
+        self._progress_bar.setRange(0, 0)
         self._progress_label = QLabel()
         self._progress_label.setVisible(False)
         # Добавляем виджеты прогресса в левую часть статус-бара
@@ -774,7 +792,7 @@ class MainWindow(QMainWindow):
         )
         right_container.addWidget(self.save_map_btn)
 
-        self._set_sliders_enabled(False)
+        self._set_sliders_enabled(enabled=False)
 
         # Отложенное создание BusyDialog
         self._busy_dialog = None
@@ -788,8 +806,8 @@ class MainWindow(QMainWindow):
         # Prevent left panel from collapsing too small
         left_min = max(300, left_widget.sizeHint().width())
         left_scroll.setMinimumWidth(left_min)
-        splitter.setStretchFactor(0, 0)  # левая колонка — фиксированнее
-        splitter.setStretchFactor(1, 1)  # правая колонка (превью) растягивается
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
         splitter.setSizes([left_min + 100, 600])
 
         # Добавляем splitter вместо двух виджетов
@@ -896,7 +914,8 @@ class MainWindow(QMainWindow):
         # Control point
         self.control_point_checkbox.stateChanged.connect(self._on_control_point_toggled)
         self.control_point_checkbox.stateChanged.connect(self._on_settings_changed)
-        # Use editingFinished instead of textChanged to avoid cyclic updates during typing
+        # Use editingFinished instead of textChanged
+        # to avoid cyclic updates during typing
         self.control_point_x_widget.coordinate_edit.editingFinished.connect(
             self._on_settings_changed
         )
@@ -933,7 +952,8 @@ class MainWindow(QMainWindow):
         profiles = self._controller.get_available_profiles()
 
         # Блокируем сигналы на время программных изменений
-        self.profile_combo.blockSignals(True)
+        block_signals = True
+        self.profile_combo.blockSignals(block_signals)
         try:
             self.profile_combo.clear()
             self.profile_combo.addItems(profiles)
@@ -942,7 +962,8 @@ class MainWindow(QMainWindow):
             elif profiles:
                 self.profile_combo.setCurrentIndex(0)
         finally:
-            self.profile_combo.blockSignals(False)
+            block_signals = False
+            self.profile_combo.blockSignals(block_signals)
 
         # Явно загружаем профиль ровно один раз
         if profiles:
@@ -963,7 +984,8 @@ class MainWindow(QMainWindow):
         # Set flag to prevent feedback loop when model emits SETTINGS_CHANGED
         self._ui_sync_in_progress = True
         try:
-            # Clear any existing preview to avoid showing outdated imagery when coordinates or contours change
+            # Clear any existing preview to avoid showing outdated imagery
+            # when coordinates or contours change
             self._clear_preview_ui()
             # Use the same collection logic as forced sync
             self._sync_ui_to_model_now()
@@ -985,10 +1007,12 @@ class MainWindow(QMainWindow):
     @Slot()
     def _on_map_type_changed(self) -> None:
         """Clear preview immediately when map type changes and propagate setting."""
-        # Clear any existing preview to avoid showing outdated imagery for another map type
+        # Clear any existing preview to avoid showing outdated imagery for another
+        # map type
         self._clear_preview_ui()
 
-        # При выборе "Радиогоризонт" автоматически включаем контрольную точку и блокируем чекбокс
+        # При выборе "Радиогоризонт" автоматически включаем контрольную точку
+        # и блокируем чекбокс
         try:
             idx = max(0, self.map_type_combo.currentIndex())
             map_type_value = self.map_type_combo.itemData(idx)
@@ -997,7 +1021,8 @@ class MainWindow(QMainWindow):
             is_radio_horizon = False
 
         if is_radio_horizon:
-            # Принудительно включаем контрольную точку и блокируем возможность отключения
+            # Принудительно включаем контрольную точку
+            # и блокируем возможность отключения
             self.control_point_checkbox.setChecked(True)
             self.control_point_checkbox.setEnabled(False)
             # Включаем поля ввода координат, названия и высоты антенны/полёта
@@ -1022,7 +1047,8 @@ class MainWindow(QMainWindow):
         """
         Force-collect current UI settings and push them to the model without guards.
 
-        Does not clear preview or check _ui_sync_in_progress to avoid losing changes during Save/Save As.
+        Does not clear preview or check _ui_sync_in_progress to avoid losing changes
+        during Save/Save As.
         """
         # Collect all current settings
         coords = self._get_current_coordinates()
@@ -1077,6 +1103,7 @@ class MainWindow(QMainWindow):
     @Slot(int)
     def _load_selected_profile(self, index: int) -> None:
         """Load the selected profile when selection changes (guarded, non-reentrant)."""
+        _ = index
         # Guard against re-entrant calls
         if getattr(self, '_profile_loading', False):
             logger.debug('Profile load skipped due to guard re-entry')
@@ -1173,10 +1200,11 @@ class MainWindow(QMainWindow):
                     index = self.profile_combo.findText(saved_profile_name)
                     if index >= 0:
                         self._set_profile_selection_safely(index=index)
-                        # Explicitly load the newly saved profile to avoid reverting to default
+                        # Explicitly load the newly saved profile to avoid reverting
+                        # to default
                         try:
                             logger.info(
-                                'After Save As 								-> selecting and loading profile: %s',
+                                'After Save As -> selecting and loading profile: %s',
                                 saved_profile_name,
                             )
                             self._controller.load_profile_by_name(saved_profile_name)
@@ -1194,6 +1222,10 @@ class MainWindow(QMainWindow):
     @Slot()
     def _start_download(self) -> None:
         """Start map download process."""
+        # Clear status bar message and informer message immediately
+        self.status_bar.clearMessage()
+        self._progress_label.setText('')
+
         if self._download_worker and self._download_worker.isRunning():
             QMessageBox.information(self, 'Информация', 'Загрузка уже выполняется')
             return
@@ -1209,7 +1241,12 @@ class MainWindow(QMainWindow):
         self._cleanup_download_worker()
 
         self._download_worker = DownloadWorker(self._controller)
-        self._download_worker.finished.connect(self._on_download_finished)
+        self._download_worker.finished.connect(
+            lambda success, error_msg: self._on_download_finished(
+                success=success,
+                error_msg=error_msg,
+            )
+        )
         self._download_worker.progress_update.connect(self._update_progress)
         self._download_worker.preview_ready.connect(self._show_preview_in_main_window)
         self._download_worker.start()
@@ -1219,12 +1256,12 @@ class MainWindow(QMainWindow):
         self._progress_bar.setVisible(True)
         self._progress_label.setVisible(True)
         self._progress_label.setText('Подготовка…')
-        self._progress_bar.setRange(0, 0)  # Indeterminate mode initially
+        self._progress_bar.setRange(0, 0)
         # Disable all UI controls during download
-        self._set_controls_enabled(False)
+        self._set_controls_enabled(enabled=False)
 
     @Slot(bool, str)
-    def _on_download_finished(self, success: bool, error_msg: str) -> None:
+    def _on_download_finished(self, *, success: bool, error_msg: str) -> None:
         """Handle download completion."""
         # Hide progress widgets and re-enable controls
         try:
@@ -1232,7 +1269,7 @@ class MainWindow(QMainWindow):
                 self._progress_bar.setVisible(False)
                 self._progress_label.setVisible(False)
             # Re-enable all UI controls when download is finished
-            self._set_controls_enabled(True)
+            self._set_controls_enabled(enabled=True)
         except Exception as e:
             logger.debug(f'Failed to hide progress widgets: {e}')
 
@@ -1252,8 +1289,6 @@ class MainWindow(QMainWindow):
         try:
             set_preview_image_callback(None)
             set_spinner_callbacks(None, None)
-            from shared.progress import set_progress_callback as _set_prog
-
             _set_prog(None)
         except Exception as e:
             logger.debug(f'Failed to reset progress callbacks: {e}')
@@ -1298,7 +1333,8 @@ class MainWindow(QMainWindow):
             self._show_preview_in_main_window(data.get('image'))
         elif event == ModelEvent.ERROR_OCCURRED:
             error_msg = data.get('error', 'Неизвестная ошибка')
-            # Только статус-бар; модальные диалоги показываются централизованно в _on_download_finished
+            # Только статус-бар; модальные диалоги показываются централизованно
+            # в _on_download_finished
             self._status_proxy.show_message(f'Ошибка: {error_msg}', 5000)
         elif event == ModelEvent.WARNING_OCCURRED:
             warn_msg = (
@@ -1307,12 +1343,13 @@ class MainWindow(QMainWindow):
                 or data.get('error')
                 or 'Предупреждение'
             )
-            # Только статус-бар; без модальных диалогов, чтобы избежать дублей и вызовов не из GUI-потока
+            # Только статус-бар; без модальных диалогов, чтобы избежать дублей
+            # и вызовов не из GUI-потока
             self._status_proxy.show_message(f'Предупреждение: {warn_msg}', 5000)
 
-    def _update_ui_from_settings(self, settings: Any) -> None:
+    def _update_ui_from_settings(self, settings: MapSettings) -> None:
         """Update UI controls from settings object."""
-        if not settings:
+        if not settings or not hasattr(settings, 'from_x_high'):
             return
 
         # Block feedback to model while we populate controls programmatically
@@ -1342,7 +1379,8 @@ class MainWindow(QMainWindow):
         except Exception:
             current_mt = MapType.SATELLITE
 
-        # Legacy handling: if profile had ELEVATION_CONTOURS, map to OUTDOORS + overlay enabled
+        # Legacy handling: if profile had ELEVATION_CONTOURS, map to OUTDOORS
+        # + overlay enabled
         overlay_flag = bool(getattr(settings, 'overlay_contours', False))
         if current_mt == MapType.ELEVATION_CONTOURS:
             current_mt = MapType.OUTDOORS
@@ -1386,7 +1424,8 @@ class MainWindow(QMainWindow):
         # Блокируем/разблокируем чекбокс в зависимости от типа карты
         self.control_point_checkbox.setEnabled(not is_radio_horizon)
 
-        # Programmatically set full control point coordinates without splitting to high/low
+        # Programmatically set full control point coordinates without splitting
+        # to high/low
         control_point_x = int(getattr(settings, 'control_point_x', 5415000))
         control_point_y = int(getattr(settings, 'control_point_y', 7440000))
 
@@ -1416,7 +1455,8 @@ class MainWindow(QMainWindow):
             x_text = self.control_point_x_widget.coordinate_edit.text()
             y_text = self.control_point_y_widget.coordinate_edit.text()
             logger.info(
-                "UI control point set: enabled=%s, x_src=%d -> edit='%s', y_src=%d -> edit='%s', antenna_h=%d",
+                "UI control point set: enabled=%s, x_src=%d -> edit='%s', "
+                "y_src=%d -> edit='%s', antenna_h=%d",
                 control_point_enabled,
                 control_point_x,
                 x_text,
@@ -1467,21 +1507,23 @@ class MainWindow(QMainWindow):
         Shows progress bar and label in the lower left corner of the main window.
         Progress bar always operates in indeterminate (spinner) mode.
         """
+        _ = (done, total)
         # Show progress widgets if not visible
         if not self._progress_bar.isVisible():
             self._progress_bar.setVisible(True)
             self._progress_label.setVisible(True)
             # Disable all UI controls when showing progress
-            self._set_controls_enabled(False)
+            self._set_controls_enabled(enabled=False)
 
-        # Always use indeterminate progress (spinner mode) - no specific progress indication
+        # Always use indeterminate progress (spinner mode) - no specific progress
+        # indication
         self._progress_bar.setRange(0, 0)
 
         # Update progress label text
         if label:
             self._progress_label.setText(label)
 
-    def _show_preview_in_main_window(self, image: Any) -> None:
+    def _show_preview_in_main_window(self, image: Image.Image) -> None:
         """Show preview image in the main window's integrated preview area."""
         try:
             if not isinstance(image, Image.Image):
@@ -1505,9 +1547,9 @@ class MainWindow(QMainWindow):
                     self._progress_bar.setVisible(False)
                     self._progress_label.setVisible(False)
                     # Re-enable all UI controls when hiding progress
-                    self._set_controls_enabled(True)
+                    self._set_controls_enabled(enabled=True)
                     # Explicitly enable quality slider
-                    self._set_sliders_enabled(True)
+                    self._set_sliders_enabled(enabled=True)
             except Exception as _e:
                 logger.debug(f'Failed to hide progress widgets on preview: {_e}')
 
@@ -1529,7 +1571,7 @@ class MainWindow(QMainWindow):
             self.save_map_btn.setEnabled(False)
             self.save_map_action.setEnabled(False)
             # Disable quality slider when no image is loaded
-            self._set_sliders_enabled(False)
+            self._set_sliders_enabled(enabled=False)
             # Aggressively clear global QPixmap cache between runs
             QPixmapCache.clear()
         except Exception as e:
@@ -1576,7 +1618,7 @@ class MainWindow(QMainWindow):
 
                 def __init__(
                     self,
-                    image,
+                    image: Image.Image,
                     path: Path,
                     quality: int,
                 ) -> None:
@@ -1599,9 +1641,11 @@ class MainWindow(QMainWindow):
                             optimize=True,
                             subsampling=0,
                         )
-                        self.finished.emit(True, '')
+                        success = True
+                        self.finished.emit(success, '')
                     except Exception as e:
-                        self.finished.emit(False, str(e))
+                        success = False
+                        self.finished.emit(success, str(e))
 
             # Read quality directly from slider at save time
             quality = self.output_widget.quality_slider.value()
@@ -1621,7 +1665,7 @@ class MainWindow(QMainWindow):
             # Setup connections
             th.started.connect(worker.run)
 
-            def _on_save_complete(success: bool, err: str) -> None:
+            def _on_save_complete(*, success: bool, err: str) -> None:
                 """Handle save completion."""
                 logger.info(f'[SAVE_DEBUG] _on_save_complete called: success={success}')
 
@@ -1654,10 +1698,11 @@ class MainWindow(QMainWindow):
                 self._cleanup_save_resources()
 
             worker.finished.connect(
-                _on_save_complete,
+                lambda success, err: _on_save_complete(success=success, err=err),
                 Qt.ConnectionType.QueuedConnection,
             )
-            # Ensure the worker thread quits immediately after finishing to release resources
+            # Ensure the worker thread quits immediately after finishing to
+            # release resources
             worker.finished.connect(th.quit, Qt.ConnectionType.QueuedConnection)
             th.start()
 
@@ -1686,16 +1731,19 @@ class MainWindow(QMainWindow):
                 self._save_thread.deleteLater()
                 self._save_thread = None
 
-        except Exception as e:
-            logger.exception(f'Error cleaning up save resources: {e}')
+        except Exception:
+            logger.exception('Error cleaning up save resources')
 
-    def _set_sliders_enabled(self, enabled: bool) -> None:
+    def _set_sliders_enabled(self, *, enabled: bool) -> None:
         """Enable/disable quality slider."""
         # Only quality slider remains, enable it based on parameter
         self.quality_slider.setEnabled(enabled)
 
-    def _set_controls_enabled(self, enabled: bool) -> None:
-        """Enable/disable all UI controls when progress bar is shown/hidden."""
+    def _set_controls_enabled(self, *, enabled: bool) -> None:
+        """Enable/disable all UI controls and menu when progress bar is shown/hidden."""
+        # Top menu bar
+        self.menuBar().setEnabled(enabled)
+
         # Profile controls
         self.profile_combo.setEnabled(enabled)
         self.save_profile_btn.setEnabled(enabled)
@@ -1766,6 +1814,24 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'save_profile_as_action'):
             self.save_profile_as_action.setEnabled(enabled)
 
+        if not enabled:
+            self.setStyleSheet("""
+                QLabel { color: grey; }
+                QGroupBox { color: grey; }
+                QCheckBox { color: grey; }
+                QRadioButton { color: grey; }
+                QTabBar::tab { color: grey; }
+            """)
+        else:
+            self.setStyleSheet('')
+
+        # Ensure progress label stays visible and readable (not grey if it was affected)
+        if not enabled:
+            # We need to make sure the progress label specifically remains readable
+            self._progress_label.setStyleSheet('color: black;')
+        else:
+            self._progress_label.setStyleSheet('')
+
     @Slot()
     def _new_profile(self) -> None:
         """Create new profile (placeholder)."""
@@ -1774,9 +1840,6 @@ class MainWindow(QMainWindow):
     @Slot()
     def _open_profile(self) -> None:
         """Open profile file from disk and load settings."""
-        # Default directory: profiles dir (user or local)
-        from domain.profiles import ensure_profiles_dir
-
         default_dir = ensure_profiles_dir()
         file_path, _ = QFileDialog.getOpenFileName(
             self,
@@ -1813,10 +1876,11 @@ class MainWindow(QMainWindow):
         QMessageBox.about(
             self,
             'О программе',
-            'SK42mapper v0.2\n\nПриложение для создания карт в системе Гаусса-Крюгера\n',
+            'SK42mapper v0.2\n\nПриложение для создания карт в системе '
+            'Гаусса-Крюгера\n',
         )
 
-    def resizeEvent(self, event) -> None:
+    def resizeEvent(self, event: QResizeEvent) -> None:
         """Handle window resize to update overlay size."""
         super().resizeEvent(event)
         # Update overlay when central widget is resized
@@ -1825,9 +1889,9 @@ class MainWindow(QMainWindow):
             and self._modal_overlay is not None
             and self._modal_overlay.isVisible()
         ):
-            self._modal_overlay.resizeToParent()
+            self._modal_overlay.resize_to_parent()
 
-    def closeEvent(self, event) -> None:
+    def closeEvent(self, event: QCloseEvent) -> None:
         """Handle window close event."""
         logger.info('Application closing - cleaning up resources')
         log_comprehensive_diagnostics('CLEANUP_START')

@@ -22,12 +22,15 @@ class GridSettingsWidget(QWidget):
         self.display_grid_cb.setChecked(True)
         self.display_grid_cb.setToolTip(
             'Если включено: рисуются линии сетки и подписи.\n'
-            'Если выключено: рисуются только крестики в точках пересечения без подписей.'
+            'Если выключено: рисуются только крестики в точках пересечения '
+            'без подписей.'
         )
         layout.addWidget(self.display_grid_cb, 0, 0, 1, 2)  # Растянуть на 2 колонки
 
         # Connect checkbox to enable/disable handler
-        self.display_grid_cb.toggled.connect(self._on_display_grid_toggled)
+        self.display_grid_cb.toggled.connect(
+            lambda checked: self._on_display_grid_toggled(checked=checked)
+        )
 
         # Grid width (in meters)
         self.width_label = QLabel('Толщина линий (м):')
@@ -79,7 +82,7 @@ class GridSettingsWidget(QWidget):
 
         self.setLayout(layout)
 
-    def _on_display_grid_toggled(self, checked: bool) -> None:
+    def _on_display_grid_toggled(self, *, checked: bool) -> None:
         """Enable/disable grid parameters based on display_grid checkbox state."""
         self.width_label.setEnabled(checked)
         self.width_spin.setEnabled(checked)
@@ -117,4 +120,4 @@ class GridSettingsWidget(QWidget):
             self.display_grid_cb.setChecked(bool(settings.get('display_grid', True)))
 
         # Manually trigger enable/disable logic since signal was blocked
-        self._on_display_grid_toggled(self.display_grid_cb.isChecked())
+        self._on_display_grid_toggled(checked=self.display_grid_cb.isChecked())

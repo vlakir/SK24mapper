@@ -1,14 +1,14 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
 """Generic seed polyline builder (marching squares) placeholder.
 
 This module is introduced as part of service.py split to isolate contour
 construction logic. Implementation will be migrated here iteratively to avoid
 functional regressions.
 """
-
-from dataclasses import dataclass  # noqa: E402
-from typing import TYPE_CHECKING  # noqa: E402
 
 if TYPE_CHECKING:
     from collections.abc import Callable

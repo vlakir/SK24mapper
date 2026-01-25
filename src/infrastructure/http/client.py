@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import contextlib
+import os
 import sqlite3
+import ssl
 import time
 from datetime import timedelta
 from pathlib import Path
 
 import aiohttp
+import certifi
 from aiohttp_client_cache import CachedSession, SQLiteBackend
 
 from shared.constants import (
@@ -27,8 +30,6 @@ def resolve_cache_dir() -> Path | None:
     raw_dir = Path(HTTP_CACHE_DIR)
     if raw_dir.is_absolute():
         return raw_dir
-    # Prefer user LOCALAPPDATA for writable cache dir
-    import os
 
     local = os.getenv('LOCALAPPDATA')
     if local:
@@ -50,10 +51,6 @@ def cleanup_sqlite_cache(cache_dir: Path) -> None:
 
 
 def make_http_session(cache_dir: Path | None) -> aiohttp.ClientSession:
-    import ssl
-
-    import certifi
-
     # Создать SSL-контекст с сертификатами из certifi
     ssl_context = ssl.create_default_context(cafile=certifi.where())
     connector = aiohttp.TCPConnector(ssl=ssl_context)
@@ -85,10 +82,6 @@ def make_http_session(cache_dir: Path | None) -> aiohttp.ClientSession:
 
 async def validate_style_api(api_key: str, style_id: str) -> None:
     """Проверяет доступность стилей Mapbox (Styles API tiles endpoint)."""
-    import ssl
-
-    import certifi
-
     ssl_context = ssl.create_default_context(cafile=certifi.where())
     connector = aiohttp.TCPConnector(ssl=ssl_context)
 
@@ -106,21 +99,23 @@ async def validate_style_api(api_key: str, style_id: str) -> None:
                     await resp.read()
                 return
             if sc in (HTTP_UNAUTHORIZED, HTTP_FORBIDDEN):
-                msg = 'Неверный или недействительный API-ключ. Проверьте ключ и попробуйте снова.'
+                msg = (
+                    'Неверный или недействительный API-ключ. '
+                    'Проверьте ключ и попробуйте снова.'
+                )
                 raise RuntimeError(msg)
             msg = f'Ошибка доступа к серверу карт (HTTP {sc}). Повторите попытку позже.'
             raise RuntimeError(msg)
     except (TimeoutError, aiohttp.ClientConnectorError, aiohttp.ClientOSError):
-        msg = 'Нет соединения с интернетом или сервер недоступен. Проверьте подключение к сети.'
+        msg = (
+            'Нет соединения с интернетом или сервер недоступен. '
+            'Проверьте подключение к сети.'
+        )
         raise RuntimeError(msg) from None
 
 
 async def validate_terrain_api(api_key: str) -> None:
     """Быстрая проверка доступности Terrain-RGB источника."""
-    import ssl
-
-    import certifi
-
     ssl_context = ssl.create_default_context(cafile=certifi.where())
     connector = aiohttp.TCPConnector(ssl=ssl_context)
 
@@ -138,10 +133,16 @@ async def validate_terrain_api(api_key: str) -> None:
                     await resp.read()
                 return
             if sc in (HTTP_UNAUTHORIZED, HTTP_FORBIDDEN):
-                msg = 'Неверный или недействительный API-ключ. Проверьте ключ и попробуйте снова.'
+                msg = (
+                    'Неверный или недействительный API-ключ. '
+                    'Проверьте ключ и попробуйте снова.'
+                )
                 raise RuntimeError(msg)
             msg = f'Ошибка доступа к серверу карт (HTTP {sc}). Повторите попытку позже.'
             raise RuntimeError(msg)
     except (TimeoutError, aiohttp.ClientConnectorError, aiohttp.ClientOSError):
-        msg = 'Нет соединения с интернетом или сервер недоступен. Проверьте подключение к сети.'
+        msg = (
+            'Нет соединения с интернетом или сервер недоступен. '
+            'Проверьте подключение к сети.'
+        )
         raise RuntimeError(msg) from None

@@ -149,7 +149,8 @@ def draw_elevation_legend(
     # Горизонтально: в середине последнего полного километрового квадрата
     # Находим правую границу последнего полного квадрата (с учётом margin)
     last_square_right = w - margin
-    # Центр последнего квадрата находится на расстоянии (0.5 * grid_square) от правого края
+    # Центр последнего квадрата находится на расстоянии (0.5 * grid_square)
+    # от правого края
     legend_center_x = (
         last_square_right - grid_square_px * LEGEND_HORIZONTAL_POSITION_RATIO
     )
@@ -157,7 +158,8 @@ def draw_elevation_legend(
     legend_x = int(legend_center_x - legend_width / 2.0)
 
     # Вертикально: нижняя граница легенды немного выше первой горизонтальной линии сетки
-    # Первая горизонтальная линия снизу находится на высоте grid_square_px от нижнего края
+    # Первая горизонтальная линия снизу находится на высоте grid_square_px
+    # от нижнего края
     first_grid_line_y = h - grid_square_px
     # Поднимаем легенду на заданную долю от шага сетки
     legend_y = int(

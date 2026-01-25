@@ -10,6 +10,7 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING
 
+from geo.topography import async_fetch_xyz_tile
 from shared.constants import CONTOUR_LOG_MEMORY_EVERY_TILES
 from shared.diagnostics import log_memory_usage
 
@@ -52,8 +53,6 @@ async def fetch_xyz_tiles_batch(
         List of (index, image) tuples sorted by index
 
     """
-    from geo.topography import async_fetch_xyz_tile
-
     tile_count = 0
 
     async def bound_fetch(

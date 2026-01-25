@@ -13,6 +13,7 @@ from PIL import Image
 
 from contours.helpers import tx_ty_from_index
 from elevation.provider import ElevationTileProvider
+from elevation.stats import compute_elevation_range, sample_elevation_percentiles
 from geo.geometry import tile_overlap_rect_common
 from geo.topography import (
     ELEV_MIN_RANGE_M,
@@ -52,8 +53,6 @@ async def process_elevation_color(ctx: MapDownloadContext) -> Image.Image:
         Colorized elevation image.
 
     """
-    from elevation.stats import compute_elevation_range, sample_elevation_percentiles
-
     color_mapper = ColorMapper(ELEVATION_COLOR_RAMP, lut_size=2048)
 
     provider = ElevationTileProvider(

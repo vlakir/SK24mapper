@@ -6,7 +6,15 @@ import logging
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QImage, QPainter, QPixmap, QTransform, QWheelEvent
+from PySide6.QtGui import (
+    QImage,
+    QMouseEvent,
+    QPainter,
+    QPixmap,
+    QResizeEvent,
+    QTransform,
+    QWheelEvent,
+)
 from PySide6.QtWidgets import (
     QGraphicsPixmapItem,
     QGraphicsScene,
@@ -41,15 +49,22 @@ class OptimizedImageView(QGraphicsView):
         # Zoom to cursor: anchor transformations under the mouse pointer
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
 
-        self.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        self.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
-        self.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+        render_hint_enabled = True
+        self.setRenderHint(QPainter.RenderHint.Antialiasing, render_hint_enabled)
+        self.setRenderHint(QPainter.RenderHint.TextAntialiasing, render_hint_enabled)
+        self.setRenderHint(
+            QPainter.RenderHint.SmoothPixmapTransform,
+            render_hint_enabled,
+        )
 
-        self.setRenderHint(QPainter.RenderHint.LosslessImageRendering, True)
+        self.setRenderHint(
+            QPainter.RenderHint.LosslessImageRendering,
+            render_hint_enabled,
+        )
 
         self.setOptimizationFlag(
             QGraphicsView.OptimizationFlag.DontSavePainterState,
-            True,
+            enabled=True,
         )
 
         # Solution 5: Use FullViewportUpdate for critical thin line rendering
@@ -211,19 +226,19 @@ class OptimizedImageView(QGraphicsView):
         self._zoom(factor)
         event.accept()
 
-    def mousePressEvent(self, event) -> None:
+    def mousePressEvent(self, event: QMouseEvent) -> None:
         """Handle mouse press for panning."""
         if event.button() == Qt.MouseButton.LeftButton:
             self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
         super().mousePressEvent(event)
 
-    def mouseReleaseEvent(self, event) -> None:
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         """Handle mouse release."""
         if event.button() == Qt.MouseButton.LeftButton:
             self.setDragMode(QGraphicsView.DragMode.NoDrag)
         super().mouseReleaseEvent(event)
 
-    def resizeEvent(self, event) -> None:
+    def resizeEvent(self, event: QResizeEvent) -> None:
         """Handle widget resize to update fit-to-window scale."""
         super().resizeEvent(event)
         if self._image_item:

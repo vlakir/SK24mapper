@@ -10,6 +10,9 @@ from shared.constants import (
     GRID_FONT_PATH,
     GRID_FONT_PATH_BOLD,
     GRID_LABEL_BG_COLOR,
+    GRID_LABEL_FONT_M,
+    GRID_LABEL_FONT_MAX_PX,
+    GRID_LABEL_FONT_MIN_PX,
     GRID_TEXT_COLOR,
     GRID_TEXT_OUTLINE_COLOR,
     GRID_TEXT_OUTLINE_WIDTH,
@@ -225,12 +228,6 @@ def calculate_adaptive_grid_font_size(mpp: float) -> int:
         Размер шрифта в пикселях, ограниченный диапазоном
 
     """
-    from shared.constants import (
-        GRID_LABEL_FONT_M,
-        GRID_LABEL_FONT_MAX_PX,
-        GRID_LABEL_FONT_MIN_PX,
-    )
-
     try:
         # Целевой физический размер в метрах → размер в пикселях
         px = round(GRID_LABEL_FONT_M / max(1e-9, mpp))
@@ -241,7 +238,8 @@ def calculate_adaptive_grid_font_size(mpp: float) -> int:
     px = max(GRID_LABEL_FONT_MIN_PX, min(px, GRID_LABEL_FONT_MAX_PX))
 
     logger.info(
-        'Адаптивный размер шрифта сетки: %d px (mpp=%.6f, target=%.1f м, range=[%d,%d])',
+        'Адаптивный размер шрифта сетки: %d px (mpp=%.6f, target=%.1f м, '
+        'range=[%d,%d])',
         px,
         mpp,
         GRID_LABEL_FONT_M,

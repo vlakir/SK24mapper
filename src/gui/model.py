@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 from enum import Enum
-from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -45,7 +44,7 @@ class EventData(BaseModel):
 
     event: ModelEvent
     timestamp: float = Field(default_factory=lambda: __import__('time').time())
-    data: dict[str, Any] = Field(default_factory=dict)
+    data: dict[str, object] = Field(default_factory=dict)
 
 
 class Observer:
@@ -78,7 +77,7 @@ class Observable:
     def notify_observers(
         self,
         event: ModelEvent,
-        data: dict[str, Any] | None = None,
+        data: dict[str, object] | None = None,
     ) -> None:
         """Notify all observers of an event."""
         event_data = EventData(event=event, data=data or {})
@@ -87,9 +86,10 @@ class Observable:
         for observer in self._observers:
             try:
                 observer.update(event_data)
-            except Exception as e:
+            except Exception:
                 logger.exception(
-                    f'Error notifying observer {observer.__class__.__name__}: {e}',
+                    'Error notifying observer %s',
+                    observer.__class__.__name__,
                 )
 
 
@@ -144,7 +144,7 @@ class MilMapperModel(Observable):
         """Get current application state."""
         return self._state
 
-    def update_settings(self, **kwargs: Any) -> None:
+    def update_settings(self, **kwargs: object) -> None:
         """Update map settings and notify observers."""
         try:
             # Create new settings object with updated values
@@ -223,7 +223,12 @@ class MilMapperModel(Observable):
             {'done': done, 'total': total, 'label': label},
         )
 
-    def complete_download(self, success: bool, error_msg: str | None = None) -> None:
+    def complete_download(
+        self,
+        *,
+        success: bool,
+        error_msg: str | None = None,
+    ) -> None:
         """Mark download as completed and notify observers."""
         self._state.is_downloading = False
         self._state.last_error = error_msg

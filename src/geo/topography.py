@@ -56,11 +56,14 @@ def build_transformers_sk42(
     Собирает трансформеры для географических координат СК‑42 <-> WGS84.
 
     Примечания:
-    - Если переданы пользовательские 7 параметров Хельмерта, они используются напрямую
-      в виде +towgs84=dx,dy,dz,rx,ry,rz,ds, где rx/ry/rz — угловые секунды, ds — ppm.
-    - Если custom_helmert не задан, пытаемся подобрать лучший доступный pipeline через
-      TransformerGroup (например, с использованием гридов NTV2, если они установлены).
-      При отсутствии — используем прямую трансформацию EPSG:4284↔4326 (возможен ballpark).
+    - Если переданы пользовательские 7 параметров Хельмерта, они используются
+      напрямую в виде +towgs84=dx,dy,dz,rx,ry,rz,ds, где rx/ry/rz — угловые
+      секунды, ds — ppm.
+    - Если custom_helmert не задан, пытаемся подобрать лучший доступный pipeline
+      через TransformerGroup (например, с использованием гридов NTV2, если они
+      установлены).
+      При отсутствии — используем прямую трансформацию EPSG:4284↔4326
+      (возможен ballpark).
     """
     if custom_helmert:
         dx, dy, dz, rx_as, ry_as, rz_as, ds_ppm = custom_helmert
@@ -89,11 +92,15 @@ def build_transformers_sk42(
                 t_sk42_to_wgs = tg_fwd.transformers[0]
             else:
                 t_sk42_to_wgs = Transformer.from_crs(
-                    crs_sk42_geog, crs_wgs84, always_xy=True
+                    crs_sk42_geog,
+                    crs_wgs84,
+                    always_xy=True,
                 )
         except Exception:
             t_sk42_to_wgs = Transformer.from_crs(
-                crs_sk42_geog, crs_wgs84, always_xy=True
+                crs_sk42_geog,
+                crs_wgs84,
+                always_xy=True,
             )
         try:
             tg_rev = TransformerGroup(crs_wgs84, crs_sk42_geog, always_xy=True)
@@ -101,11 +108,15 @@ def build_transformers_sk42(
                 t_wgs_to_sk42 = tg_rev.transformers[0]
             else:
                 t_wgs_to_sk42 = Transformer.from_crs(
-                    crs_wgs84, crs_sk42_geog, always_xy=True
+                    crs_wgs84,
+                    crs_sk42_geog,
+                    always_xy=True,
                 )
         except Exception:
             t_wgs_to_sk42 = Transformer.from_crs(
-                crs_wgs84, crs_sk42_geog, always_xy=True
+                crs_wgs84,
+                crs_sk42_geog,
+                always_xy=True,
             )
 
     return t_sk42_to_wgs, t_wgs_to_sk42
@@ -375,7 +386,8 @@ async def async_fetch_xyz_tile(
 
     - URL: /styles/v1/{style_id}/tiles/{tileSize}/{z}/{x}/{y}{@2x}
     - Не добавляем токен в лог/ошибки; логируем путь без токена.
-    - Обрабатываем 401/403/404 явно; 429/5xx с ретраями и экспоненциальной задержкой.
+    - Обрабатываем 401/403/404 явно; 429/5xx с ретраями и экспоненциальной
+      задержкой.
     """
     ts = TILE_SIZE_512 if tile_size >= TILE_SIZE_512 else TILE_SIZE
     scale_suffix = '@2x' if use_retina else ''
@@ -394,7 +406,8 @@ async def async_fetch_xyz_tile(
                 sc = resp.status
                 if sc == HTTPStatus.OK:
                     data = await resp.read()
-                    # Контент может быть png/jpg/webp — PIL откроет всё; конвертируем в RGB
+                    # Контент может быть png/jpg/webp — PIL откроет всё;
+                    # конвертируем в RGB
                     return Image.open(BytesIO(data)).convert('RGB')
                 if sc in (HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN):
                     msg = (
@@ -403,7 +416,10 @@ async def async_fetch_xyz_tile(
                     )
                     _fail(msg)
                 if sc == HTTPStatus.NOT_FOUND:
-                    msg = f'Ресурс не найден (404) для тайла z/x/y={z}/{x}/{y} path={path}'
+                    msg = (
+                        f'Ресурс не найден (404) для тайла '
+                        f'z/x/y={z}/{x}/{y} path={path}'
+                    )
                     _fail(msg)
                 is_rate_or_5xx = (sc == HTTPStatus.TOO_MANY_REQUESTS) or (
                     HTTP_5XX_MIN <= sc < HTTP_5XX_MAX
@@ -414,10 +430,12 @@ async def async_fetch_xyz_tile(
                     )
                 else:
                     last_exc = RuntimeError(
-                        f'Неожиданный ответ HTTP {sc} для z/x/y={z}/{x}/{y} path={path}',
+                        f'Неожиданный ответ HTTP {sc} для '
+                        f'z/x/y={z}/{x}/{y} path={path}',
                     )
             finally:
-                # Освобождение ресурсов ответа для обоих типов (aiohttp и CachedResponse)
+                # Освобождение ресурсов ответа для обоих типов (aiohttp
+                # и CachedResponse)
                 try:
                     close = getattr(resp, 'close', None)
                     if callable(close):
@@ -427,7 +445,9 @@ async def async_fetch_xyz_tile(
                         release()
                 except Exception as e:
                     logging.getLogger(__name__).debug(
-                        'Failed to cleanup HTTP response: %s', e, exc_info=True
+                        'Failed to cleanup HTTP response: %s',
+                        e,
+                        exc_info=True,
                     )
         except Exception as e:
             last_exc = e
@@ -451,7 +471,6 @@ async def async_fetch_terrain_rgb_tile(
     """
     Загружает один тайл Terrain-RGB (pngraw) и возвращает PIL.Image in RGB.
 
-    URL: https://api.mapbox.com/v4/mapbox.terrain-rgb/{z}/{x}/{y}{@2x}.pngraw?access_token=...
     Токен не логируется; в сообщениях используем путь без query.
     Поведение ошибок/ретраев аналогично async_fetch_xyz_tile.
     """
@@ -470,12 +489,18 @@ async def async_fetch_terrain_rgb_tile(
                     data = await resp.read()
                     return Image.open(BytesIO(data)).convert('RGB')
                 if sc in (HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN):
-                    msg = f'Доступ запрещён (HTTP {sc}) для terrain тайла z/x/y={z}/{x}/{y} path={path}'
+                    msg = (
+                        f'Доступ запрещён (HTTP {sc}) для terrain тайла '
+                        f'z/x/y={z}/{x}/{y} path={path}'
+                    )
                     raise RuntimeError(
                         msg,
                     )
                 if sc == HTTPStatus.NOT_FOUND:
-                    msg = f'Ресурс не найден (404) для terrain тайла z/x/y={z}/{x}/{y} path={path}'
+                    msg = (
+                        f'Ресурс не найден (404) для terrain тайла '
+                        f'z/x/y={z}/{x}/{y} path={path}'
+                    )
                     raise RuntimeError(
                         msg,
                     )
@@ -484,11 +509,13 @@ async def async_fetch_terrain_rgb_tile(
                 )
                 if is_rate_or_5xx:
                     last_exc = RuntimeError(
-                        f'HTTP {sc} при загрузке terrain тайла z/x/y={z}/{x}/{y} path={path}',
+                        f'HTTP {sc} при загрузке terrain тайла '
+                        f'z/x/y={z}/{x}/{y} path={path}',
                     )
                 else:
                     last_exc = RuntimeError(
-                        f'Неожиданный ответ HTTP {sc} для terrain z/x/y={z}/{x}/{y} path={path}',
+                        f'Неожиданный ответ HTTP {sc} для terrain '
+                        f'z/x/y={z}/{x}/{y} path={path}',
                     )
             finally:
                 with suppress(Exception):
@@ -527,7 +554,8 @@ def decode_terrain_rgb_to_elevation_m(img: Image.Image) -> np.ndarray:
     return elevation.astype(np.float32)
 
 
-# Кэш для декодированных DEM-тайлов (~400 MB при 100 тайлах 512x512 float32)
+# Кэш для декодированных DEM-тайлов (~400 MB при 100 тайлах
+# 512x512 float32)
 _dem_tile_cache: dict[tuple[int, int, int], np.ndarray] = {}
 
 
@@ -586,7 +614,8 @@ def assemble_dem(
             copy_h = min(eff_tile_px, tile_h)
             copy_w = min(eff_tile_px, tile_w)
             canvas[base_y : base_y + copy_h, base_x : base_x + copy_w] = tile[
-                :copy_h, :copy_w
+                :copy_h,
+                :copy_w,
             ]
 
     cx, cy, cw, ch = crop_rect
@@ -730,8 +759,8 @@ def compute_rotation_deg_for_east_axis(
     """
     Вычисляет угол поворота оси «восток» СК‑42/ГК.
 
-    Поворачивает исходное изображение так, чтобы ось «восток» (X в СК‑42/ГК)
-    стала строго горизонтальной.
+    Поворачивает исходное изображение так, чтобы ось «восток»
+    (X в СК‑42/ГК) стала строго горизонтальной.
     """
     t_sk42gk_from_sk42 = Transformer.from_crs(
         crs_sk42_geog,

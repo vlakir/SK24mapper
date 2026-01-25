@@ -167,6 +167,7 @@ def build_seed_polylines(
         список точек (x, y) в координатах seed-сетки.
 
     """
+    _ = (seed_h, seed_w)
     # Конвертируем в numpy array если нужно
     if isinstance(seed_dem, list):
         dem_array = np.array(seed_dem, dtype=np.float32)

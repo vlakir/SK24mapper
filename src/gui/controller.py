@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +20,7 @@ from domain.profiles import (
 )
 from gui.model import MilMapperModel, ModelEvent
 from service import download_satellite_rectangle
-from shared.diagnostics import ResourceMonitor, log_memory_usage
+from shared.diagnostics import ResourceMonitor, log_memory_usage, run_deep_verification
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +35,7 @@ class MilMapperController:
         self._load_api_key()
         logger.info('MilMapperController initialized')
 
-    def update_settings_bulk(self, **kwargs: Any) -> None:
+    def update_settings_bulk(self, **kwargs: object) -> None:
         """
         Пакетное обновление нескольких настроек за один вызов модели.
 
@@ -54,10 +55,11 @@ class MilMapperController:
             )
 
     def _load_api_key(self) -> None:
-        """Загрузка API-ключа из переменных окружения (.env/.secrets.env) для разных сценариев запуска."""
+        """
+        Загрузка API-ключа из переменных окружения (.env/.secrets.env) для разных
+        сценариев запуска.
+        """
         try:
-            import sys
-
             # Каталог установленного приложения (папка с exe при сборке PyInstaller)
             install_dir = Path(sys.argv[0]).resolve().parent
             # Рабочая директория процесса (может отличаться от install_dir)
@@ -114,7 +116,7 @@ class MilMapperController:
                 {'error': error_msg},
             )
 
-    def update_setting(self, field_name: str, value: Any) -> None:
+    def update_setting(self, field_name: str, value: object) -> None:
         """Точечное обновление одного поля настроек."""
         try:
             self._model.update_settings(**{field_name: value})
@@ -160,12 +162,16 @@ class MilMapperController:
         """Сохранение текущих настроек в файл профиля."""
         try:
             s = self._model.settings
-            # Подробный лог перед сохранением, чтобы отловить проблемы «не те значения сохраняются»
+            # Подробный лог перед сохранением, чтобы отловить проблемы
+            # «не те значения сохраняются»
             try:
                 logger.info(
                     (
-                        "Saving profile '%s' with coords: from(xH=%s,xL=%s,yH=%s,yL=%s) → BL(%.3f, %.3f); "
-                        'to(xH=%s,xL=%s,yH=%s,yL=%s) → TR(%.3f, %.3f); control_point(en=%s, X=%.3f, Y=%.3f)'
+                        "Saving profile '%s' with coords: "
+                        'from(xH=%s,xL=%s,yH=%s,yL=%s) '
+                        '→ BL(%.3f, %.3f); '
+                        'to(xH=%s,xL=%s,yH=%s,yL=%s) → TR(%.3f, %.3f); '
+                        'control_point(en=%s, X=%.3f, Y=%.3f)'
                     ),
                     profile_name,
                     getattr(s, 'from_x_high', None),
@@ -221,8 +227,10 @@ class MilMapperController:
             try:
                 logger.info(
                     (
-                        "Saving profile as '%s' → %s with coords: from(xH=%s,xL=%s,yH=%s,yL=%s) → BL(%.3f, %.3f); "
-                        'to(xH=%s,xL=%s,yH=%s,yL=%s) → TR(%.3f, %.3f); control_point(en=%s, X=%.3f, Y=%.3f)'
+                        "Saving profile as '%s' → %s with coords: "
+                        'from(xH=%s,xL=%s,yH=%s,yL=%s) → BL(%.3f, %.3f); '
+                        'to(xH=%s,xL=%s,yH=%s,yL=%s) → TR(%.3f, %.3f); '
+                        'control_point(en=%s, X=%.3f, Y=%.3f)'
                     ),
                     profile_name,
                     str(final_path),
@@ -251,7 +259,6 @@ class MilMapperController:
 
             self._model.save_profile(profile_name)
             logger.info(f'Профиль сохранён как: {final_path}')
-            return profile_name
 
         except Exception as e:
             error_msg = f'Не удалось сохранить профиль как {file_path}: {e}'
@@ -261,6 +268,8 @@ class MilMapperController:
                 {'error': error_msg},
             )
             return None
+        else:
+            return profile_name
 
     def validate_api_key(self) -> bool:
         """Проверка наличия валидного API-ключа в окружении."""
@@ -277,8 +286,6 @@ class MilMapperController:
         with ResourceMonitor('MAP_DOWNLOAD'):
             try:
                 # Глубокая проверка перед стартом
-                from shared.diagnostics import run_deep_verification
-
                 try:
                     await run_deep_verification(
                         api_key=self._api_key or '', settings=self._model.settings
@@ -302,12 +309,15 @@ class MilMapperController:
                 height_m = settings.top_right_y_sk42_gk - settings.bottom_left_y_sk42_gk
 
                 logger.info(
-                    f'Starting download: center=({center_x}, {center_y}), size=({width_m}x{height_m})',
+                    f'Starting download: center=({center_x}, {center_y}), '
+                    f'size=({width_m}x{height_m})',
                 )
                 try:
                     # Military notation in logs: X=northing (GK Y), Y=easting (GK X)
                     logger.info(
-                        'Starting download with control point (СК-42 ГК): enabled=%s, X(север)=%.3f, Y(восток)=%.3f; raw Xn=%s, raw Ye=%s',
+                        'Starting download with control point (СК-42 ГК): '
+                        'enabled=%s, X(север)=%.3f, Y(восток)=%.3f; raw Xn=%s, '
+                        'raw Ye=%s',
                         getattr(settings, 'control_point_enabled', False),
                         getattr(settings, 'control_point_y_sk42_gk', 0.0),  # northing
                         getattr(settings, 'control_point_x_sk42_gk', 0.0),  # easting
@@ -342,7 +352,8 @@ class MilMapperController:
                 logger.exception(error_msg)
                 # Акуратный откат состояния модели
                 self._model.complete_download(success=False, error_msg=error_msg)
-                # Пробрасываем ошибку для централизованной обработки в GUI-потоке (DownloadWorker.finished)
+                # Пробрасываем ошибку для централизованной обработки
+                # в GUI-потоке (DownloadWorker.finished)
                 raise RuntimeError(error_msg) from e
 
     def start_map_download_sync(self) -> None:
@@ -359,16 +370,16 @@ class MilMapperController:
         """
         try:
             self.start_map_download_sync()
-            return True
-        except Exception as e:
-            logger.exception(f'download_map failed: {e}')
+        except Exception:
+            logger.exception('download_map failed')
             raise
+        else:
+            return True
 
     def get_available_profiles(self) -> list[str]:
         """Получение списка доступных профилей (по именам файлов TOML)."""
         try:
             names = list_profiles()
-            return names if names else ['default']
         except Exception as e:
             msg = f'Не удалось получить список профилей: {e}'
             logger.exception(msg)
@@ -377,6 +388,8 @@ class MilMapperController:
                 {'warning': msg},
             )
             return ['default']
+        else:
+            return names if names else ['default']
 
     def update_coordinates(self, coords: dict[str, int]) -> None:
         """Обновление координатных настроек (фильтруются только допустимые ключи)."""

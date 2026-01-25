@@ -6,6 +6,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from geo import topography
+
 if TYPE_CHECKING:
     import asyncio
 
@@ -72,6 +74,10 @@ class MapDownloadContext:
     # Result image
     result: Image.Image | None = None
 
+    # Internal coordinate storage (set by service)
+    coord_result: Any | None = None
+    crs_sk42_gk: Any | None = None
+
     # Map type flags
     style_id: str | None = None
     is_elev_color: bool = False
@@ -84,9 +90,9 @@ class MapDownloadContext:
 
     def get_meters_per_pixel(self) -> float:
         """Calculate meters per pixel at center latitude."""
-        from geo.topography import meters_per_pixel
-
-        return meters_per_pixel(self.center_lat_wgs, self.zoom, scale=self.eff_scale)
+        return topography.meters_per_pixel(
+            self.center_lat_wgs, self.zoom, scale=self.eff_scale
+        )
 
     def get_pixels_per_meter(self) -> float:
         """Calculate pixels per meter at center latitude."""

@@ -11,8 +11,12 @@ import contextlib
 import logging
 from typing import TYPE_CHECKING
 
+from PIL import Image as PILImage
+
 if TYPE_CHECKING:
     from PIL import Image
+
+from PIL import ImageDraw
 
 logger = logging.getLogger(__name__)
 
@@ -35,8 +39,6 @@ def composite_overlay_on_base(
         Composited RGB image
 
     """
-    from PIL import Image as PILImage
-
     # Resize overlay if needed
     if target_size and overlay.size != target_size:
         logger.info(
@@ -82,8 +84,6 @@ def blend_with_grayscale_base(
         Blended RGBA image
 
     """
-    from PIL import Image as PILImage
-
     # Ensure same size
     if base.size != color_overlay.size:
         base = base.resize(color_overlay.size, PILImage.Resampling.BILINEAR)
@@ -120,8 +120,6 @@ def create_contour_gap_at_labels(
         gap_padding: Padding around each label bbox in pixels
 
     """
-    from PIL import ImageDraw
-
     if not label_bboxes:
         return
 

@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     from PIL import Image
 
 
-def build_save_kwargs(out_path: Path, quality: int = 95) -> dict[str, Any]:
+def build_save_kwargs(_out_path: Path, quality: int = 95) -> dict[str, Any]:
     """Build PIL.Image.save kwargs for JPEG based on quality value."""
     q = max(10, min(100, int(quality)))
     return {

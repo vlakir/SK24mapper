@@ -46,7 +46,8 @@ def build_sk42_gk_crs(zone: int) -> CRS:
         lon0 = zone * GK_ZONE_WIDTH_DEG - GK_ZONE_CM_OFFSET_DEG
         proj4 = (
             f'+proj=tmerc +lat_0=0 +lon_0={lon0} +k=1 '
-            f'+x_0={GK_FALSE_EASTING} +y_0=0 +ellps=krass +units=m +no_defs +type=crs'
+            f'+x_0={GK_FALSE_EASTING} +y_0=0 '
+            '+ellps=krass +units=m +no_defs +type=crs'
         )
         return CRS.from_proj4(proj4)
 

@@ -13,6 +13,7 @@ from imaging import (
     draw_axis_aligned_km_grid,
     draw_elevation_legend,
     draw_label_with_bg,
+    draw_label_with_subscript_bg,
     draw_text_with_outline,
     load_grid_font,
     rotate_keep_size,
@@ -170,6 +171,28 @@ class TestDrawLabelWithBg:
         # Should have red pixels from background
         has_red = any(p[0] > 200 and p[1] < 50 and p[2] < 50 for p in pixels)
         assert has_red
+
+
+class TestDrawLabelWithSubscriptBg:
+    """Tests for draw_label_with_subscript_bg function."""
+
+    def test_draws_label_with_subscript(self):
+        """Should draw label with subscript and background."""
+        img = Image.new('RGB', (400, 200), color='white')
+        draw = ImageDraw.Draw(img)
+        font = load_grid_font(20)
+        sub_font = load_grid_font(14)
+        parts = [('Normal', False), ('Sub', True), ('Text', False)]
+        
+        draw_label_with_subscript_bg(
+            draw, (200, 100), parts, font, sub_font,
+            anchor='mm', img_size=img.size, bg_color=(0, 255, 0)
+        )
+        
+        pixels = list(img.getdata())
+        # Should have green pixels from background
+        has_green = any(p[0] < 50 and p[1] > 200 and p[2] < 50 for p in pixels)
+        assert has_green
 
 
 class TestLoadGridFont:

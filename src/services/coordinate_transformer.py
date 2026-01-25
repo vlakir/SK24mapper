@@ -207,7 +207,8 @@ class CoordinateTransformer:
         Get complete coordinate transformation result.
 
         Args:
-            map_params: Map parameters tuple for rotation calculation. If None, rotation_deg will be 0.0.
+            map_params: Map parameters tuple for rotation calculation.
+            If None, rotation_deg will be 0.0.
 
         Returns:
             CoordinateResult with all computed values
@@ -263,8 +264,10 @@ def validate_control_point_bounds(
         map_left <= control_x_gk <= map_right and map_bottom <= control_y_gk <= map_top
     ):
         msg = (
-            f'Контрольная точка X(север)={control_y_gk:.0f}, Y(восток)={control_x_gk:.0f} '
-            f'выходит за пределы карты. Границы карты: Y(восток)=[{map_left:.0f}, {map_right:.0f}], '
+            f'Контрольная точка X(север)={control_y_gk:.0f}, '
+            f'Y(восток)={control_x_gk:.0f} '
+            f'выходит за пределы карты. Границы карты: Y(восток)=[{map_left:.0f}, '
+            f'{map_right:.0f}], '
             f'X(север)=[{map_bottom:.0f}, {map_top:.0f}]'
         )
         raise ValueError(msg)

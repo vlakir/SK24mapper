@@ -111,9 +111,7 @@ async def process_elevation_contours(ctx: MapDownloadContext) -> Image.Image:
                 # Собираем локальные данные для этого тайла
                 local_samples: list[float] = []
                 for ry in range(off_y, h, step_y):
-                    row = dem_tile[ry]
-                    for rx in range(off_x, w, step_x):
-                        local_samples.append(row[rx])
+                    local_samples.extend(dem_tile[ry][off_x:w:step_x])
 
                 # Accumulate into low-res seed (локальные данные)
                 local_updates: list[tuple[int, int, float]] = []
@@ -211,15 +209,11 @@ async def process_elevation_contours(ctx: MapDownloadContext) -> Image.Image:
     else:
         interval = float(adaptive_params.interval_m)
 
-    start = math.floor(mn / interval) * interval
-    end = math.ceil(mx / interval) * interval
-    levels: list[float] = []
-    k = 0
-    v = start
-    while v <= end:
-        levels.append(v)
-        k += 1
-        v = start + k * interval
+    start_v = math.floor(mn / interval) * interval
+    end_v = math.ceil(mx / interval) * interval
+    levels: list[float] = [
+        start_v + k * interval for k in range(int((end_v - start_v) / interval) + 1)
+    ]
 
     # Pass B: draw contours
     sp = LiveSpinner('Построение изолиний')
@@ -252,12 +246,12 @@ async def process_elevation_contours(ctx: MapDownloadContext) -> Image.Image:
                 pts_img = [(p[0] * seed_ds, p[1] * seed_ds) for p in poly]
 
                 # Проверка, что полилиния в пределах изображения
-                minx = min(p[0] for p in pts_img)
-                maxx = max(p[0] for p in pts_img)
-                miny = min(p[1] for p in pts_img)
-                maxy = max(p[1] for p in pts_img)
+                minx_p = min(p[0] for p in pts_img)
+                maxx_p = max(p[0] for p in pts_img)
+                miny_p = min(p[1] for p in pts_img)
+                maxy_p = max(p[1] for p in pts_img)
 
-                if maxx < 0 or minx > img_w or maxy < 0 or miny > img_h:
+                if maxx_p < 0 or minx_p > img_w or maxy_p < 0 or miny_p > img_h:
                     continue
 
                 prev = None
@@ -304,7 +298,8 @@ def _add_contour_labels(
     """Add labels to contour lines."""
     try:
         logger.info(
-            'Подписи изогипс: подготовка (zoom=%d, crop=%dx%d at (%d,%d), seed_ds=%d, levels=%d)',
+            'Подписи изогипс: подготовка (zoom=%d, crop=%dx%d at (%d,%d), '
+            'seed_ds=%d, levels=%d)',
             zoom,
             crop_rect[2],
             crop_rect[3],
@@ -331,7 +326,8 @@ def _add_contour_labels(
             map_size_m = max(float(crop_rect[2]), float(crop_rect[3])) * mpp
             label_params = compute_contour_adaptive_params(map_size_m)
             logger.info(
-                'Адаптация подписей: map_size=%.1f м, scale=%.3f, spacing=%.1f м, font=%.1f м',
+                'Адаптация подписей: map_size=%.1f м, scale=%.3f, spacing=%.1f м, '
+                'font=%.1f м',
                 map_size_m,
                 label_params.scale,
                 label_params.label_spacing_m,
@@ -359,14 +355,16 @@ def _add_contour_labels(
 
         if not label_bboxes:
             logger.warning(
-                'Подписи изогипс: dry_run вернул 0 кандидатов — проверьте пороги (spacing=%d,min_len=%d,edge=%d)',
+                'Подписи изогипс: dry_run вернул 0 кандидатов — проверьте пороги '
+                '(spacing=%d,min_len=%d,edge=%d)',
                 int(label_params.label_spacing_m),
                 int(label_params.label_min_seg_len_m),
                 int(label_params.label_edge_margin_m),
             )
 
         # Create gaps in contour lines at label positions
-        # Для overlay режима не рисуем белые прямоугольники — подписи выводятся прямо на карту
+        # Для overlay режима не рисуем белые прямоугольники —
+        # подписи выводятся прямо на карту
         if CONTOUR_LABEL_GAP_ENABLED and label_bboxes and not is_overlay:
             draw = ImageDraw.Draw(result)
             gap_padding = max(
@@ -445,7 +443,8 @@ async def apply_contours_to_image(
     elev_crop_rect = (elev_cx, elev_cy, elev_cw, elev_ch)
 
     logger.info(
-        'Overlay: base tile_px=%d, Elev tile_px=%d, scale=%.3f, orig_crop=(%d,%d,%d,%d), elev_crop=(%d,%d,%d,%d)',
+        'Overlay: base tile_px=%d, Elev tile_px=%d, scale=%.3f, '
+        'orig_crop=(%d,%d,%d,%d), elev_crop=(%d,%d,%d,%d)',
         ctx.full_eff_tile_px,
         elev_tile_px,
         scale_factor,
@@ -512,9 +511,7 @@ async def apply_contours_to_image(
                     # Собираем локальные данные для этого тайла
                     local_samples: list[float] = []
                     for ry in range(off_y, h, step_y):
-                        row = dem_tile[ry]
-                        for rx in range(off_x, w, step_x):
-                            local_samples.append(row[rx])
+                        local_samples.extend(dem_tile[ry][off_x:w:step_x])
 
                     # Accumulate into low-res seed (локальные данные)
                     local_updates: list[tuple[int, int, float]] = []
@@ -656,7 +653,8 @@ async def apply_contours_to_image(
 
         img_w, img_h = result.size
 
-        # Координаты полилиний в системе elev_crop_rect, но base_image имеет размер orig_cw x orig_ch.
+        # Координаты полилиний в системе elev_crop_rect, но base_image имеет
+        # размер orig_cw x orig_ch.
         # Нужно масштабировать координаты: elev_coords * seed_ds -> elev_px -> base_px
         # elev_px / scale_factor = base_px, т.е. множитель = seed_ds / scale_factor
         coord_scale = seed_ds / scale_factor
@@ -723,7 +721,8 @@ async def apply_contours_to_image(
             # Упрощённая проверка: если bbox между точками — считаем пересечением
             return True
 
-        # Draw contours directly on result image, skipping segments that intersect label bboxes
+        # Draw contours directly on result image, skipping segments that intersect
+        # label bboxes
         draw = ImageDraw.Draw(result)
 
         for li, _level in enumerate(levels):

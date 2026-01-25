@@ -108,7 +108,8 @@ async def process_radio_horizon(ctx: MapDownloadContext) -> Image.Image:
 
     if ds_factor > 1:
         logger.info(
-            'Радиогоризонт: DEM слишком большой (%dx%d = %d Mpx), даунсэмплинг в %d раз',
+            'Радиогоризонт: DEM слишком большой (%dx%d = %d Mpx), '
+            'даунсэмплинг в %d раз',
             dem_w_orig,
             dem_h_orig,
             dem_w_orig * dem_h_orig // 1_000_000,

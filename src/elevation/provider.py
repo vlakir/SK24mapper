@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 from dataclasses import dataclass
+from io import BytesIO
 from pathlib import Path
 
 import aiohttp
@@ -10,7 +11,7 @@ from geo.topography import (
     async_fetch_terrain_rgb_tile,
     decode_terrain_rgb_to_elevation_m,
 )
-from shared.constants import HTTP_CACHE_DIR
+from infrastructure.http.client import resolve_cache_dir
 
 
 @dataclass(frozen=True)
@@ -35,7 +36,8 @@ class ElevationTileProvider:
     Features:
     - in-flight request coalescing
     - in-memory cache of raw bytes (PIL images constructed on demand)
-    - on-disk cache of raw bytes under HTTP_CACHE_DIR/terrain_rgb/z/x/y(@2x).pngraw.
+    - on-disk cache of raw bytes under
+      HTTP_CACHE_DIR/terrain_rgb/z/x/y(@2x).pngraw.
 
     It exposes two async methods:
       - get_tile_image: returns PIL.Image (RGB) of a terrain tile
@@ -54,7 +56,7 @@ class ElevationTileProvider:
         self.client = client
         self.api_key = api_key
         self.use_retina = bool(use_retina)
-        self.cache_root = (cache_root or Path(HTTP_CACHE_DIR)) / 'terrain_rgb'
+        self.cache_root = (cache_root or resolve_cache_dir()) / 'terrain_rgb'
         self.cache_root.mkdir(parents=True, exist_ok=True)
         self._inflight: dict[TileKey, asyncio.Future[bytes]] = {}
         self._mem_raw: dict[TileKey, bytes] = {}
@@ -116,11 +118,10 @@ class ElevationTileProvider:
                     y=key.y,
                     use_retina=key.retina,
                 )
-                # Save raw bytes; PIL Image has no direct raw, so re-save as PNG to bytes
-                # However async_fetch_terrain_rgb_tile already reads PNGRAW bytes then constructs Image.
-                # We'll rebuild bytes from the provided image to persist the payload.
-                from io import BytesIO
-
+                # Save raw bytes; PIL Image has no direct raw, so re-save as PNG
+                # to bytes. However async_fetch_terrain_rgb_tile already reads
+                # PNGRAW bytes then constructs Image. We'll rebuild bytes from
+                # the provided image to persist the payload.
                 buf = BytesIO()
                 img.save(buf, format='PNG')
                 data = buf.getvalue()
@@ -147,8 +148,6 @@ class ElevationTileProvider:
             raw = await self._fetch_raw(key)
         else:
             self._touch(key)
-        from io import BytesIO
-
         return Image.open(BytesIO(raw)).convert('RGB')
 
     async def get_tile_dem(self, z: int, x: int, y: int) -> list[list[float]]:

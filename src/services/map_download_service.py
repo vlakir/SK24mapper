@@ -5,11 +5,12 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import gc
+import importlib
 import logging
 import time
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from domain.models import MapSettings
 from geo.topography import (
@@ -47,6 +48,9 @@ from services.map_postprocessing import (
     compute_control_point_image_coords,
     draw_center_cross_on_image,
     draw_control_point_triangle,
+)
+from services.processors.elevation_contours import (
+    apply_contours_to_image,
 )
 from services.tile_coverage import compute_tile_coverage
 from shared.constants import (
@@ -233,7 +237,7 @@ class MapDownloadService:
         sp.stop('Подготовка: трансформеры готовы')
 
         # Store transformer for later rotation calculation
-        _coord_transformer = coord_transformer
+        coord_transformer_obj = coord_transformer
 
         # Validate control point
         if settings.control_point_enabled:
@@ -276,7 +280,7 @@ class MapDownloadService:
         sp.stop('Подготовка: покрытие рассчитано')
 
         # Now compute rotation with map_params available
-        rotation_deg = _coord_transformer.compute_rotation_deg(coverage.map_params)
+        rotation_deg = coord_transformer_obj.compute_rotation_deg(coverage.map_params)
 
         # Determine effective tile size
         if is_elev_color or is_elev_contours:
@@ -320,8 +324,8 @@ class MapDownloadService:
         )
 
         # Store additional data for postprocessing
-        ctx._coord_result = coord_result
-        ctx._crs_sk42_gk = coord_result.crs_sk42_gk
+        ctx.coord_result = coord_result
+        ctx.crs_sk42_gk = coord_result.crs_sk42_gk
 
         return ctx
 
@@ -390,22 +394,17 @@ class MapDownloadService:
     async def _run_processor(self, ctx: MapDownloadContext) -> Image.Image:
         """Run appropriate processor based on map type."""
         if ctx.is_elev_color:
-            from services.processors.elevation_color import process_elevation_color
-
-            return await process_elevation_color(ctx)
+            module = importlib.import_module('services.processors.elevation_color')
+            return await module.process_elevation_color(ctx)
         if ctx.is_elev_contours:
-            from services.processors.elevation_contours import (
-                process_elevation_contours,
-            )
-
-            return await process_elevation_contours(ctx)
+            module = importlib.import_module('services.processors.elevation_contours')
+            return await module.process_elevation_contours(ctx)
         if ctx.is_radio_horizon:
-            from services.processors.radio_horizon import process_radio_horizon
+            module = importlib.import_module('services.processors.radio_horizon')
+            return await module.process_radio_horizon(ctx)
 
-            return await process_radio_horizon(ctx)
-        from services.processors.xyz_tiles import process_xyz_tiles
-
-        return await process_xyz_tiles(ctx)
+        module = importlib.import_module('services.processors.xyz_tiles')
+        return await module.process_xyz_tiles(ctx)
 
     async def _postprocess(self, ctx: MapDownloadContext) -> None:
         """Apply post-processing to the result image."""
@@ -472,8 +471,6 @@ class MapDownloadService:
         self, ctx: MapDownloadContext, result: Image.Image
     ) -> Image.Image:
         """Apply contour overlay to the result image."""
-        from services.processors.elevation_contours import apply_contours_to_image
-
         logger.info('Наложение изолиний на карту — старт')
         try:
             result = await apply_contours_to_image(ctx, result)
@@ -485,7 +482,7 @@ class MapDownloadService:
     def _draw_grid(self, ctx: MapDownloadContext, result: Image.Image) -> None:
         """Draw kilometer grid on the result image."""
         try:
-            coord_result = ctx._coord_result
+            coord_result = ctx.coord_result
             draw_axis_aligned_km_grid(
                 img=result,
                 center_lat_sk42=coord_result.center_lat_sk42,
@@ -599,8 +596,6 @@ class MapDownloadService:
         mpp: float,
     ) -> None:
         """Draw control point label for radio horizon maps."""
-        from PIL import ImageDraw
-
         try:
             ppm = 1.0 / mpp if mpp > 0 else 0.0
             font_size_px = max(12, round(ctx.settings.grid_font_size_m * ppm))
@@ -615,7 +610,8 @@ class MapDownloadService:
             # Position below triangle
             tri_size_px = max(5, round(CONTROL_POINT_SIZE_M * ppm))
             label_x = int(cx_img)
-            # Отступ от нижней вершины треугольника: половина размера + дополнительный зазор
+            # Отступ от нижней вершины треугольника: половина размера
+            # + дополнительный зазор
             label_gap_px = max(
                 CONTROL_POINT_LABEL_GAP_MIN_PX,
                 round(tri_size_px * CONTROL_POINT_LABEL_GAP_RATIO),
@@ -656,15 +652,17 @@ class MapDownloadService:
         except Exception as e:
             logger.warning('Не удалось нарисовать подпись контрольной точки: %s', e)
 
-    def _cleanup_session(self, session_ctx, cache_dir_resolved: str | None) -> None:
+    def _cleanup_session(
+        self, session_ctx: object, cache_dir_resolved: str | None
+    ) -> None:
         """Clean up HTTP session resources."""
         try:
-            if hasattr(session_ctx, '_cache') and session_ctx._cache:
-                if hasattr(session_ctx._cache, '_cache') and hasattr(
-                    session_ctx._cache._cache, 'close'
-                ):
-                    # Note: This is sync cleanup, async close should be done in context
-                    pass
+            # Note: This is sync cleanup, async close should be done in context
+            cache_obj = getattr(session_ctx, '_cache', None)
+            if cache_obj:
+                inner_cache = getattr(cache_obj, '_cache', None)
+                if inner_cache and hasattr(inner_cache, 'close'):
+                    inner_cache.close()
         except Exception:
             logger.debug('Error during HTTP session cleanup')
 

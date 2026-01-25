@@ -4,6 +4,7 @@ import logging
 import math
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 from pyproj import CRS, Transformer
@@ -45,7 +46,8 @@ logger = logging.getLogger(__name__)
 
 if not logger.handlers:
     logging.basicConfig(
-        level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s'
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
     )
     logger.setLevel(logging.INFO)
 
@@ -62,7 +64,8 @@ class Helmert7Result:
 
     def to_profile_text(self) -> str:
         return (
-            '# СК-42 → WGS84 (Bursa–Wolf 7 параметров; единицы: м / угл. сек / ppm)\n'
+            '# СК-42 → WGS84 (Bursa–Wolf 7 параметров; '
+            'единицы: м / угл. сек / ppm)\n'
             f'helmert_dx = {self.dx:.6f}\n'
             f'helmert_dy = {self.dy:.6f}\n'
             f'helmert_dz = {self.dz:.6f}\n'
@@ -75,7 +78,8 @@ class Helmert7Result:
 
 def estimate_helmert_7p(xs: np.ndarray, xw: np.ndarray) -> Helmert7Result:
     """
-    Оценка 7 параметров Bursa–Wolf между двумя наборами геоцентрических координат.
+    Оценка 7 параметров Bursa–Wolf между двумя наборами геоцентрических
+    координат.
 
     xs — (N,3) точки в СК-42 (Krassovsky) геоцентрических XYZ (метры)
     xw — (N,3) соответствующие точки в WGS84 геоцентрических XYZ (метры)
@@ -143,7 +147,13 @@ def estimate_helmert_7p(xs: np.ndarray, xw: np.ndarray) -> Helmert7Result:
     ds_ppm = m * 1e6
 
     return Helmert7Result(
-        dx=dx, dy=dy, dz=dz, rx_as=rx_as, ry_as=ry_as, rz_as=rz_as, ds_ppm=ds_ppm
+        dx=dx,
+        dy=dy,
+        dz=dz,
+        rx_as=rx_as,
+        ry_as=ry_as,
+        rz_as=rz_as,
+        ds_ppm=ds_ppm,
     )
 
 
@@ -170,9 +180,37 @@ def _build_wgs84_gk_crs(zone: int) -> CRS:
     lon0 = zone * GK_ZONE_WIDTH_DEG - GK_ZONE_CM_OFFSET_DEG
     proj4 = (
         f'+proj=tmerc +lat_0=0 +lon_0={lon0} +k=1 '
-        f'+x_0={GK_FALSE_EASTING} +y_0=0 +ellps=WGS84 +units=m +no_defs +type=crs'
+        f'+x_0={GK_FALSE_EASTING} +y_0=0 '
+        '+ellps=WGS84 +units=m +no_defs +type=crs'
     )
     return CRS.from_proj4(proj4)
+
+
+def _validate_helmert_dict_types(chosen_dict: dict[str, Any]) -> None:
+    """Validate types in Helmert result dictionary."""
+    errors = []
+    if not isinstance(chosen_dict.get('res'), Helmert7Result):
+        errors.append('Результат преобразования должен быть Helmert7Result')
+    if not isinstance(chosen_dict.get('rms_2d'), float):
+        errors.append('RMS2D должен быть float')
+    if not isinstance(chosen_dict.get('rms_x'), float):
+        errors.append('RMSX должен быть float')
+    if not isinstance(chosen_dict.get('rms_y'), float):
+        errors.append('RMSY должен быть float')
+    if not isinstance(chosen_dict.get('rms_3d'), float):
+        errors.append('RMS3D должен быть float')
+    if not isinstance(chosen_dict.get('rx2d'), np.ndarray):
+        errors.append('RX2D должен быть numpy.ndarray')
+    if not isinstance(chosen_dict.get('ry2d'), np.ndarray):
+        errors.append('RY2D должен быть numpy.ndarray')
+    if not isinstance(chosen_dict.get('r2'), np.ndarray):
+        errors.append('R2 должен быть numpy.ndarray')
+    if not isinstance(chosen_dict.get('used_prefix'), bool):
+        errors.append('Флаг префикса должен быть bool')
+
+    if errors:
+        msg = '; '.join(errors)
+        raise TypeError(msg)
 
 
 class HelmertToolWindow(QMainWindow):
@@ -189,8 +227,12 @@ class HelmertToolWindow(QMainWindow):
         v = QVBoxLayout(cw)
 
         hint = QLabel(
-            'Введите минимум 3 соответствующие точки: слева — СК-42 Гаусса–Крюгера (военный порядок: X — северинг, Y — восточинг, м), справа — WGS84 (широта, долгота).\n'
-            'Утилита восстановит географические координаты СК‑42, пересчитает пары в геоцентрические XYZ и оценит 7 параметров Bursa–Wolf (dx, dy, dz; rx, ry, rz; ds).'
+            'Введите минимум 3 соответствующие точки: слева — '
+            'СК-42 Гаусса–Крюгера (военный порядок: X — северинг, '
+            'Y — восточинг, м), справа — WGS84 (широта, долгота).\n'
+            'Утилита восстановит географические координаты СК‑42, '
+            'пересчитает пары в геоцентрические XYZ и оценит 7 параметров '
+            'Bursa–Wolf (dx, dy, dz; rx, ry, rz; ds).'
         )
         hint.setWordWrap(True)
         v.addWidget(hint)
@@ -270,7 +312,8 @@ class HelmertToolWindow(QMainWindow):
 
     def _on_calc(self) -> None:
         try:
-            # Считываем: слева СК-42 (военный порядок: X=northing, Y=easting), справа WGS84 (lat, lon)
+            # Считываем: слева СК-42 (военный порядок: X=northing,
+            # Y=easting), справа WGS84 (lat, lon)
             p_src_m_mil, p_dst_deg_latlon = self._read_points()
             # Приводим СК-42 к геодезическому порядку (easting, northing)
             p_src_en_base = np.column_stack([p_src_m_mil[:, 1], p_src_m_mil[:, 0]])
@@ -302,10 +345,14 @@ class HelmertToolWindow(QMainWindow):
             crs_wgs84_gk = _build_wgs84_gk_crs(zone)
             crs_sk42_gk = _build_sk42_gk_crs(zone)
             t_wgs_to_wgs_gk = Transformer.from_crs(
-                crs_wgs84_geog, crs_wgs84_gk, always_xy=True
+                crs_wgs84_geog,
+                crs_wgs84_gk,
+                always_xy=True,
             )
             t_sk42_from_gk = Transformer.from_crs(
-                crs_sk42_gk, crs_sk42_geog, always_xy=True
+                crs_sk42_gk,
+                crs_sk42_geog,
+                always_xy=True,
             )
             # Геоцентрические
             crs_sk42_geocent = CRS.from_proj4(
@@ -315,21 +362,28 @@ class HelmertToolWindow(QMainWindow):
                 '+proj=geocent +datum=WGS84 +units=m +no_defs'
             )
             t_sk42_geog_to_xyz = Transformer.from_crs(
-                crs_sk42_geog, crs_sk42_geocent, always_xy=True
+                crs_sk42_geog,
+                crs_sk42_geocent,
+                always_xy=True,
             )
             t_wgs_geog_to_xyz = Transformer.from_crs(
-                crs_wgs84_geog, crs_wgs84_geocent, always_xy=True
+                crs_wgs84_geog,
+                crs_wgs84_geocent,
+                always_xy=True,
             )
             t_wgs_xyz_to_geog = Transformer.from_crs(
-                crs_wgs84_geocent, crs_wgs84_geog, always_xy=True
+                crs_wgs84_geocent,
+                crs_wgs84_geog,
+                always_xy=True,
             )
 
             lats = p_dst_deg_latlon[:, 0]
             lons = p_dst_deg_latlon[:, 1]
 
             def _solve_variant(
+                *,
                 use_prefix: bool,
-            ) -> dict[str, float | Helmert7Result | np.ndarray | bool]:
+            ) -> dict[str, Any]:
                 p_src_en = p_src_en_base.copy()
                 if use_prefix:
                     p_src_en[:, 0] = p_src_en[:, 0] - zone * GK_ZONE_X_PREFIX_DIV
@@ -341,9 +395,17 @@ class HelmertToolWindow(QMainWindow):
                 )
                 # Географические -> геоцентрические (h=0)
                 zeros = np.zeros_like(lng_sk42)
-                x_s, y_s, z_s = t_sk42_geog_to_xyz.transform(lng_sk42, lat_sk42, zeros)
+                x_s, y_s, z_s = t_sk42_geog_to_xyz.transform(
+                    lng_sk42,
+                    lat_sk42,
+                    zeros,
+                )
                 zeros_w = np.zeros_like(lons)
-                x_w, y_w, z_w = t_wgs_geog_to_xyz.transform(lons, lats, zeros_w)
+                x_w, y_w, z_w = t_wgs_geog_to_xyz.transform(
+                    lons,
+                    lats,
+                    zeros_w,
+                )
                 xs = np.column_stack([x_s, y_s, z_s])
                 xw = np.column_stack([x_w, y_w, z_w])
                 res_local = estimate_helmert_7p(xs, xw)
@@ -379,33 +441,33 @@ class HelmertToolWindow(QMainWindow):
                     'used_prefix': use_prefix,
                 }
 
-            out_with = _solve_variant(True)
-            out_without = _solve_variant(False)
+            out_with = _solve_variant(use_prefix=True)
+            out_without = _solve_variant(use_prefix=False)
+
             rms_2d_with = out_with['rms_2d']
             rms_2d_without = out_without['rms_2d']
-            assert isinstance(rms_2d_with, float)
-            assert isinstance(rms_2d_without, float)
-            chosen = out_with if rms_2d_with <= rms_2d_without else out_without
-            res = chosen['res']
-            assert isinstance(res, Helmert7Result)
-            rms_2d = chosen['rms_2d']
-            assert isinstance(rms_2d, float)
-            rms_x = chosen['rms_x']
-            assert isinstance(rms_x, float)
-            rms_y = chosen['rms_y']
-            assert isinstance(rms_y, float)
-            rms_3d = chosen['rms_3d']
-            assert isinstance(rms_3d, float)
-            rx2d = chosen['rx2d']
-            assert isinstance(rx2d, np.ndarray)
-            ry2d = chosen['ry2d']
-            assert isinstance(ry2d, np.ndarray)
-            r2 = chosen['r2']
-            assert isinstance(r2, np.ndarray)
-            used_prefix = chosen['used_prefix']
-            assert isinstance(used_prefix, bool)
+
+            if not isinstance(rms_2d_with, float) or not isinstance(
+                rms_2d_without, float
+            ):
+                return
+
+            chosen_dict = out_with if rms_2d_with <= rms_2d_without else out_without
+            _validate_helmert_dict_types(chosen_dict)
+
+            res = chosen_dict['res']
+            rms_2d = chosen_dict['rms_2d']
+            rms_x = chosen_dict['rms_x']
+            rms_y = chosen_dict['rms_y']
+            rms_3d = chosen_dict['rms_3d']
+            rx2d = chosen_dict['rx2d']
+            ry2d = chosen_dict['ry2d']
+            r2 = chosen_dict['r2']
+            used_prefix = chosen_dict['used_prefix']
+
             logger.info(
-                'Гипотезы: с префиксом RMS2D=%.3f, без префикса RMS2D=%.3f. Выбрана: %s',
+                'Гипотезы: с префиксом RMS2D=%.3f, без префикса RMS2D=%.3f. '
+                'Выбрана: %s',
                 out_with['rms_2d'],
                 out_without['rms_2d'],
                 'с префиксом' if used_prefix else 'без префикса',
@@ -430,16 +492,23 @@ class HelmertToolWindow(QMainWindow):
         warnings: list[str] = []
         if zone_by_lon is not None and zone_by_lon != zone:
             warnings.append(
-                f'Предупреждение: зона по долготам WGS84 = {zone_by_lon}, по СК-42 = {zone}. Проверьте порядок X/Y (военный) и соответствие зоны.'
+                'Предупреждение: зона по долготам WGS84 = '
+                f'{zone_by_lon}, по СК-42 = {zone}. Проверьте порядок X/Y '
+                '(военный) и соответствие зоны.'
             )
         if len(zones_in_src) > 1:
             warnings.append(
-                f'Предупреждение: обнаружены разные префиксы зон в исходных СК-42 easting (Y военный): {sorted(zones_in_src)}. Нельзя смешивать точки из разных зон.'
+                'Предупреждение: обнаружены разные префиксы зон в исходных '
+                'СК-42 easting (Y военный): '
+                f'{sorted(zones_in_src)}. Нельзя смешивать точки из разных зон.'
             )
         # Выбранная гипотеза по миллионному префиксу
-        warnings.append(
-            f'Выбран вариант нормализации восточинга: {"с миллионным префиксом (вычтен zone*1e6)" if used_prefix else "без миллионного префикса"}.'
+        chosen_prefix = (
+            'с миллионным префиксом (вычтен zone*1e6)'
+            if used_prefix
+            else 'без миллионного префикса'
         )
+        warnings.append(f'Выбран вариант нормализации восточинга: {chosen_prefix}.')
 
         # Санити‑чек реалистичности параметров
         insane = (
@@ -453,10 +522,13 @@ class HelmertToolWindow(QMainWindow):
         )
         if insane:
             warnings.append(
-                'Оценённые параметры выглядят НЕРЕАЛИСТИЧНО. Проверьте исходные данные: зона ГК, порядок столбцов X/Y и наличие миллионного префикса восточинга.'
+                'Оценённые параметры выглядят НЕРЕАЛИСТИЧНО. Проверьте '
+                'исходные данные: зона ГК, порядок столбцов X/Y и наличие '
+                'миллионного префикса восточинга.'
             )
             logger.warning(
-                'Нереалистичные параметры: dx=%.3f dy=%.3f dz=%.3f rx=%.3f" ry=%.3f" rz=%.3f" ds=%.3fppm',
+                'Нереалистичные параметры: dx=%.3f dy=%.3f dz=%.3f '
+                'rx=%.3f" ry=%.3f" rz=%.3f" ds=%.3fppm',
                 res.dx,
                 res.dy,
                 res.dz,
@@ -472,10 +544,11 @@ class HelmertToolWindow(QMainWindow):
             f'RMS (TM WGS84): X = {rms_x:.3f} м; Y = {rms_y:.3f} м; 2D = {rms_2d:.3f} м'
         )
         lines.append(f'RMS (геоцентрические XYZ): {rms_3d:.3f} м')
-        for i in range(rx2d.size):
-            lines.append(
-                f'Точка {i + 1}: rX = {rx2d[i]:.3f} м; rY = {ry2d[i]:.3f} м; |r| = {math.sqrt(r2[i]):.3f} м'
-            )
+        lines.extend(
+            f'Точка {i + 1}: rX = {rx2d[i]:.3f} м; '
+            f'rY = {ry2d[i]:.3f} м; |r| = {math.sqrt(r2[i]):.3f} м'
+            for i in range(rx2d.size)
+        )
         if warnings:
             lines.append('\n' + ' \n'.join(warnings))
         diag_text = '\n'.join(lines)
@@ -491,10 +564,12 @@ class HelmertToolWindow(QMainWindow):
             QMessageBox.warning(
                 self,
                 'Нереалистичные параметры',
-                'Параметры выглядят нереалистично. Копирование отключено. Проверьте данные и попробуйте другую выборку точек.',
+                'Параметры выглядят нереалистично. Копирование отключено. '
+                'Проверьте данные и попробуйте другую выборку точек.',
             )
         logger.info(
-            'Оценка завершена: RMS2D=%.3f м, RMS3D=%.3f м; параметры: dx=%.3f dy=%.3f dz=%.3f rx=%.3f" ry=%.3f" rz=%.3f" ds=%.3fppm',
+            'Оценка завершена: RMS2D=%.3f м, RMS3D=%.3f м; '
+            'параметры: dx=%.3f dy=%.3f dz=%.3f rx=%.3f" ry=%.3f" rz=%.3f" ds=%.3fppm',
             rms_2d,
             rms_3d,
             res.dx,
@@ -505,6 +580,7 @@ class HelmertToolWindow(QMainWindow):
             res.rz_as,
             res.ds_ppm,
         )
+        return
 
     def _on_copy(self) -> None:
         res: Helmert7Result | None = getattr(self, '_last_result', None)

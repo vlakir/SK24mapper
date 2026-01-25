@@ -5,6 +5,51 @@ from types import SimpleNamespace
 import pytest
 
 import shared.diagnostics as diagnostics
+import logging
+
+
+def test_get_memory_info_direct():
+    info = diagnostics.get_memory_info()
+    assert 'process_rss_mb' in info
+
+
+def test_get_thread_info_direct():
+    info = diagnostics.get_thread_info()
+    assert 'active_count' in info
+
+
+def test_get_file_descriptor_info_direct():
+    info = diagnostics.get_file_descriptor_info()
+    if info:
+        assert 'open_files' in info
+
+
+def test_get_sqlite_info_direct():
+    info = diagnostics.get_sqlite_info()
+    assert isinstance(info, dict)
+
+
+def test_get_system_load_direct():
+    info = diagnostics.get_system_load()
+    assert 'cpu_percent' in info
+
+
+def test_log_memory_usage_direct(caplog):
+    with caplog.at_level(logging.INFO):
+        diagnostics.log_memory_usage("test context")
+    assert "Memory usage" in caplog.text
+
+
+def test_log_thread_status_direct(caplog):
+    with caplog.at_level(logging.INFO):
+        diagnostics.log_thread_status("test context")
+    assert "Thread status" in caplog.text
+
+
+def test_log_comprehensive_diagnostics_direct(caplog):
+    with caplog.at_level(logging.INFO):
+        diagnostics.log_comprehensive_diagnostics("TEST OP")
+    assert "DIAGNOSTIC INFO: TEST OP" in caplog.text.upper()
 
 
 def test_get_memory_info_with_psutil(monkeypatch):

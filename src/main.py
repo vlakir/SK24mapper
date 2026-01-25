@@ -4,6 +4,7 @@ import argparse
 import contextlib
 import logging
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -54,15 +55,12 @@ def main() -> int:
 
     # Ensure user data directories and bootstrap defaults
     try:
-        import shutil
-        import sys as _sys
-
         # Create user dirs
         (appdata_base / 'configs' / 'profiles').mkdir(parents=True, exist_ok=True)
         (appdata_base / 'maps').mkdir(parents=True, exist_ok=True)
         (local_base / '.cache' / 'tiles').mkdir(parents=True, exist_ok=True)
         # Copy default configs if not present
-        install_dir = Path(_sys.argv[0]).resolve().parent
+        install_dir = Path(sys.argv[0]).resolve().parent
         default_cfg_root = install_dir / 'configs'
         if default_cfg_root.exists():
             # Copy files only if missing in user configs
@@ -74,8 +72,8 @@ def main() -> int:
                         dst.parent.mkdir(parents=True, exist_ok=True)
                         with contextlib.suppress(Exception):
                             shutil.copy2(src, dst)
-    except Exception as _e:
-        logger.warning(f'User data bootstrap failed: {_e}')
+    except Exception:
+        logger.warning('User data bootstrap failed')
 
     # Log initial system state
     log_comprehensive_diagnostics('APPLICATION_STARTUP')
@@ -105,9 +103,7 @@ def main() -> int:
         QLocale.setDefault(QLocale(QLocale.Language.Russian, QLocale.Country.Russia))
 
         # Set application icon if available
-        import sys as _sys2
-
-        install_dir2 = Path(_sys2.argv[0]).resolve().parent
+        install_dir2 = Path(sys.argv[0]).resolve().parent
         icon_path = install_dir2 / 'img' / 'icon.ico'
         if not icon_path.exists():
             # fallback to source path (dev mode)
@@ -123,15 +119,14 @@ def main() -> int:
 
         # Run application event loop
         result = app.exec()
-
+    except Exception:
+        logger.exception('Failed to start application')
+        log_comprehensive_diagnostics('APPLICATION_ERROR')
+        return 1
+    else:
         # Log final state before exit
         log_comprehensive_diagnostics('APPLICATION_SHUTDOWN')
         return result
-
-    except Exception as e:
-        logger.exception(f'Failed to start application: {e}')
-        log_comprehensive_diagnostics('APPLICATION_ERROR')
-        return 1
 
 
 if __name__ == '__main__':

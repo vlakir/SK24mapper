@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def get_effective_tile_size(map_type: MapType, use_retina: bool) -> int:
+def get_effective_tile_size(map_type: MapType, *, use_retina: bool) -> int:
     """Возвращает эффективный размер тайла с учётом retina."""
     if map_type in (MapType.ELEVATION, MapType.RADIO_HORIZON):
         return TILE_SIZE * 2 if use_retina else TILE_SIZE
@@ -62,6 +62,7 @@ async def fetch_map_tile(
     x: int,
     y: int,
     map_type: MapType,
+    *,
     use_retina: bool,
 ) -> Image.Image:
     """
@@ -92,6 +93,7 @@ async def fetch_dem_tile(
     z: int,
     x: int,
     y: int,
+    *,
     use_retina: bool,
 ) -> np.ndarray:
     """
@@ -124,6 +126,7 @@ class TileFetcher:
         api_key: str,
         zoom: int,
         map_type: MapType,
+        *,
         use_retina: bool,
         concurrency: int = DOWNLOAD_CONCURRENCY,
     ):
@@ -144,7 +147,7 @@ class TileFetcher:
                 x,
                 y,
                 self.map_type,
-                self.use_retina,
+                use_retina=self.use_retina,
             )
 
     async def fetch_dem(self, x: int, y: int) -> np.ndarray:
@@ -156,7 +159,7 @@ class TileFetcher:
                 self.zoom,
                 x,
                 y,
-                self.use_retina,
+                use_retina=self.use_retina,
             )
 
     async def fetch_tiles_batch(

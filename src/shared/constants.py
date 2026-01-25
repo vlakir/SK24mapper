@@ -1,4 +1,3 @@
-import threading
 from enum import Enum
 
 # Базовый URL Mapbox Static Images API
@@ -459,9 +458,11 @@ LEGEND_GRID_GAP_PADDING_M = 10
 LEGEND_BACKGROUND_COLOR = (255, 255, 255, 230)
 # Отступ фона легенды от краёв цветовой полосы (метры)
 LEGEND_BACKGROUND_PADDING_M = 8
-# Горизонтальная позиция легенды: доля от ширины последнего километрового квадрата (0.5 = середина)
+# Горизонтальная позиция легенды: доля от ширины последнего километрового квадрата
+# (0.5 = середина)
 LEGEND_HORIZONTAL_POSITION_RATIO = 0.5
-# Вертикальный отступ нижней границы легенды от первой горизонтальной линии сетки (в долях от шага сетки)
+# Вертикальный отступ нижней границы легенды от первой горизонтальной линии сетки
+# (в долях от шага сетки)
 LEGEND_VERTICAL_OFFSET_RATIO = 0.15
 # Дополнительный отступ заголовка легенды вверх (доля от высоты легенды)
 LEGEND_TITLE_OFFSET_RATIO = 0.10
@@ -495,7 +496,8 @@ RADIO_HORIZON_UNREACHABLE_COLOR = (64, 64, 64)  # тёмно-серый
 # Максимальное количество пикселей DEM для радиогоризонта (16 млн = 4000×4000)
 # При превышении DEM автоматически даунсэмплится
 RADIO_HORIZON_MAX_DEM_PIXELS = 16_000_000
-# Коэффициент прозрачности цветовой карты радиогоризонта при наложении на топографическую основу
+# Коэффициент прозрачности цветовой карты радиогоризонта при наложении на
+# топографическую основу
 # 0.0 = полностью прозрачный (только топо), 1.0 = полностью непрозрачный (только цвета)
 RADIO_HORIZON_TOPO_OVERLAY_ALPHA = 0.7
 # Эпсилон для ограничения координат интерполяции внутри границ DEM
@@ -528,26 +530,3 @@ RADIO_HORIZON_GRID_STEP_SMALL = 8
 RADIO_HORIZON_LEGEND_UNIT_LABEL = 'м'
 # Минимальная высота для легенды радиогоризонта
 RADIO_HORIZON_MIN_HEIGHT_M = 0.0
-
-
-# --- Консольный вывод прогресса (fallback для CLI)
-class SingleLineRenderer:
-    def __init__(self, *, single_line: bool = True) -> None:
-        self._lock = threading.Lock()
-        self._last_len = 0
-        self.single_line = single_line
-
-    def clear_line(self) -> None:
-        with self._lock:
-            if self.single_line and self._last_len > 0:
-                self._last_len = 0
-
-    def write_line(self, msg: str) -> None:
-        with self._lock:
-            if self.single_line:
-                self._last_len = max(self._last_len, len(msg))
-            else:
-                self._last_len = 0
-
-
-DEFAULT_WRITER = SingleLineRenderer()

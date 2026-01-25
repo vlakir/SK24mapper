@@ -1,6 +1,7 @@
 """Post-processing utilities for map images (grid, legend, markers, rotation)."""
 
 import math
+from collections.abc import Callable
 
 from PIL import Image, ImageDraw
 
@@ -100,7 +101,7 @@ def compute_control_point_image_coords(
     img_width: int,
     img_height: int,
     rotation_deg: float,
-    latlng_to_pixel_xy_func,
+    latlng_to_pixel_xy_func: Callable[[float, float, int], tuple[float, float]],
 ) -> tuple[float, float]:
     """
     Compute control point position in image coordinates.

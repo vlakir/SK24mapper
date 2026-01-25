@@ -22,6 +22,7 @@ async def run_tiles(
     The detailed implementation will be migrated in a later iteration to avoid
     regressions. For now, this function is not used by service.py yet.
     """
+    _ = tile_cols
     sem = asyncio.Semaphore(concurrency)
 
     async def worker(idx: int, tx: int, ty: int) -> None:
