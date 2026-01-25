@@ -120,8 +120,8 @@ def _bilinear_interpolate_numba(
 
     r0 = int(row)
     c0 = int(col)
-    r1 = r0 + 1 if r0 + 1 < h else h - 1
-    c1 = c0 + 1 if c0 + 1 < w else w - 1
+    r1 = min(r0 + 1, h - 1)
+    c1 = min(c0 + 1, w - 1)
 
     dr = row - r0
     dc = col - c0
@@ -507,39 +507,27 @@ def compute_and_colorize_radio_horizon(
     lut = _build_color_lut(color_ramp, unreachable_color, lut_size)
     unreachable_idx = lut_size
     inv_max = (lut_size - 1) / max_height_m if max_height_m > 0 else 0.0
-    inv_grid_step = 1.0 / grid_step
+    1.0 / grid_step
 
-    # Создаём результирующий массив RGB
-    rgb = np.zeros((h, w, 3), dtype=np.uint8)
+    # Создаём результирующий массив RGB векторизованно
+    # 1. Аппроксимация сетки до исходного размера через билинейную интерполяцию (OpenCV)
+    # OpenCV resize работает быстрее ручной интерполяции
+    full_values = cv2.resize(
+        grid_values, (w, h), interpolation=cv2.INTER_LINEAR
+    ).astype(np.float32)
 
-    for row in range(h):
-        gr0 = row // grid_step
-        gr1 = min(gr0 + 1, grid_h - 1)
-        dr = (row - gr0 * grid_step) * inv_grid_step
+    # 2. Масштабируем значения в индексы LUT
+    # Предотвращаем деление на ноль и NaN
+    inv_max = (lut_size - 1) / max_height_m if max_height_m > 0 else 0.0
+    indices = (full_values * inv_max).astype(np.int32)
+    np.clip(indices, 0, lut_size - 1, out=indices)
 
-        for col in range(w):
-            gc0 = col // grid_step
-            gc1 = min(gc0 + 1, grid_w - 1)
-            dc = (col - gc0 * grid_step) * inv_grid_step
+    # 3. Помечаем точки за пределами максимальной высоты или NaN как недостижимые
+    unreachable_mask = (full_values > max_height_m) | ~np.isfinite(full_values)
+    indices[unreachable_mask] = unreachable_idx
 
-            # Интерполяция
-            v00 = grid_values[gr0, gc0]
-            v01 = grid_values[gr0, gc1]
-            v10 = grid_values[gr1, gc0]
-            v11 = grid_values[gr1, gc1]
-
-            v0 = v00 + (v01 - v00) * dc
-            v1 = v10 + (v11 - v10) * dc
-            val = v0 + (v1 - v0) * dr
-
-            # Цвет: значения > max_height_m отображаются серым
-            if val > max_height_m:
-                idx = unreachable_idx
-            else:
-                idx = int(val * inv_max)
-                idx = max(0, min(idx, lut_size - 1))
-
-            rgb[row, col] = lut[idx]
+    # 4. Применяем LUT
+    rgb = lut[indices]
 
     return Image.fromarray(rgb)
 

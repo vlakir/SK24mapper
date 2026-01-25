@@ -92,7 +92,7 @@ async def process_elevation_contours(ctx: MapDownloadContext) -> Image.Image:
         idx, (tile_x_world, tile_y_world) = idx_xy
         tx, ty = tx_ty_from_index(idx, ctx.tiles_x)
         if tile_overlap_rect_common(tx, ty, ctx.crop_rect, full_eff_tile_px) is None:
-            await tile_progress.step(1)
+            tile_progress.step_sync(1)
             return
 
         async with ctx.semaphore:
@@ -150,7 +150,7 @@ async def process_elevation_contours(ctx: MapDownloadContext) -> Image.Image:
                         seed_sum[sy][sx] += v
                         seed_cnt[sy][sx] += 1
 
-        await tile_progress.step(1)
+        tile_progress.step_sync(1)
         async with state_lock:
             tile_count += 1
             if tile_count % CONTOUR_LOG_MEMORY_EVERY_TILES == 0:
@@ -715,11 +715,7 @@ async def apply_contours_to_image(
             # Если хотя бы одна точка внутри bbox — пересекает
             if bx0 <= x1 <= bx1 and by0 <= y1 <= by1:
                 return True
-            if bx0 <= x2 <= bx1 and by0 <= y2 <= by1:
-                return True
-            # Проверяем пересечение сегмента с границами bbox
-            # Упрощённая проверка: если bbox между точками — считаем пересечением
-            return True
+            return bool(bx0 <= x2 <= bx1 and by0 <= y2 <= by1)
 
         # Draw contours directly on result image, skipping segments that intersect
         # label bboxes

@@ -596,6 +596,10 @@ class MapDownloadService:
         mpp: float,
     ) -> None:
         """Draw control point label for radio horizon maps."""
+        # Only draw detailed label for radio horizon maps
+        if not ctx.is_radio_horizon:
+            return
+
         try:
             ppm = 1.0 / mpp if mpp > 0 else 0.0
             font_size_px = max(12, round(ctx.settings.grid_font_size_m * ppm))
