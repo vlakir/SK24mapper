@@ -4,11 +4,22 @@ from __future__ import annotations
 
 import logging
 from enum import Enum
-from typing import Any
 
 from pydantic import BaseModel, Field
 
-from domen import MapSettings
+from domain.models import MapSettings
+from shared.constants import (
+    MODEL_EVENT_DOWNLOAD_COMPLETED,
+    MODEL_EVENT_DOWNLOAD_FAILED,
+    MODEL_EVENT_DOWNLOAD_PROGRESS,
+    MODEL_EVENT_DOWNLOAD_STARTED,
+    MODEL_EVENT_ERROR_OCCURRED,
+    MODEL_EVENT_PREVIEW_UPDATED,
+    MODEL_EVENT_PROFILE_LOADED,
+    MODEL_EVENT_PROFILE_SAVED,
+    MODEL_EVENT_SETTINGS_CHANGED,
+    MODEL_EVENT_WARNING_OCCURRED,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -16,16 +27,16 @@ logger = logging.getLogger(__name__)
 class ModelEvent(str, Enum):
     """События, которые генерирует модель."""
 
-    SETTINGS_CHANGED = 'settings_changed'
-    PROFILE_LOADED = 'profile_loaded'
-    PROFILE_SAVED = 'profile_saved'
-    DOWNLOAD_STARTED = 'download_started'
-    DOWNLOAD_PROGRESS = 'download_progress'
-    DOWNLOAD_COMPLETED = 'download_completed'
-    DOWNLOAD_FAILED = 'download_failed'
-    PREVIEW_UPDATED = 'preview_updated'
-    WARNING_OCCURRED = 'warning_occurred'
-    ERROR_OCCURRED = 'error_occurred'
+    SETTINGS_CHANGED = MODEL_EVENT_SETTINGS_CHANGED
+    PROFILE_LOADED = MODEL_EVENT_PROFILE_LOADED
+    PROFILE_SAVED = MODEL_EVENT_PROFILE_SAVED
+    DOWNLOAD_STARTED = MODEL_EVENT_DOWNLOAD_STARTED
+    DOWNLOAD_PROGRESS = MODEL_EVENT_DOWNLOAD_PROGRESS
+    DOWNLOAD_COMPLETED = MODEL_EVENT_DOWNLOAD_COMPLETED
+    DOWNLOAD_FAILED = MODEL_EVENT_DOWNLOAD_FAILED
+    PREVIEW_UPDATED = MODEL_EVENT_PREVIEW_UPDATED
+    WARNING_OCCURRED = MODEL_EVENT_WARNING_OCCURRED
+    ERROR_OCCURRED = MODEL_EVENT_ERROR_OCCURRED
 
 
 class EventData(BaseModel):
@@ -33,7 +44,7 @@ class EventData(BaseModel):
 
     event: ModelEvent
     timestamp: float = Field(default_factory=lambda: __import__('time').time())
-    data: dict[str, Any] = Field(default_factory=dict)
+    data: dict[str, object] = Field(default_factory=dict)
 
 
 class Observer:
@@ -66,7 +77,7 @@ class Observable:
     def notify_observers(
         self,
         event: ModelEvent,
-        data: dict[str, Any] | None = None,
+        data: dict[str, object] | None = None,
     ) -> None:
         """Notify all observers of an event."""
         event_data = EventData(event=event, data=data or {})
@@ -75,9 +86,10 @@ class Observable:
         for observer in self._observers:
             try:
                 observer.update(event_data)
-            except Exception as e:
+            except Exception:
                 logger.exception(
-                    f'Error notifying observer {observer.__class__.__name__}: {e}',
+                    'Error notifying observer %s',
+                    observer.__class__.__name__,
                 )
 
 
@@ -132,7 +144,7 @@ class MilMapperModel(Observable):
         """Get current application state."""
         return self._state
 
-    def update_settings(self, **kwargs: Any) -> None:
+    def update_settings(self, **kwargs: object) -> None:
         """Update map settings and notify observers."""
         try:
             # Create new settings object with updated values
@@ -211,7 +223,12 @@ class MilMapperModel(Observable):
             {'done': done, 'total': total, 'label': label},
         )
 
-    def complete_download(self, success: bool, error_msg: str | None = None) -> None:
+    def complete_download(
+        self,
+        *,
+        success: bool,
+        error_msg: str | None = None,
+    ) -> None:
         """Mark download as completed and notify observers."""
         self._state.is_downloading = False
         self._state.last_error = error_msg

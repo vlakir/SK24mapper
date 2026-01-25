@@ -8,7 +8,13 @@ from typing import TYPE_CHECKING, Any
 
 from PIL import Image
 from PySide6.QtCore import QObject, QSignalBlocker, Qt, QThread, Signal, Slot
-from PySide6.QtGui import QAction, QPixmapCache
+from PySide6.QtGui import (
+    QAction,
+    QCloseEvent,
+    QPixmapCache,
+    QResizeEvent,
+    QShowEvent,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -29,7 +35,6 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSlider,
-    QSpinBox,
     QSplitter,
     QStatusBar,
     QTabWidget,
@@ -37,190 +42,49 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from constants import (
+from domain.profiles import ensure_profiles_dir
+from gui.controller import MilMapperController
+from gui.model import EventData, MilMapperModel, ModelEvent, Observer
+from gui.preview_window import OptimizedImageView
+from gui.status_bar import StatusBarProxy
+from gui.widgets import (
+    CoordinateInputWidget,
+    OldCoordinateInputWidget,
+)
+from gui.workers import DownloadWorker
+from shared.constants import (
     MAP_TYPE_LABELS_RU,
+    MIN_DECIMALS_FOR_SMALL_STEP,
     MapType,
 )
-from diagnostics import (
+from shared.diagnostics import (
     log_comprehensive_diagnostics,
     log_memory_usage,
     log_thread_status,
 )
-from gui.controller import MilMapperController
-from gui.model import EventData, MilMapperModel, ModelEvent, Observer
-from gui.preview_window import OptimizedImageView
-from profiles import ensure_profiles_dir
-from progress import (
+from shared.progress import (
     cleanup_all_progress_resources,
     set_preview_image_callback,
     set_spinner_callbacks,
 )
-from status_bar_proxy import StatusBarProxy
+from shared.progress import set_progress_callback as _set_prog
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from domain.models import MapSettings
+
 logger = logging.getLogger(__name__)
 
-# Constant for decimal precision threshold
-MIN_DECIMALS_FOR_SMALL_STEP = 2
 
+class _ViewObserver(Observer):
+    """Adapter to avoid QWidget.update signature clash with Observer.update."""
 
-class DownloadWorker(QThread):
-    """Worker thread for map download operations."""
+    def __init__(self, handler: Callable[[EventData], None]) -> None:
+        self._handler = handler
 
-    finished = Signal(bool, str)  # success, error_message
-    progress_update = Signal(int, int, str)  # done, total, label
-    preview_ready = Signal(object)  # PIL Image object
-
-    def __init__(self, controller: MilMapperController) -> None:
-        super().__init__()
-        self._controller = controller
-
-    def run(self) -> None:
-        """Execute download in background thread."""
-        logger.info('DownloadWorker thread started')
-        log_thread_status('worker thread start')
-        log_memory_usage('worker thread start')
-
-        try:
-            # Setup thread-safe callbacks that emit signals instead of direct UI updates
-            def preview_callback(img_obj: object) -> bool:
-                """Handle preview image from map generation."""
-                try:
-                    if isinstance(img_obj, Image.Image):
-                        self.preview_ready.emit(img_obj)
-                        return True
-                    return False
-                except Exception as e:
-                    logger.warning(f'Failed to process preview image: {e}')
-                    return False
-
-            # Setup progress system with thread-safe callbacks
-
-            set_spinner_callbacks(
-                lambda label: self.progress_update.emit(0, 0, label),
-                lambda label: None,
-            )
-            set_preview_image_callback(preview_callback)
-
-            # Import and set progress callback for ConsoleProgress updates
-            from progress import set_progress_callback
-
-            set_progress_callback(
-                lambda done, total, label: self.progress_update.emit(done, total, label)
-            )
-
-            # Run the actual download
-            log_memory_usage('before download sync call')
-            self._controller.start_map_download_sync()
-            log_memory_usage('after download sync call')
-
-            self.finished.emit(True, '')
-            logger.info('DownloadWorker thread completed successfully')
-
-        except Exception as e:
-            logger.exception(f'DownloadWorker thread failed: {e}')
-            log_memory_usage('worker thread error')
-            self.finished.emit(False, str(e))
-        finally:
-            log_thread_status('worker thread end')
-            log_memory_usage('worker thread end')
-
-
-class OldCoordinateInputWidget(QWidget):
-    """Widget for coordinate input with old 4-digit format (high/low fields)."""
-
-    def __init__(self, label: str, high_value: int = 0, low_value: int = 0) -> None:
-        super().__init__()
-        self._setup_ui(label, high_value, low_value)
-
-    def _setup_ui(self, label: str, high_value: int, low_value: int) -> None:
-        """Setup coordinate input UI."""
-        layout = QHBoxLayout()
-        layout.setContentsMargins(0, 0, 0, 0)
-
-        # Label
-        label_widget = QLabel(label)
-        label_widget.setMinimumWidth(80)
-        layout.addWidget(label_widget)
-
-        # High value input
-        self.high_spin = QSpinBox()
-        self.high_spin.setRange(0, 99)
-        self.high_spin.setValue(high_value)
-        self.high_spin.setToolTip(f'Старшие разряды для {label}')
-        layout.addWidget(self.high_spin)
-
-        # Low value input
-        self.low_spin = QSpinBox()
-        self.low_spin.setRange(0, 999)
-        self.low_spin.setValue(low_value)
-        self.low_spin.setToolTip(f'Младшие разряды для {label}')
-        layout.addWidget(self.low_spin)
-
-        self.setLayout(layout)
-
-    def get_values(self) -> tuple[int, int]:
-        """Get high and low values."""
-        return self.high_spin.value(), self.low_spin.value()
-
-    def set_values(self, high: int, low: int) -> None:
-        """Set high and low values."""
-        self.high_spin.setValue(high)
-        self.low_spin.setValue(low)
-
-
-class CoordinateInputWidget(QWidget):
-    """Widget for coordinate input with simple QLineEdit (0-9999999)."""
-
-    def __init__(self, label: str, high_value: int = 0, low_value: int = 0) -> None:
-        super().__init__()
-        # Convert high/low format to coordinate value for initial display
-        coordinate_value = high_value * 100000 + low_value * 1000
-        self._setup_ui(label, coordinate_value)
-
-    def _setup_ui(self, label: str, coordinate_value: int) -> None:
-        """Setup coordinate input UI."""
-        layout = QHBoxLayout()
-        layout.setContentsMargins(0, 0, 0, 0)
-
-        # Label
-        label_widget = QLabel(label)
-        label_widget.setMinimumWidth(80)
-        layout.addWidget(label_widget)
-
-        # Simple coordinate input using QLineEdit
-        self.coordinate_edit = QLineEdit()
-        self.coordinate_edit.setText(str(coordinate_value))
-        self.coordinate_edit.setToolTip(f'Координата для {label} (0-9999999)')
-        layout.addWidget(self.coordinate_edit)
-
-        self.setLayout(layout)
-
-    def get_coordinate(self) -> int:
-        """Get the current coordinate value as entered by user."""
-        try:
-            text = self.coordinate_edit.text().strip()
-            return int(text) if text else 0
-        except ValueError:
-            return 0
-
-    def set_coordinate(self, coordinate: int) -> None:
-        """Set the coordinate value directly."""
-        self.coordinate_edit.setText(str(coordinate))
-
-    def get_values(self) -> tuple[int, int]:
-        """Get high and low values for backward compatibility."""
-        coordinate = self.get_coordinate()
-        high = coordinate // 100000
-        low = (coordinate % 100000) // 1000
-        return high, low
-
-    def set_values(self, high: int, low: int) -> None:
-        """Set high and low values for backward compatibility."""
-        coordinate_value = high * 100000 + low * 1000
-        self.set_coordinate(coordinate_value)
+    def update(self, event_data: EventData) -> None:
+        self._handler(event_data)
 
 
 class GridSettingsWidget(QWidget):
@@ -239,12 +103,15 @@ class GridSettingsWidget(QWidget):
         self.display_grid_cb.setChecked(True)
         self.display_grid_cb.setToolTip(
             'Если включено: рисуются линии сетки и подписи.\n'
-            'Если выключено: рисуются только крестики в точках пересечения без подписей.'
+            'Если выключено: рисуются только крестики в точках пересечения '
+            'без подписей.'
         )
         layout.addWidget(self.display_grid_cb, 0, 0, 1, 2)  # Растянуть на 2 колонки
 
         # Connect checkbox to enable/disable handler
-        self.display_grid_cb.toggled.connect(self._on_display_grid_toggled)
+        self.display_grid_cb.toggled.connect(
+            lambda checked: self._on_display_grid_toggled(checked=checked)
+        )
 
         # Grid width (in meters)
         self.width_label = QLabel('Толщина линий (м):')
@@ -296,7 +163,7 @@ class GridSettingsWidget(QWidget):
 
         self.setLayout(layout)
 
-    def _on_display_grid_toggled(self, checked: bool) -> None:
+    def _on_display_grid_toggled(self, *, checked: bool) -> None:
         """Enable/disable grid parameters based on display_grid checkbox state."""
         self.width_label.setEnabled(checked)
         self.width_spin.setEnabled(checked)
@@ -334,7 +201,7 @@ class GridSettingsWidget(QWidget):
             self.display_grid_cb.setChecked(bool(settings.get('display_grid', True)))
 
         # Manually trigger enable/disable logic since signal was blocked
-        self._on_display_grid_toggled(self.display_grid_cb.isChecked())
+        self._on_display_grid_toggled(checked=self.display_grid_cb.isChecked())
 
 
 class OutputSettingsWidget(QWidget):
@@ -364,16 +231,6 @@ class OutputSettingsWidget(QWidget):
         layout.addWidget(self.quality_label, 0, 2)
 
         self.setLayout(layout)
-
-
-class _ViewObserver(Observer):
-    """Adapter to bridge model events to the view without name clashes with QWidget.update."""
-
-    def __init__(self, handler: Callable[[EventData], None]) -> None:
-        self._handler = handler
-
-    def update(self, event_data: EventData) -> None:  # type: ignore[override]
-        self._handler(event_data)
 
 
 class HelmertSettingsWidget(QWidget):
@@ -443,8 +300,10 @@ class HelmertSettingsWidget(QWidget):
         layout.addWidget(info, row, 0, 1, 4)
 
         self.setLayout(layout)
-        self._update_enabled_state(False)
-        self.enable_cb.toggled.connect(self._update_enabled_state)
+        self._update_enabled_state(enabled=False)
+        self.enable_cb.toggled.connect(
+            lambda checked: self._update_enabled_state(enabled=checked)
+        )
 
     def _cfg_spin(
         self,
@@ -460,7 +319,7 @@ class HelmertSettingsWidget(QWidget):
         w.setValue(default)
         w.setEnabled(False)
 
-    def _update_enabled_state(self, enabled: bool) -> None:
+    def _update_enabled_state(self, *, enabled: bool) -> None:
         # When checkbox toggled, enable/disable fields
         for w in (self.dx, self.dy, self.dz, self.rx, self.ry, self.rz, self.ds):
             w.setEnabled(bool(enabled))
@@ -512,24 +371,27 @@ class HelmertSettingsWidget(QWidget):
                     # leave default if None
                     continue
                 widget.setValue(float(val))
-        self._update_enabled_state(enabled)
+        self._update_enabled_state(enabled=enabled)
 
 
 class ModalOverlay(QWidget):
-    """Semi-transparent overlay widget to shade parent window during modal operations."""
+    """
+    Semi-transparent overlay widget to shade parent window during modal
+    operations.
+    """
 
-    def __init__(self, parent=None):
+    def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         # Make widget transparent for mouse events but visible
-        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, on=True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, on=True)
         # Set dark semi-transparent background
         self.setStyleSheet('background-color: rgba(0, 0, 0, 80);')
         # Position at top-left of parent
         self.move(0, 0)
         self.hide()
 
-    def showEvent(self, event) -> None:
+    def showEvent(self, event: QShowEvent) -> None:
         """Resize overlay to cover entire parent on show."""
         super().showEvent(event)
         parent = self.parent()
@@ -539,7 +401,7 @@ class ModalOverlay(QWidget):
             # Ensure overlay is on top of all siblings
             self.raise_()
 
-    def resizeToParent(self) -> None:
+    def resize_to_parent(self) -> None:
         """Manually resize to match parent (call when parent resizes)."""
         parent = self.parent()
         if parent and isinstance(parent, QWidget) and self.isVisible():
@@ -568,7 +430,8 @@ class MainWindow(QMainWindow):
         # Image state
         self._base_image: Image.Image | None = None
 
-        # Guard flag to prevent model updates while UI is being populated programmatically
+        # Guard flag to prevent model updates while UI is being populated
+        # programmatically
         self._ui_sync_in_progress: bool = False
 
         self._setup_ui()
@@ -637,7 +500,7 @@ class MainWindow(QMainWindow):
         self._progress_bar.setMaximumWidth(200)
         self._progress_bar.setMaximumHeight(20)
         self._progress_bar.setVisible(False)
-        self._progress_bar.setRange(0, 0)  # Indeterminate mode by default
+        self._progress_bar.setRange(0, 0)
         self._progress_label = QLabel()
         self._progress_label.setVisible(False)
         # Добавляем виджеты прогресса в левую часть статус-бара
@@ -709,22 +572,78 @@ class MainWindow(QMainWindow):
         control_point_group.setFrameStyle(QFrame.Shape.StyledPanel)
         control_point_layout = QVBoxLayout()
 
-        self.control_point_checkbox = QCheckBox('Контрольная точка')
+        self.control_point_checkbox = QCheckBox('Контрольная точка (НСУ)')
         self.control_point_checkbox.setToolTip(
             'Включить отображение контрольной точки на карте'
         )
-        control_point_layout.addWidget(self.control_point_checkbox)
 
         self.control_point_x_widget = CoordinateInputWidget('X (вертикаль):', 54, 15)
         self.control_point_y_widget = CoordinateInputWidget('Y (горизонталь):', 74, 40)
 
-        control_point_layout.addWidget(self.control_point_x_widget)
-        control_point_layout.addWidget(self.control_point_y_widget)
+        # Название контрольной точки
+        self.control_point_name_label = QLabel('Название:')
+        self.control_point_name_edit = QLineEdit()
+        self.control_point_name_edit.setPlaceholderText('Название точки')
+        self.control_point_name_edit.setToolTip(
+            'Название контрольной точки для отображения на карте'
+        )
+
+        # Высота антенны (для карты радиогоризонта)
+        antenna_row = QHBoxLayout()
+        self.antenna_height_label = QLabel('Высота антенны (м):')
+        self.antenna_height_spin = QDoubleSpinBox()
+        self.antenna_height_spin.setRange(0.0, 500.0)
+        self.antenna_height_spin.setDecimals(0)
+        self.antenna_height_spin.setValue(10.0)
+        self.antenna_height_spin.setSingleStep(1.0)
+        self.antenna_height_spin.setToolTip(
+            'Высота антенны над поверхностью земли (для карты радиогоризонта)'
+        )
+        antenna_row.addWidget(self.antenna_height_label)
+        antenna_row.addWidget(self.antenna_height_spin)
+
+        # Максимальная высота полёта (для карты радиогоризонта)
+        max_flight_row = QHBoxLayout()
+        self.max_flight_height_label = QLabel('Макс. высота полёта БПЛА (м):')
+        self.max_flight_height_spin = QDoubleSpinBox()
+        self.max_flight_height_spin.setRange(10.0, 5000.0)
+        self.max_flight_height_spin.setDecimals(0)
+        self.max_flight_height_spin.setValue(500.0)
+        self.max_flight_height_spin.setSingleStep(50.0)
+        self.max_flight_height_spin.setToolTip(
+            'Максимальная высота полёта для цветовой шкалы радиогоризонта.\n'
+            'Значения выше будут отображаться серым цветом.'
+        )
+        max_flight_row.addWidget(self.max_flight_height_label)
+        max_flight_row.addWidget(self.max_flight_height_spin)
+
+        name_row = QHBoxLayout()
+        name_row.addWidget(self.control_point_checkbox)
+        name_row.addWidget(self.control_point_name_label)
+        name_row.addWidget(self.control_point_name_edit)
+
+        coords_row = QHBoxLayout()
+        coords_row.addWidget(self.control_point_x_widget)
+        coords_row.addWidget(self.control_point_y_widget)
+
+        heights_row = QHBoxLayout()
+        heights_row.addLayout(antenna_row)
+        heights_row.addLayout(max_flight_row)
+
+        control_point_layout.addLayout(name_row)
+        control_point_layout.addLayout(coords_row)
+        control_point_layout.addLayout(heights_row)
         control_point_group.setLayout(control_point_layout)
 
         # По умолчанию контролы координат отключены
         self.control_point_x_widget.setEnabled(False)
         self.control_point_y_widget.setEnabled(False)
+        self.control_point_name_label.setEnabled(False)
+        self.control_point_name_edit.setEnabled(False)
+        self.antenna_height_label.setEnabled(False)
+        self.antenna_height_spin.setEnabled(False)
+        self.max_flight_height_label.setEnabled(False)
+        self.max_flight_height_spin.setEnabled(False)
 
         coords_layout.addWidget(control_point_group)
         left_container.addWidget(coords_frame)
@@ -750,10 +669,11 @@ class MainWindow(QMainWindow):
         self._maptype_order = [
             MapType.SATELLITE,
             MapType.HYBRID,
-            MapType.STREETS,
+            # MapType.STREETS,
             MapType.OUTDOORS,
             MapType.ELEVATION_COLOR,
             # MapType.ELEVATION_HILLSHADE,
+            MapType.RADIO_HORIZON,
         ]
         for mt in self._maptype_order:
             self.map_type_combo.addItem(MAP_TYPE_LABELS_RU[mt], userData=mt.value)
@@ -872,7 +792,7 @@ class MainWindow(QMainWindow):
         )
         right_container.addWidget(self.save_map_btn)
 
-        self._set_sliders_enabled(False)
+        self._set_sliders_enabled(enabled=False)
 
         # Отложенное создание BusyDialog
         self._busy_dialog = None
@@ -886,8 +806,8 @@ class MainWindow(QMainWindow):
         # Prevent left panel from collapsing too small
         left_min = max(300, left_widget.sizeHint().width())
         left_scroll.setMinimumWidth(left_min)
-        splitter.setStretchFactor(0, 0)  # левая колонка — фиксированнее
-        splitter.setStretchFactor(1, 1)  # правая колонка (превью) растягивается
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
         splitter.setSizes([left_min + 100, 600])
 
         # Добавляем splitter вместо двух виджетов
@@ -994,13 +914,20 @@ class MainWindow(QMainWindow):
         # Control point
         self.control_point_checkbox.stateChanged.connect(self._on_control_point_toggled)
         self.control_point_checkbox.stateChanged.connect(self._on_settings_changed)
-        # Use editingFinished instead of textChanged to avoid cyclic updates during typing
+        # Use editingFinished instead of textChanged
+        # to avoid cyclic updates during typing
         self.control_point_x_widget.coordinate_edit.editingFinished.connect(
             self._on_settings_changed
         )
         self.control_point_y_widget.coordinate_edit.editingFinished.connect(
             self._on_settings_changed
         )
+        # Control point name
+        self.control_point_name_edit.editingFinished.connect(self._on_settings_changed)
+        # Antenna height for radio horizon
+        self.antenna_height_spin.valueChanged.connect(self._on_settings_changed)
+        # Max flight height for radio horizon
+        self.max_flight_height_spin.valueChanged.connect(self._on_settings_changed)
 
         # Grid settings
         self.grid_widget.width_spin.valueChanged.connect(self._on_settings_changed)
@@ -1025,7 +952,8 @@ class MainWindow(QMainWindow):
         profiles = self._controller.get_available_profiles()
 
         # Блокируем сигналы на время программных изменений
-        self.profile_combo.blockSignals(True)
+        block_signals = True
+        self.profile_combo.blockSignals(block_signals)
         try:
             self.profile_combo.clear()
             self.profile_combo.addItems(profiles)
@@ -1034,7 +962,8 @@ class MainWindow(QMainWindow):
             elif profiles:
                 self.profile_combo.setCurrentIndex(0)
         finally:
-            self.profile_combo.blockSignals(False)
+            block_signals = False
+            self.profile_combo.blockSignals(block_signals)
 
         # Явно загружаем профиль ровно один раз
         if profiles:
@@ -1055,7 +984,8 @@ class MainWindow(QMainWindow):
         # Set flag to prevent feedback loop when model emits SETTINGS_CHANGED
         self._ui_sync_in_progress = True
         try:
-            # Clear any existing preview to avoid showing outdated imagery when coordinates or contours change
+            # Clear any existing preview to avoid showing outdated imagery
+            # when coordinates or contours change
             self._clear_preview_ui()
             # Use the same collection logic as forced sync
             self._sync_ui_to_model_now()
@@ -1067,12 +997,49 @@ class MainWindow(QMainWindow):
         enabled = self.control_point_checkbox.isChecked()
         self.control_point_x_widget.setEnabled(enabled)
         self.control_point_y_widget.setEnabled(enabled)
+        self.control_point_name_label.setEnabled(enabled)
+        self.control_point_name_edit.setEnabled(enabled)
+        self.antenna_height_label.setEnabled(enabled)
+        self.antenna_height_spin.setEnabled(enabled)
+        self.max_flight_height_label.setEnabled(enabled)
+        self.max_flight_height_spin.setEnabled(enabled)
 
     @Slot()
     def _on_map_type_changed(self) -> None:
         """Clear preview immediately when map type changes and propagate setting."""
-        # Clear any existing preview to avoid showing outdated imagery for another map type
+        # Clear any existing preview to avoid showing outdated imagery for another
+        # map type
         self._clear_preview_ui()
+
+        # При выборе "Радиогоризонт" автоматически включаем контрольную точку
+        # и блокируем чекбокс
+        try:
+            idx = max(0, self.map_type_combo.currentIndex())
+            map_type_value = self.map_type_combo.itemData(idx)
+            is_radio_horizon = map_type_value == MapType.RADIO_HORIZON.value
+        except Exception:
+            is_radio_horizon = False
+
+        if is_radio_horizon:
+            # Принудительно включаем контрольную точку
+            # и блокируем возможность отключения
+            self.control_point_checkbox.setChecked(True)
+            self.control_point_checkbox.setEnabled(False)
+            # Включаем поля ввода координат, названия и высоты антенны/полёта
+            self.control_point_x_widget.setEnabled(True)
+            self.control_point_y_widget.setEnabled(True)
+            self.control_point_name_label.setEnabled(True)
+            self.control_point_name_edit.setEnabled(True)
+            self.antenna_height_label.setEnabled(True)
+            self.antenna_height_spin.setEnabled(True)
+            self.max_flight_height_label.setEnabled(True)
+            self.max_flight_height_spin.setEnabled(True)
+        else:
+            # Разблокируем чекбокс для других типов карт
+            self.control_point_checkbox.setEnabled(True)
+            # Обновляем состояние полей согласно текущему состоянию чекбокса
+            self._on_control_point_toggled()
+
         # Delegate to the common settings handler to store the new map type in the model
         self._on_settings_changed()
 
@@ -1080,7 +1047,8 @@ class MainWindow(QMainWindow):
         """
         Force-collect current UI settings and push them to the model without guards.
 
-        Does not clear preview or check _ui_sync_in_progress to avoid losing changes during Save/Save As.
+        Does not clear preview or check _ui_sync_in_progress to avoid losing changes
+        during Save/Save As.
         """
         # Collect all current settings
         coords = self._get_current_coordinates()
@@ -1104,7 +1072,7 @@ class MainWindow(QMainWindow):
         payload['overlay_contours'] = overlay_checked
         self._controller.update_settings_bulk(**payload)
 
-    def _get_current_coordinates(self) -> dict[str, int]:
+    def _get_current_coordinates(self) -> dict[str, int | bool | float | str]:
         """Get current coordinate values from UI."""
         from_x_high, from_x_low = self.from_x_widget.get_values()
         from_y_high, from_y_low = self.from_y_widget.get_values()
@@ -1127,11 +1095,15 @@ class MainWindow(QMainWindow):
             'control_point_enabled': self.control_point_checkbox.isChecked(),
             'control_point_x': control_point_x,
             'control_point_y': control_point_y,
+            'control_point_name': self.control_point_name_edit.text(),
+            'antenna_height_m': round(self.antenna_height_spin.value()),
+            'max_flight_height_m': self.max_flight_height_spin.value(),
         }
 
     @Slot(int)
     def _load_selected_profile(self, index: int) -> None:
         """Load the selected profile when selection changes (guarded, non-reentrant)."""
+        _ = index
         # Guard against re-entrant calls
         if getattr(self, '_profile_loading', False):
             logger.debug('Profile load skipped due to guard re-entry')
@@ -1228,10 +1200,11 @@ class MainWindow(QMainWindow):
                     index = self.profile_combo.findText(saved_profile_name)
                     if index >= 0:
                         self._set_profile_selection_safely(index=index)
-                        # Explicitly load the newly saved profile to avoid reverting to default
+                        # Explicitly load the newly saved profile to avoid reverting
+                        # to default
                         try:
                             logger.info(
-                                'After Save As 								-> selecting and loading profile: %s',
+                                'After Save As -> selecting and loading profile: %s',
                                 saved_profile_name,
                             )
                             self._controller.load_profile_by_name(saved_profile_name)
@@ -1249,9 +1222,17 @@ class MainWindow(QMainWindow):
     @Slot()
     def _start_download(self) -> None:
         """Start map download process."""
+        # Clear status bar message and informer message immediately
+        self.status_bar.clearMessage()
+        self._progress_label.setText('')
+
         if self._download_worker and self._download_worker.isRunning():
             QMessageBox.information(self, 'Информация', 'Загрузка уже выполняется')
             return
+
+        # Force sync UI -> Model before starting download to ensure all settings
+        # (including control_point_enabled) are up-to-date
+        self._sync_ui_to_model_now()
 
         # Clear previous preview and pixmap cache between runs
         self._clear_preview_ui()
@@ -1260,7 +1241,12 @@ class MainWindow(QMainWindow):
         self._cleanup_download_worker()
 
         self._download_worker = DownloadWorker(self._controller)
-        self._download_worker.finished.connect(self._on_download_finished)
+        self._download_worker.finished.connect(
+            lambda success, error_msg: self._on_download_finished(
+                success=success,
+                error_msg=error_msg,
+            )
+        )
         self._download_worker.progress_update.connect(self._update_progress)
         self._download_worker.preview_ready.connect(self._show_preview_in_main_window)
         self._download_worker.start()
@@ -1270,12 +1256,12 @@ class MainWindow(QMainWindow):
         self._progress_bar.setVisible(True)
         self._progress_label.setVisible(True)
         self._progress_label.setText('Подготовка…')
-        self._progress_bar.setRange(0, 0)  # Indeterminate mode initially
+        self._progress_bar.setRange(0, 0)
         # Disable all UI controls during download
-        self._set_controls_enabled(False)
+        self._set_controls_enabled(enabled=False)
 
     @Slot(bool, str)
-    def _on_download_finished(self, success: bool, error_msg: str) -> None:
+    def _on_download_finished(self, *, success: bool, error_msg: str) -> None:
         """Handle download completion."""
         # Hide progress widgets and re-enable controls
         try:
@@ -1283,7 +1269,7 @@ class MainWindow(QMainWindow):
                 self._progress_bar.setVisible(False)
                 self._progress_label.setVisible(False)
             # Re-enable all UI controls when download is finished
-            self._set_controls_enabled(True)
+            self._set_controls_enabled(enabled=True)
         except Exception as e:
             logger.debug(f'Failed to hide progress widgets: {e}')
 
@@ -1303,8 +1289,6 @@ class MainWindow(QMainWindow):
         try:
             set_preview_image_callback(None)
             set_spinner_callbacks(None, None)
-            from progress import set_progress_callback as _set_prog
-
             _set_prog(None)
         except Exception as e:
             logger.debug(f'Failed to reset progress callbacks: {e}')
@@ -1349,7 +1333,8 @@ class MainWindow(QMainWindow):
             self._show_preview_in_main_window(data.get('image'))
         elif event == ModelEvent.ERROR_OCCURRED:
             error_msg = data.get('error', 'Неизвестная ошибка')
-            # Только статус-бар; модальные диалоги показываются централизованно в _on_download_finished
+            # Только статус-бар; модальные диалоги показываются централизованно
+            # в _on_download_finished
             self._status_proxy.show_message(f'Ошибка: {error_msg}', 5000)
         elif event == ModelEvent.WARNING_OCCURRED:
             warn_msg = (
@@ -1358,12 +1343,13 @@ class MainWindow(QMainWindow):
                 or data.get('error')
                 or 'Предупреждение'
             )
-            # Только статус-бар; без модальных диалогов, чтобы избежать дублей и вызовов не из GUI-потока
+            # Только статус-бар; без модальных диалогов, чтобы избежать дублей
+            # и вызовов не из GUI-потока
             self._status_proxy.show_message(f'Предупреждение: {warn_msg}', 5000)
 
-    def _update_ui_from_settings(self, settings: Any) -> None:
+    def _update_ui_from_settings(self, settings: MapSettings) -> None:
         """Update UI controls from settings object."""
-        if not settings:
+        if not settings or not hasattr(settings, 'from_x_high'):
             return
 
         # Block feedback to model while we populate controls programmatically
@@ -1393,7 +1379,8 @@ class MainWindow(QMainWindow):
         except Exception:
             current_mt = MapType.SATELLITE
 
-        # Legacy handling: if profile had ELEVATION_CONTOURS, map to OUTDOORS + overlay enabled
+        # Legacy handling: if profile had ELEVATION_CONTOURS, map to OUTDOORS
+        # + overlay enabled
         overlay_flag = bool(getattr(settings, 'overlay_contours', False))
         if current_mt == MapType.ELEVATION_CONTOURS:
             current_mt = MapType.OUTDOORS
@@ -1410,6 +1397,9 @@ class MainWindow(QMainWindow):
         with QSignalBlocker(self.contours_checkbox):
             self.contours_checkbox.setChecked(overlay_flag)
 
+        # Проверяем, является ли текущий тип карты "Радиогоризонт"
+        is_radio_horizon = current_mt == MapType.RADIO_HORIZON
+
         # Update Helmert settings
         self.helmert_widget.set_values(
             getattr(settings, 'helmert_dx', None),
@@ -1423,10 +1413,19 @@ class MainWindow(QMainWindow):
 
         # Update control point settings
         control_point_enabled = getattr(settings, 'control_point_enabled', False)
+
+        # Для радиогоризонта принудительно включаем контрольную точку
+        if is_radio_horizon:
+            control_point_enabled = True
+
         with QSignalBlocker(self.control_point_checkbox):
             self.control_point_checkbox.setChecked(control_point_enabled)
 
-        # Programmatically set full control point coordinates without splitting to high/low
+        # Блокируем/разблокируем чекбокс в зависимости от типа карты
+        self.control_point_checkbox.setEnabled(not is_radio_horizon)
+
+        # Programmatically set full control point coordinates without splitting
+        # to high/low
         control_point_x = int(getattr(settings, 'control_point_x', 5415000))
         control_point_y = int(getattr(settings, 'control_point_y', 7440000))
 
@@ -1435,17 +1434,35 @@ class MainWindow(QMainWindow):
         with QSignalBlocker(self.control_point_y_widget.coordinate_edit):
             self.control_point_y_widget.set_coordinate(control_point_y)
 
+        # Control point name
+        control_point_name = str(getattr(settings, 'control_point_name', ''))
+        with QSignalBlocker(self.control_point_name_edit):
+            self.control_point_name_edit.setText(control_point_name)
+
+        # Antenna height for radio horizon
+        antenna_height = float(getattr(settings, 'antenna_height_m', 10.0))
+        antenna_height = round(antenna_height)
+        with QSignalBlocker(self.antenna_height_spin):
+            self.antenna_height_spin.setValue(antenna_height)
+
+        # Max flight height for radio horizon
+        max_flight_height = float(getattr(settings, 'max_flight_height_m', 500.0))
+        with QSignalBlocker(self.max_flight_height_spin):
+            self.max_flight_height_spin.setValue(max_flight_height)
+
         # Log the values to ensure no truncation occurs during UI update
         try:
             x_text = self.control_point_x_widget.coordinate_edit.text()
             y_text = self.control_point_y_widget.coordinate_edit.text()
             logger.info(
-                "UI control point set: enabled=%s, x_src=%d -> edit='%s', y_src=%d -> edit='%s'",
+                "UI control point set: enabled=%s, x_src=%d -> edit='%s', "
+                "y_src=%d -> edit='%s', antenna_h=%d",
                 control_point_enabled,
                 control_point_x,
                 x_text,
                 control_point_y,
                 y_text,
+                int(antenna_height),
             )
         except Exception:
             logger.exception('Failed to log control point UI update')
@@ -1453,6 +1470,9 @@ class MainWindow(QMainWindow):
         # Enable/disable coordinate inputs based on checkbox state
         self.control_point_x_widget.setEnabled(control_point_enabled)
         self.control_point_y_widget.setEnabled(control_point_enabled)
+        self.control_point_name_edit.setEnabled(control_point_enabled)
+        self.antenna_height_spin.setEnabled(control_point_enabled)
+        self.max_flight_height_spin.setEnabled(control_point_enabled)
 
         # Unblock settings propagation after UI is fully synced
         self._ui_sync_in_progress = False
@@ -1487,21 +1507,23 @@ class MainWindow(QMainWindow):
         Shows progress bar and label in the lower left corner of the main window.
         Progress bar always operates in indeterminate (spinner) mode.
         """
+        _ = (done, total)
         # Show progress widgets if not visible
         if not self._progress_bar.isVisible():
             self._progress_bar.setVisible(True)
             self._progress_label.setVisible(True)
             # Disable all UI controls when showing progress
-            self._set_controls_enabled(False)
+            self._set_controls_enabled(enabled=False)
 
-        # Always use indeterminate progress (spinner mode) - no specific progress indication
+        # Always use indeterminate progress (spinner mode) - no specific progress
+        # indication
         self._progress_bar.setRange(0, 0)
 
         # Update progress label text
         if label:
             self._progress_label.setText(label)
 
-    def _show_preview_in_main_window(self, image: Any) -> None:
+    def _show_preview_in_main_window(self, image: Image.Image) -> None:
         """Show preview image in the main window's integrated preview area."""
         try:
             if not isinstance(image, Image.Image):
@@ -1525,9 +1547,9 @@ class MainWindow(QMainWindow):
                     self._progress_bar.setVisible(False)
                     self._progress_label.setVisible(False)
                     # Re-enable all UI controls when hiding progress
-                    self._set_controls_enabled(True)
+                    self._set_controls_enabled(enabled=True)
                     # Explicitly enable quality slider
-                    self._set_sliders_enabled(True)
+                    self._set_sliders_enabled(enabled=True)
             except Exception as _e:
                 logger.debug(f'Failed to hide progress widgets on preview: {_e}')
 
@@ -1549,7 +1571,7 @@ class MainWindow(QMainWindow):
             self.save_map_btn.setEnabled(False)
             self.save_map_action.setEnabled(False)
             # Disable quality slider when no image is loaded
-            self._set_sliders_enabled(False)
+            self._set_sliders_enabled(enabled=False)
             # Aggressively clear global QPixmap cache between runs
             QPixmapCache.clear()
         except Exception as e:
@@ -1596,7 +1618,7 @@ class MainWindow(QMainWindow):
 
                 def __init__(
                     self,
-                    image,
+                    image: Image.Image,
                     path: Path,
                     quality: int,
                 ) -> None:
@@ -1619,9 +1641,11 @@ class MainWindow(QMainWindow):
                             optimize=True,
                             subsampling=0,
                         )
-                        self.finished.emit(True, '')
+                        success = True
+                        self.finished.emit(success, '')
                     except Exception as e:
-                        self.finished.emit(False, str(e))
+                        success = False
+                        self.finished.emit(success, str(e))
 
             # Read quality directly from slider at save time
             quality = self.output_widget.quality_slider.value()
@@ -1641,7 +1665,7 @@ class MainWindow(QMainWindow):
             # Setup connections
             th.started.connect(worker.run)
 
-            def _on_save_complete(success: bool, err: str) -> None:
+            def _on_save_complete(*, success: bool, err: str) -> None:
                 """Handle save completion."""
                 logger.info(f'[SAVE_DEBUG] _on_save_complete called: success={success}')
 
@@ -1674,10 +1698,11 @@ class MainWindow(QMainWindow):
                 self._cleanup_save_resources()
 
             worker.finished.connect(
-                _on_save_complete,
+                lambda success, err: _on_save_complete(success=success, err=err),
                 Qt.ConnectionType.QueuedConnection,
             )
-            # Ensure the worker thread quits immediately after finishing to release resources
+            # Ensure the worker thread quits immediately after finishing to
+            # release resources
             worker.finished.connect(th.quit, Qt.ConnectionType.QueuedConnection)
             th.start()
 
@@ -1706,16 +1731,19 @@ class MainWindow(QMainWindow):
                 self._save_thread.deleteLater()
                 self._save_thread = None
 
-        except Exception as e:
-            logger.exception(f'Error cleaning up save resources: {e}')
+        except Exception:
+            logger.exception('Error cleaning up save resources')
 
-    def _set_sliders_enabled(self, enabled: bool) -> None:
+    def _set_sliders_enabled(self, *, enabled: bool) -> None:
         """Enable/disable quality slider."""
         # Only quality slider remains, enable it based on parameter
         self.quality_slider.setEnabled(enabled)
 
-    def _set_controls_enabled(self, enabled: bool) -> None:
-        """Enable/disable all UI controls when progress bar is shown/hidden."""
+    def _set_controls_enabled(self, *, enabled: bool) -> None:
+        """Enable/disable all UI controls and menu when progress bar is shown/hidden."""
+        # Top menu bar
+        self.menuBar().setEnabled(enabled)
+
         # Profile controls
         self.profile_combo.setEnabled(enabled)
         self.save_profile_btn.setEnabled(enabled)
@@ -1728,15 +1756,34 @@ class MainWindow(QMainWindow):
         self.to_y_widget.setEnabled(enabled)
 
         # Control point checkbox and widgets
-        self.control_point_checkbox.setEnabled(enabled)
+        # Для типа карты "Радиогоризонт" чекбокс должен оставаться заблокированным
+        try:
+            idx = max(0, self.map_type_combo.currentIndex())
+            map_type_value = self.map_type_combo.itemData(idx)
+            is_radio_horizon = map_type_value == MapType.RADIO_HORIZON.value
+        except Exception:
+            is_radio_horizon = False
+
+        if is_radio_horizon:
+            # Для радиогоризонта чекбокс всегда включён и заблокирован
+            self.control_point_checkbox.setEnabled(False)
+        else:
+            self.control_point_checkbox.setEnabled(enabled)
+
         # Control point coordinate widgets should respect checkbox state
         if enabled:
             cp_enabled = self.control_point_checkbox.isChecked()
             self.control_point_x_widget.setEnabled(cp_enabled)
             self.control_point_y_widget.setEnabled(cp_enabled)
+            self.control_point_name_edit.setEnabled(cp_enabled)
+            self.antenna_height_spin.setEnabled(cp_enabled)
+            self.max_flight_height_spin.setEnabled(cp_enabled)
         else:
             self.control_point_x_widget.setEnabled(False)
             self.control_point_y_widget.setEnabled(False)
+            self.control_point_name_edit.setEnabled(False)
+            self.antenna_height_spin.setEnabled(False)
+            self.max_flight_height_spin.setEnabled(False)
 
         # Map type and contours
         self.map_type_combo.setEnabled(enabled)
@@ -1767,6 +1814,24 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'save_profile_as_action'):
             self.save_profile_as_action.setEnabled(enabled)
 
+        if not enabled:
+            self.setStyleSheet("""
+                QLabel { color: grey; }
+                QGroupBox { color: grey; }
+                QCheckBox { color: grey; }
+                QRadioButton { color: grey; }
+                QTabBar::tab { color: grey; }
+            """)
+        else:
+            self.setStyleSheet('')
+
+        # Ensure progress label stays visible and readable (not grey if it was affected)
+        if not enabled:
+            # We need to make sure the progress label specifically remains readable
+            self._progress_label.setStyleSheet('color: black;')
+        else:
+            self._progress_label.setStyleSheet('')
+
     @Slot()
     def _new_profile(self) -> None:
         """Create new profile (placeholder)."""
@@ -1775,9 +1840,6 @@ class MainWindow(QMainWindow):
     @Slot()
     def _open_profile(self) -> None:
         """Open profile file from disk and load settings."""
-        # Default directory: profiles dir (user or local)
-        from profiles import ensure_profiles_dir
-
         default_dir = ensure_profiles_dir()
         file_path, _ = QFileDialog.getOpenFileName(
             self,
@@ -1814,10 +1876,11 @@ class MainWindow(QMainWindow):
         QMessageBox.about(
             self,
             'О программе',
-            'SK42mapper v0.2\n\nПриложение для создания карт в системе Гаусса-Крюгера\n',
+            'SK42mapper v0.2\n\nПриложение для создания карт в системе '
+            'Гаусса-Крюгера\n',
         )
 
-    def resizeEvent(self, event) -> None:
+    def resizeEvent(self, event: QResizeEvent) -> None:
         """Handle window resize to update overlay size."""
         super().resizeEvent(event)
         # Update overlay when central widget is resized
@@ -1826,9 +1889,9 @@ class MainWindow(QMainWindow):
             and self._modal_overlay is not None
             and self._modal_overlay.isVisible()
         ):
-            self._modal_overlay.resizeToParent()
+            self._modal_overlay.resize_to_parent()
 
-    def closeEvent(self, event) -> None:
+    def closeEvent(self, event: QCloseEvent) -> None:
         """Handle window close event."""
         logger.info('Application closing - cleaning up resources')
         log_comprehensive_diagnostics('CLEANUP_START')

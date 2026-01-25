@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from geometry import tile_overlap_rect_common as _tile_overlap_rect_common
-from topography import compute_xyz_coverage as _compute_xyz_coverage
+from geo.geometry import tile_overlap_rect_common as _tile_overlap_rect_common
+from geo.topography import compute_xyz_coverage as _compute_xyz_coverage
 
 if TYPE_CHECKING:
     from collections.abc import Generator

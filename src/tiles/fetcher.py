@@ -73,7 +73,9 @@ async def stream_tiles(
             key, img = await queue.get()
             if img is None and key[1] == -1:
                 break
-            assert img is not None
+            if img is None:
+                msg = 'Unexpected None tile image'
+                raise RuntimeError(msg)
             yield key, img
     finally:
         with contextlib.suppress(Exception):

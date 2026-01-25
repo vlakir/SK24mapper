@@ -5,12 +5,14 @@ import logging
 import random
 from typing import TYPE_CHECKING
 
-from constants import CONTOUR_LOG_MEMORY_EVERY_TILES
-from contours_helpers import tx_ty_from_index
-from geometry import tile_overlap_rect_common as _tile_overlap_rect_common
-from topography import compute_percentiles, decode_terrain_rgb_to_elevation_m
+from contours.helpers import tx_ty_from_index
+from geo.geometry import tile_overlap_rect_common as _tile_overlap_rect_common
+from geo.topography import compute_percentiles, decode_terrain_rgb_to_elevation_m
+from shared.constants import CONTOUR_LOG_MEMORY_EVERY_TILES
+from shared.diagnostics import log_memory_usage
 
 if TYPE_CHECKING:
+    from asyncio import Semaphore
     from collections.abc import Awaitable, Callable, Iterable
 
     from PIL import Image
@@ -28,8 +30,9 @@ async def sample_elevation_percentiles(
     max_samples: int = 50_000,
     rng_seed: int = 42,
     on_progress: Callable[[int], Awaitable[None]] | None = None,
-    semaphore=None,
-) -> tuple[list[float], int]:
+    semaphore: Semaphore | None = None,
+    cache_tiles: bool = False,
+) -> tuple[list[float], int, dict[tuple[int, int], Image.Image] | None]:
     """
     Reservoir-sample elevations over a set of tiles for percentile estimation.
 
@@ -37,15 +40,20 @@ async def sample_elevation_percentiles(
         tiles: Iterable of (idx, (x_world, y_world)) tile refs.
         tiles_x: Tile columns count for mapping linear idx -> (tx,ty).
         crop_rect: Crop rectangle (x, y, w, h) in pixels to filter overlapping tiles.
-        full_eff_tile_px: Effective tile size in pixels (considering retina factor) for overlap check.
-        get_tile_image: Async function to fetch tile image for (zoom, x_world, y_world).
+        full_eff_tile_px: Effective tile size in pixels
+            (considering retina factor) for overlap check.
+        get_tile_image: Async function to fetch tile image
+            for (zoom, x_world, y_world).
         max_samples: Reservoir capacity.
         rng_seed: RNG seed for reproducibility.
         on_progress: Optional async callback to report progress per processed tile.
         semaphore: Optional asyncio.Semaphore to limit concurrency.
+        cache_tiles: If True, cache loaded tile images and return them for reuse.
 
     Returns:
-        (samples, seen_count): sampled elevation values and total number of seen samples.
+        (samples, seen_count, tile_cache): sampled elevation values,
+        total number of seen samples, and optionally a dict mapping
+        (idx, (x_world, y_world)) -> Image if cache_tiles=True.
 
     """
     rng = random.Random(  # noqa: S311
@@ -54,6 +62,7 @@ async def sample_elevation_percentiles(
     samples: list[float] = []
     seen_count = 0
     tile_count = 0
+    tile_cache: dict[tuple[int, int], Image.Image] | None = {} if cache_tiles else None
 
     async def _step_progress() -> None:
         if on_progress is not None:
@@ -74,6 +83,11 @@ async def sample_elevation_percentiles(
         else:
             async with semaphore:
                 img = await get_tile_image(tile_x_world, tile_y_world)
+
+        # Cache tile if requested
+        if cache_tiles and tile_cache is not None:
+            tile_cache[(tile_x_world, tile_y_world)] = img
+
         dem_tile = decode_terrain_rgb_to_elevation_m(img)
         # iterate coarse grid (approx 32x32) within tile to limit CPU
         h = len(dem_tile)
@@ -98,22 +112,25 @@ async def sample_elevation_percentiles(
         tile_count += 1
         if tile_count % CONTOUR_LOG_MEMORY_EVERY_TILES == 0:
             try:
-                from diagnostics import log_memory_usage
-
                 log_memory_usage(f'elev pass1 after {tile_count} tiles')
             except Exception as e:
                 logger.debug('Failed to log memory usage: %s', e)
 
-    # Run sequentially here — service should orchestrate concurrency around us if needed.
+    # Run sequentially here — service should orchestrate concurrency around us
+    # if needed.
     # This keeps the module reusable and free of task lifecycle concerns.
     for idx_xy in tiles:
         await _fetch_and_sample(idx_xy)
 
-    return samples, seen_count
+    return samples, seen_count, tile_cache if cache_tiles else None
 
 
 def compute_elevation_range(
-    samples: list[float], *, p_lo: float, p_hi: float, min_range_m: float
+    samples: list[float],
+    *,
+    p_lo: float,
+    p_hi: float,
+    min_range_m: float,
 ) -> tuple[float, float]:
     """Compute robust elevation range [mn, mx] using percentiles with a safety floor."""
     if not samples:
