@@ -1,5 +1,7 @@
 """Image transformation utilities - rotation, cropping, masking."""
 
+import cv2
+import numpy as np
 from PIL import Image
 
 ROTATE_ANGLE_EPS = 1e-6
@@ -14,6 +16,7 @@ def rotate_keep_size(
     Поворачивает изображение на заданный угол (против часовой стрелки).
 
     Сохраняет исходный размер (обрезая углы).
+    Использует OpenCV для ускорения операции.
 
     Args:
         img: Исходное изображение.
@@ -27,12 +30,24 @@ def rotate_keep_size(
     if abs(angle_deg) < ROTATE_ANGLE_EPS:
         return img.copy()
 
-    return img.rotate(
-        angle_deg,
-        resample=Image.Resampling.BICUBIC,
-        expand=False,
-        fillcolor=fill,
+    arr = np.array(img)
+    h, w = arr.shape[:2]
+    center = (w / 2, h / 2)
+
+    rotation_matrix = cv2.getRotationMatrix2D(center, angle_deg, 1.0)
+
+    # OpenCV использует BGR, но fill передаётся как RGB — для borderValue
+    # порядок не важен, так как мы конвертируем обратно в тот же формат
+    rotated = cv2.warpAffine(
+        arr,
+        rotation_matrix,
+        (w, h),
+        flags=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=fill,
     )
+
+    return Image.fromarray(rotated)
 
 
 def center_crop(img: Image.Image, out_w: int, out_h: int) -> Image.Image:

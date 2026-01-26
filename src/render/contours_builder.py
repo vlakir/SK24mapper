@@ -31,61 +31,75 @@ def _refine_contour_subpixel(
     Уточняет позиции точек контура с субпиксельной точностью.
 
     Использует билинейную интерполяцию для нахождения точного положения
-    изолинии между пикселями.
+    изолинии между пикселями. Векторизованная реализация через NumPy.
     """
     if len(contour) < MIN_REFINEMENT_POINTS:
         return []
 
     h, w = dem.shape
-    refined: list[tuple[float, float]] = []
 
-    for pt in contour:
-        x, y = float(pt[0]), float(pt[1])
+    # Векторизованная обработка всех точек
+    x = contour[:, 0].astype(np.float64)
+    y = contour[:, 1].astype(np.float64)
 
-        # Границы для интерполяции
-        x0 = int(x)
-        y0 = int(y)
-        x1 = min(x0 + 1, w - 1)
-        y1 = min(y0 + 1, h - 1)
+    # Целочисленные индексы
+    x0 = x.astype(np.int32)
+    y0 = y.astype(np.int32)
 
-        if x0 >= w - 1 or y0 >= h - 1:
-            refined.append((x, y))
-            continue
+    # Маска точек на границе (не уточняем)
+    boundary_mask = (x0 >= w - 1) | (y0 >= h - 1)
 
-        # Значения в углах ячейки
-        v00 = dem[y0, x0]
-        v10 = dem[y0, x1]
-        v01 = dem[y1, x0]
-        v11 = dem[y1, x1]
+    # Ограничиваем индексы для безопасного доступа к массиву
+    x0_safe = np.clip(x0, 0, w - 1)
+    y0_safe = np.clip(y0, 0, h - 1)
+    x1 = np.minimum(x0_safe + 1, w - 1)
+    y1 = np.minimum(y0_safe + 1, h - 1)
 
-        # Субпиксельная коррекция по градиенту
-        dx = (v10 - v00 + v11 - v01) * 0.5
-        dy = (v01 - v00 + v11 - v10) * 0.5
+    # Значения в углах ячеек (векторный доступ)
+    v00 = dem[y0_safe, x0_safe]
+    v10 = dem[y0_safe, x1]
+    v01 = dem[y1, x0_safe]
+    v11 = dem[y1, x1]
 
-        # Текущее интерполированное значение
-        fx = x - x0
-        fy = y - y0
-        v_interp = (
-            v00 * (1 - fx) * (1 - fy)
-            + v10 * fx * (1 - fy)
-            + v01 * (1 - fx) * fy
-            + v11 * fx * fy
-        )
+    # Субпиксельная коррекция по градиенту
+    dx = (v10 - v00 + v11 - v01) * 0.5
+    dy = (v01 - v00 + v11 - v10) * 0.5
 
-        # Коррекция позиции
-        grad_mag_sq = dx * dx + dy * dy
-        if grad_mag_sq > GRAD_MAG_EPS:
-            delta = (level - v_interp) / grad_mag_sq
-            x_new = x + delta * dx
-            y_new = y + delta * dy
-            # Ограничиваем коррекцию в пределах ячейки
-            x_new = max(x0, min(x1, x_new))
-            y_new = max(y0, min(y1, y_new))
-            refined.append((x_new, y_new))
-        else:
-            refined.append((x, y))
+    # Дробные части координат
+    fx = x - x0
+    fy = y - y0
 
-    return refined
+    # Билинейная интерполяция
+    v_interp = (
+        v00 * (1 - fx) * (1 - fy)
+        + v10 * fx * (1 - fy)
+        + v01 * (1 - fx) * fy
+        + v11 * fx * fy
+    )
+
+    # Квадрат магнитуды градиента
+    grad_mag_sq = dx * dx + dy * dy
+
+    # Маска точек с достаточным градиентом
+    valid_grad = grad_mag_sq > GRAD_MAG_EPS
+
+    # Коррекция позиции (только где градиент достаточен)
+    # Используем безопасное деление, чтобы избежать RuntimeWarning
+    safe_grad_mag_sq = np.where(valid_grad, grad_mag_sq, 1.0)
+    delta = np.where(valid_grad, (level - v_interp) / safe_grad_mag_sq, 0.0)
+    x_new = x + delta * dx
+    y_new = y + delta * dy
+
+    # Ограничиваем коррекцию в пределах ячейки
+    x_new = np.clip(x_new, x0, x1)
+    y_new = np.clip(y_new, y0, y1)
+
+    # Для точек на границе или с малым градиентом — оставляем исходные
+    x_result = np.where(boundary_mask | ~valid_grad, x, x_new)
+    y_result = np.where(boundary_mask | ~valid_grad, y, y_new)
+
+    # Конвертируем в список кортежей
+    return list(zip(x_result.tolist(), y_result.tolist(), strict=False))
 
 
 def _build_contours_for_level(

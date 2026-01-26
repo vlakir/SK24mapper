@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
+
+import numpy as np
+from scipy.interpolate import splev, splprep
 
 from shared.constants import (
     CONTOUR_SMOOTHING_FACTOR,
@@ -22,26 +25,6 @@ from shared.constants import (
     MS_NO_CONTOUR_CASES,
     SEED_POLYLINE_QUANT_FACTOR,
 )
-
-if TYPE_CHECKING:
-    from collections.abc import Callable
-    from types import ModuleType
-
-np: ModuleType | None
-splev: Callable[..., Any] | None
-splprep: Callable[..., Any] | None
-
-try:
-    import numpy as np
-    from scipy.interpolate import splev as scipy_splev
-    from scipy.interpolate import splprep as scipy_splprep
-
-    splev = scipy_splev
-    splprep = scipy_splprep
-except Exception:  # pragma: no cover - optional dependency
-    np = None
-    splev = None
-    splprep = None
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -311,56 +294,43 @@ def smooth_polyline(
     if smoothing_strength is None:
         smoothing_strength = CONTOUR_SMOOTHING_STRENGTH
 
-    if np is None or splev is None or splprep is None:
-        return simple_smooth_polyline(
-            points,
-            iterations=CONTOUR_SMOOTHING_ITERATIONS,
-        )
+    # Разделяем x и y координаты
+    x = [p[0] for p in points]
+    y = [p[1] for p in points]
 
-    try:
-        # Разделяем x и y координаты
-        x = [p[0] for p in points]
-        y = [p[1] for p in points]
+    # Параметр s контролирует агрессивность сглаживания:
+    # s=0 → точная интерполяция через все точки
+    # s>0 → аппроксимация с допустимым отклонением
+    s_param = len(points) * smoothing_strength
+    tck, u = splprep([x, y], s=s_param, k=min(3, len(points) - 1))
 
-        # Параметр s контролирует агрессивность сглаживания:
-        # s=0 → точная интерполяция через все точки
-        # s>0 → аппроксимация с допустимым отклонением
-        s_param = len(points) * smoothing_strength
-        tck, u = splprep([x, y], s=s_param, k=min(3, len(points) - 1))
+    # Генерация новых точек
+    u_new = np.linspace(0, 1, len(points) * smoothing_factor)
+    x_new, y_new = splev(u_new, tck)
 
-        # Генерация новых точек
-        u_new = np.linspace(0, 1, len(points) * smoothing_factor)
-        x_new, y_new = splev(u_new, tck)
-
-        return list(zip(x_new, y_new, strict=False))
-    except Exception:
-        # Fallback: если scipy недоступна, используем простое усреднение
-        return simple_smooth_polyline(
-            points,
-            iterations=CONTOUR_SMOOTHING_ITERATIONS,
-        )
+    return list(zip(x_new, y_new, strict=False))
 
 
 def simple_smooth_polyline(
     points: list[tuple[float, float]],
     iterations: int | None = None,
 ) -> list[tuple[float, float]]:
-    """Простое сглаживание методом скользящего среднего (не требует scipy)."""
+    """
+    Простое сглаживание методом скользящего среднего (не требует scipy).
+
+    Векторизованная реализация через NumPy для ускорения.
+    """
     if len(points) < MIN_POINTS_FOR_SMOOTHING:
         return points
 
     if iterations is None:
         iterations = CONTOUR_SMOOTHING_ITERATIONS
 
-    smoothed = points[:]
+    # Векторизованная реализация через NumPy
+    arr = np.array(points, dtype=np.float64)
     for _ in range(iterations):
-        new_points = [smoothed[0]]  # Сохраняем первую точку
-        for i in range(1, len(smoothed) - 1):
-            # Усредняем с соседними точками
-            x = (smoothed[i - 1][0] + smoothed[i][0] + smoothed[i + 1][0]) / 3.0
-            y = (smoothed[i - 1][1] + smoothed[i][1] + smoothed[i + 1][1]) / 3.0
-            new_points.append((x, y))
-        new_points.append(smoothed[-1])  # Сохраняем последнюю точку
-        smoothed = new_points
-
-    return smoothed
+        # Скользящее среднее по 3 точкам (центральные точки)
+        smoothed_middle = (arr[:-2] + arr[1:-1] + arr[2:]) / 3.0
+        # Собираем результат: первая точка + сглаженные + последняя точка
+        arr = np.vstack([arr[0:1], smoothed_middle, arr[-1:]])
+    return [(float(x), float(y)) for x, y in arr]

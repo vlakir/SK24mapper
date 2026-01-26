@@ -8,6 +8,8 @@ import math
 import random
 from typing import TYPE_CHECKING
 
+import cv2
+import numpy as np
 from PIL import Image, ImageDraw
 
 from contours import draw_contour_labels
@@ -25,14 +27,13 @@ from shared.constants import (
     CONTOUR_INDEX_WIDTH,
     CONTOUR_LABEL_GAP_ENABLED,
     CONTOUR_LABELS_ENABLED,
-    CONTOUR_LOG_MEMORY_EVERY_TILES,
     CONTOUR_SEED_DOWNSAMPLE,
     CONTOUR_WIDTH,
     EARTH_RADIUS_M,
     ELEVATION_USE_RETINA,
+    MIN_POINTS_FOR_SEGMENT,
     TILE_SIZE,
 )
-from shared.diagnostics import log_memory_usage
 from shared.progress import ConsoleProgress, LiveSpinner
 
 if TYPE_CHECKING:
@@ -68,27 +69,25 @@ async def process_elevation_contours(ctx: MapDownloadContext) -> Image.Image:
     # Pass A: sample min/max elevations and build global low-res DEM seed
     max_samples = 50000
     samples_contours: list[float] = []
-    seen = 0
-    tile_count = 0
 
     rng = random.Random(42)  # noqa: S311
     tile_progress = ConsoleProgress(
         total=len(ctx.tiles), label='Проверка диапазона высот (проход 1/2)'
     )
 
-    # Prepare low-res DEM seed canvas
+    # Prepare low-res DEM seed canvas (numpy arrays для быстрого доступа)
     seed_ds = max(2, int(CONTOUR_SEED_DOWNSAMPLE))
     cx, cy, cw, ch = ctx.crop_rect
     seed_w = max(1, (cw + seed_ds - 1) // seed_ds)
     seed_h = max(1, (ch + seed_ds - 1) // seed_ds)
-    seed_sum: list[list[float]] = [[0.0] * seed_w for _ in range(seed_h)]
-    seed_cnt: list[list[int]] = [[0] * seed_w for _ in range(seed_h)]
+    seed_sum = np.zeros((seed_h, seed_w), dtype=np.float64)
+    seed_cnt = np.zeros((seed_h, seed_w), dtype=np.int32)
 
-    # Lock для защиты shared state от race conditions
-    state_lock = asyncio.Lock()
+    # Список для сбора результатов от всех тайлов (без lock)
+    tile_results: list[tuple[list[float], list[tuple[int, int, float]]]] = []
+    results_lock = asyncio.Lock()
 
     async def fetch_and_sample(idx_xy: tuple[int, tuple[int, int]]) -> None:
-        nonlocal seen, samples_contours, tile_count
         idx, (tile_x_world, tile_y_world) = idx_xy
         tx, ty = tx_ty_from_index(idx, ctx.tiles_x)
         if tile_overlap_rect_common(tx, ty, ctx.crop_rect, full_eff_tile_px) is None:
@@ -135,26 +134,12 @@ async def process_elevation_contours(ctx: MapDownloadContext) -> Image.Image:
                             v = row_src[src_x]
                             local_updates.append((sy, sx, v))
 
-                # Обновляем shared state под lock
-                async with state_lock:
-                    for sample_v in local_samples:
-                        seen += 1
-                        if len(samples_contours) < max_samples:
-                            samples_contours.append(sample_v)
-                        else:
-                            j = rng.randrange(0, seen)
-                            if j < max_samples:
-                                samples_contours[j] = sample_v
-
-                    for sy, sx, v in local_updates:
-                        seed_sum[sy][sx] += v
-                        seed_cnt[sy][sx] += 1
+                # Сохраняем результаты для batch-обработки в конце
+                if local_samples or local_updates:
+                    async with results_lock:
+                        tile_results.append((local_samples, local_updates))
 
         tile_progress.step_sync(1)
-        async with state_lock:
-            tile_count += 1
-            if tile_count % CONTOUR_LOG_MEMORY_EVERY_TILES == 0:
-                log_memory_usage(f'pass1(contours) after {tile_count} tiles')
 
     try:
         async with asyncio.TaskGroup() as tg:
@@ -162,6 +147,21 @@ async def process_elevation_contours(ctx: MapDownloadContext) -> Image.Image:
                 tg.create_task(fetch_and_sample(pair))
     finally:
         tile_progress.close()
+
+    # Batch-обработка всех результатов (без contention)
+    all_samples: list[float] = []
+    for local_samples, local_updates in tile_results:
+        all_samples.extend(local_samples)
+        for sy, sx, v in local_updates:
+            seed_sum[sy, sx] += v
+            seed_cnt[sy, sx] += 1
+
+    # Reservoir sampling из собранных samples
+    if len(all_samples) > max_samples:
+        rng.shuffle(all_samples)
+        samples_contours = all_samples[:max_samples]
+    else:
+        samples_contours = all_samples
 
     if samples_contours:
         mn = min(samples_contours)
@@ -171,20 +171,10 @@ async def process_elevation_contours(ctx: MapDownloadContext) -> Image.Image:
     if mx < mn:
         mn, mx = mx, mn
 
-    # Finalize low-res DEM seed
-    seed_dem: list[list[float]] = [[0.0] * seed_w for _ in range(seed_h)]
-    filled = 0
-    for sy in range(seed_h):
-        row_s = seed_sum[sy]
-        row_c = seed_cnt[sy]
-        out = seed_dem[sy]
-        for sx in range(seed_w):
-            c = row_c[sx]
-            if c > 0:
-                out[sx] = row_s[sx] / float(c)
-                filled += 1
-            else:
-                out[sx] = (mn + mx) * 0.5
+    # Finalize low-res DEM seed (векторизованно через numpy)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        seed_dem_arr = np.where(seed_cnt > 0, seed_sum / seed_cnt, (mn + mx) * 0.5)
+    filled = int(np.sum(seed_cnt > 0))
 
     logger.info(
         'Seed DEM low-res size=%sx%s, filled=%s/%s',
@@ -224,10 +214,9 @@ async def process_elevation_contours(ctx: MapDownloadContext) -> Image.Image:
         )
 
         # Build global polylines from seed_dem
-        seed_polylines = build_seed_polylines(seed_dem, levels, seed_h, seed_w)
+        seed_polylines = build_seed_polylines(seed_dem_arr, levels, seed_h, seed_w)
 
-        # Draw contours directly on result image
-        draw = ImageDraw.Draw(result)
+        # Draw contours directly on result image using OpenCV (batch drawing)
         img_w, img_h = result.size
         lat_rad = math.radians(ctx.center_lat_wgs)
         elev_retina_factor = 2 if ELEVATION_USE_RETINA else 1
@@ -235,34 +224,46 @@ async def process_elevation_contours(ctx: MapDownloadContext) -> Image.Image:
             TILE_SIZE * elev_retina_factor * (2**ctx.zoom)
         )
 
+        # Конвертируем PIL Image в numpy array для OpenCV
+        result_array = np.array(result)
+
         for li, _level in enumerate(levels):
             is_index = (li % max(1, int(CONTOUR_INDEX_EVERY))) == 0
             color = CONTOUR_INDEX_COLOR if is_index else CONTOUR_COLOR
             target_width_m = CONTOUR_INDEX_WIDTH if is_index else CONTOUR_WIDTH
             width = max(1, round(target_width_m / max(1e-9, mpp)))
 
+            # Собираем все полилинии для этого уровня
+            polylines_for_level: list[np.ndarray] = []
             for poly in seed_polylines.get(li, []):
                 # Координаты в системе результирующего изображения
-                pts_img = [(p[0] * seed_ds, p[1] * seed_ds) for p in poly]
+                pts_array = np.array(poly, dtype=np.float32) * seed_ds
 
                 # Проверка, что полилиния в пределах изображения
-                minx_p = min(p[0] for p in pts_img)
-                maxx_p = max(p[0] for p in pts_img)
-                miny_p = min(p[1] for p in pts_img)
-                maxy_p = max(p[1] for p in pts_img)
+                minx_p, miny_p = pts_array.min(axis=0)
+                maxx_p, maxy_p = pts_array.max(axis=0)
 
                 if maxx_p < 0 or minx_p > img_w or maxy_p < 0 or miny_p > img_h:
                     continue
 
-                prev = None
-                for px, py in pts_img:
-                    if prev is not None:
-                        draw.line(
-                            (prev[0], prev[1], px, py),
-                            fill=(*list(color), 255),
-                            width=width,
-                        )
-                    prev = (px, py)
+                # OpenCV требует int32 координаты
+                polylines_for_level.append(pts_array.astype(np.int32))
+
+            # Batch-отрисовка всех полилиний уровня через cv2.polylines
+            if polylines_for_level:
+                # OpenCV использует BGR, PIL — RGB
+                cv_color = (color[2], color[1], color[0])
+                cv2.polylines(
+                    result_array,
+                    polylines_for_level,
+                    isClosed=False,
+                    color=cv_color,
+                    thickness=width,
+                    lineType=cv2.LINE_AA,
+                )
+
+        # Конвертируем обратно в PIL Image
+        result = Image.fromarray(result_array)
 
         # Add contour labels if enabled
         if CONTOUR_LABELS_ENABLED:
@@ -465,27 +466,25 @@ async def apply_contours_to_image(
     # Pass A: sample elevations and build global low-res DEM seed
     max_samples = 50000
     samples_contours: list[float] = []
-    seen = 0
-    tile_count = 0
 
     rng = random.Random(42)  # noqa: S311
     tile_progress = ConsoleProgress(
         total=len(ctx.tiles), label='Загрузка высот для изолиний'
     )
 
-    # Prepare low-res DEM seed canvas (используем пересчитанные размеры)
+    # Prepare low-res DEM seed canvas (numpy arrays для быстрого доступа)
     seed_ds = max(2, int(CONTOUR_SEED_DOWNSAMPLE))
     cx, cy, cw, ch = elev_crop_rect
     seed_w = max(1, (cw + seed_ds - 1) // seed_ds)
     seed_h = max(1, (ch + seed_ds - 1) // seed_ds)
-    seed_sum: list[list[float]] = [[0.0] * seed_w for _ in range(seed_h)]
-    seed_cnt: list[list[int]] = [[0] * seed_w for _ in range(seed_h)]
+    seed_sum = np.zeros((seed_h, seed_w), dtype=np.float64)
+    seed_cnt = np.zeros((seed_h, seed_w), dtype=np.int32)
 
-    # Lock для защиты shared state от race conditions
-    state_lock = asyncio.Lock()
+    # Список для сбора результатов от всех тайлов (без lock)
+    tile_results: list[tuple[list[float], list[tuple[int, int, float]]]] = []
+    results_lock = asyncio.Lock()
 
     async def fetch_and_sample(idx_xy: tuple[int, tuple[int, int]]) -> None:
-        nonlocal seen, samples_contours, tile_count
         idx, (tile_x_world, tile_y_world) = idx_xy
         tx, ty = tx_ty_from_index(idx, ctx.tiles_x)
         if tile_overlap_rect_common(tx, ty, elev_crop_rect, elev_tile_px) is None:
@@ -535,20 +534,10 @@ async def apply_contours_to_image(
                                 v = row_src[src_x]
                                 local_updates.append((sy, sx, v))
 
-                    # Обновляем shared state под lock
-                    async with state_lock:
-                        for sample_v in local_samples:
-                            seen += 1
-                            if len(samples_contours) < max_samples:
-                                samples_contours.append(sample_v)
-                            else:
-                                j = rng.randrange(0, seen)
-                                if j < max_samples:
-                                    samples_contours[j] = sample_v
-
-                        for sy, sx, v in local_updates:
-                            seed_sum[sy][sx] += v
-                            seed_cnt[sy][sx] += 1
+                    # Сохраняем результаты для batch-обработки в конце
+                    if local_samples or local_updates:
+                        async with results_lock:
+                            tile_results.append((local_samples, local_updates))
         except Exception as exc:
             logger.warning(
                 'Не удалось получить/обработать terrain тайл z/x/y=%d/%d/%d: %s',
@@ -560,10 +549,6 @@ async def apply_contours_to_image(
             )
         finally:
             await tile_progress.step(1)
-            async with state_lock:
-                tile_count += 1
-                if tile_count % CONTOUR_LOG_MEMORY_EVERY_TILES == 0:
-                    log_memory_usage(f'overlay pass1 after {tile_count} tiles')
 
     try:
         async with asyncio.TaskGroup() as tg:
@@ -572,19 +557,25 @@ async def apply_contours_to_image(
     finally:
         tile_progress.close()
 
-    # Build seed_dem from accumulated values
-    seed_dem: list[list[float]] = []
-    filled_count = 0
-    for sy in range(seed_h):
-        row: list[float] = []
-        for sx in range(seed_w):
-            cnt = seed_cnt[sy][sx]
-            if cnt > 0:
-                row.append(seed_sum[sy][sx] / cnt)
-                filled_count += 1
-            else:
-                row.append(0.0)
-        seed_dem.append(row)
+    # Batch-обработка всех результатов (без contention)
+    all_samples: list[float] = []
+    for local_samples, local_updates in tile_results:
+        all_samples.extend(local_samples)
+        for sy, sx, v in local_updates:
+            seed_sum[sy, sx] += v
+            seed_cnt[sy, sx] += 1
+
+    # Reservoir sampling из собранных samples
+    if len(all_samples) > max_samples:
+        rng.shuffle(all_samples)
+        samples_contours = all_samples[:max_samples]
+    else:
+        samples_contours = all_samples
+
+    # Finalize low-res DEM seed (векторизованно через numpy)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        seed_dem = np.where(seed_cnt > 0, seed_sum / seed_cnt, 0.0)
+    filled_count = int(np.sum(seed_cnt > 0))
 
     logger.info(
         'Overlay seed_dem: size=%dx%d, filled=%d/%d (%.1f%%), crop_rect=(%d,%d,%d,%d)',
@@ -693,33 +684,75 @@ async def apply_contours_to_image(
             1, round(adaptive_params.label_gap_padding_m / max(1e-9, mpp))
         )
 
-        def segment_intersects_bbox(
+        # Построение пространственного индекса (grid-based spatial hash)
+        # для быстрого поиска пересечений O(1) вместо O(n)
+        grid_cell_size = 64  # размер ячейки в пикселях
+        bbox_grid: dict[tuple[int, int], list[tuple[int, int, int, int]]] = {}
+
+        # Расширяем bbox на padding и добавляем в grid
+        expanded_bboxes: list[tuple[int, int, int, int]] = []
+        for bbox in label_bboxes:
+            bx0, by0, bx1, by1 = bbox
+            exp_bbox = (
+                bx0 - gap_padding,
+                by0 - gap_padding,
+                bx1 + gap_padding,
+                by1 + gap_padding,
+            )
+            expanded_bboxes.append(exp_bbox)
+            # Добавляем bbox во все ячейки, которые он покрывает
+            cell_x0 = exp_bbox[0] // grid_cell_size
+            cell_y0 = exp_bbox[1] // grid_cell_size
+            cell_x1 = exp_bbox[2] // grid_cell_size
+            cell_y1 = exp_bbox[3] // grid_cell_size
+            for cy in range(cell_y0, cell_y1 + 1):
+                for cx in range(cell_x0, cell_x1 + 1):
+                    key = (cx, cy)
+                    if key not in bbox_grid:
+                        bbox_grid[key] = []
+                    bbox_grid[key].append(exp_bbox)
+
+        def segment_intersects_any_bbox(
             x1: float,
             y1: float,
             x2: float,
             y2: float,
-            bbox: tuple[int, int, int, int],
         ) -> bool:
-            bx0, by0, bx1, by1 = bbox
-            # Расширяем bbox на padding
-            bx0 -= gap_padding
-            by0 -= gap_padding
-            bx1 += gap_padding
-            by1 += gap_padding
-            # Проверяем, пересекает ли сегмент прямоугольник
-            # Сначала быстрая проверка bounding box сегмента
+            """Проверяет пересечение сегмента с любым bbox через spatial hash."""
+            if not bbox_grid:
+                return False
+            # Bounding box сегмента
             seg_minx, seg_maxx = (x1, x2) if x1 < x2 else (x2, x1)
             seg_miny, seg_maxy = (y1, y2) if y1 < y2 else (y2, y1)
-            if seg_maxx < bx0 or seg_minx > bx1 or seg_maxy < by0 or seg_miny > by1:
-                return False
-            # Если хотя бы одна точка внутри bbox — пересекает
-            if bx0 <= x1 <= bx1 and by0 <= y1 <= by1:
-                return True
-            return bool(bx0 <= x2 <= bx1 and by0 <= y2 <= by1)
+            # Ячейки, которые покрывает сегмент
+            cell_x0 = int(seg_minx) // grid_cell_size
+            cell_y0 = int(seg_miny) // grid_cell_size
+            cell_x1 = int(seg_maxx) // grid_cell_size
+            cell_y1 = int(seg_maxy) // grid_cell_size
+            # Проверяем только bbox в релевантных ячейках
+            checked: set[tuple[int, int, int, int]] = set()
+            for cy in range(cell_y0, cell_y1 + 1):
+                for cx in range(cell_x0, cell_x1 + 1):
+                    for bbox in bbox_grid.get((cx, cy), []):
+                        if bbox in checked:
+                            continue
+                        checked.add(bbox)
+                        bx0, by0, bx1, by1 = bbox
+                        # Быстрая проверка пересечения bbox
+                        if seg_maxx < bx0 or seg_minx > bx1:
+                            continue
+                        if seg_maxy < by0 or seg_miny > by1:
+                            continue
+                        # Точка внутри bbox — пересекает
+                        if bx0 <= x1 <= bx1 and by0 <= y1 <= by1:
+                            return True
+                        if bx0 <= x2 <= bx1 and by0 <= y2 <= by1:
+                            return True
+            return False
 
-        # Draw contours directly on result image, skipping segments that intersect
-        # label bboxes
-        draw = ImageDraw.Draw(result)
+        # Draw contours directly on result image using OpenCV (batch drawing)
+        # Конвертируем PIL Image в numpy array для OpenCV
+        result_array = np.array(result)
 
         for li, _level in enumerate(levels):
             is_index = (li % max(1, int(CONTOUR_INDEX_EVERY))) == 0
@@ -727,35 +760,74 @@ async def apply_contours_to_image(
             target_width_m = CONTOUR_INDEX_WIDTH if is_index else CONTOUR_WIDTH
             width = max(1, round(target_width_m / max(1e-9, mpp)))
 
+            # Собираем полилинии для этого уровня, фильтруя сегменты под подписями
+            polylines_for_level: list[np.ndarray] = []
+
             for poly in seed_polylines.get(li, []):
                 # Координаты в системе base_image
-                pts_img = [(p[0] * coord_scale, p[1] * coord_scale) for p in poly]
+                pts_array = np.array(poly, dtype=np.float32) * coord_scale
 
                 # Проверка, что полилиния в пределах изображения
-                minx = min(p[0] for p in pts_img)
-                maxx = max(p[0] for p in pts_img)
-                miny = min(p[1] for p in pts_img)
-                maxy = max(p[1] for p in pts_img)
+                minx, miny = pts_array.min(axis=0)
+                maxx, maxy = pts_array.max(axis=0)
 
                 if maxx < 0 or minx > img_w or maxy < 0 or miny > img_h:
                     continue
 
-                prev = None
-                for px, py in pts_img:
-                    if prev is not None:
-                        # Проверяем, пересекает ли сегмент какой-либо bbox подписи
-                        skip_segment = False
-                        for bbox in label_bboxes:
-                            if segment_intersects_bbox(prev[0], prev[1], px, py, bbox):
-                                skip_segment = True
-                                break
-                        if not skip_segment:
-                            draw.line(
-                                (prev[0], prev[1], px, py),
-                                fill=(*list(color), 255),
-                                width=width,
-                            )
-                    prev = (px, py)
+                if label_bboxes:
+                    # Разбиваем полилинию на сегменты, пропуская те, что под подписями
+                    current_segment: list[tuple[float, float]] = []
+                    pts_list = pts_array.tolist()
+
+                    for i, (px, py) in enumerate(pts_list):
+                        if i == 0:
+                            current_segment.append((px, py))
+                            continue
+
+                        prev_x, prev_y = pts_list[i - 1]
+                        # Проверяем пересечение с bbox подписей через spatial hash
+                        skip_segment = segment_intersects_any_bbox(
+                            prev_x, prev_y, px, py
+                        )
+
+                        if skip_segment:
+                            # Сохраняем текущий сегмент и начинаем новый
+                            if len(current_segment) >= MIN_POINTS_FOR_SEGMENT:
+                                polylines_for_level.append(
+                                    np.array(current_segment, dtype=np.int32)
+                                )
+                            current_segment = [(px, py)]
+                        else:
+                            current_segment.append((px, py))
+
+                    # Добавляем последний сегмент
+                    if len(current_segment) >= MIN_POINTS_FOR_SEGMENT:
+                        polylines_for_level.append(
+                            np.array(current_segment, dtype=np.int32)
+                        )
+                else:
+                    # Нет подписей — добавляем всю полилинию
+                    polylines_for_level.append(pts_array.astype(np.int32))
+
+            # Batch-отрисовка всех полилиний уровня через cv2.polylines
+            if polylines_for_level:
+                # OpenCV использует BGR, а result может быть RGBA
+                cv_color: tuple[int, int, int] | tuple[int, int, int, int]
+                if result_array.shape[2] == 4:  # noqa: PLR2004
+                    cv_color = (color[2], color[1], color[0], 255)
+                else:
+                    cv_color = (color[2], color[1], color[0])
+                cv2.polylines(
+                    result_array,
+                    polylines_for_level,
+                    isClosed=False,
+                    color=cv_color,
+                    thickness=width,
+                    lineType=cv2.LINE_AA,
+                )
+
+        # Конвертируем обратно в PIL Image
+        result = Image.fromarray(result_array)
 
         # Add contour labels if enabled (final pass - actual drawing)
         if CONTOUR_LABELS_ENABLED:
