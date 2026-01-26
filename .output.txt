@@ -1,1517 +1,202 @@
 
-> pr_comment.html:358:        data-analytics-event="{&quot;category&quot;:&quot
-;Marketing nav&quot;,&quot;action&quot;:&quot;click to go to homepage&quot;,&qu
-ot;label&quot;:&quot;ref_page:Marketing;ref_cta:Logomark;ref_loc:Header&quot;}"
+> pr_comment.html:1926:<p dir="auto"><strong>Elevation processing enhancements<
+/strong>: New elevation contours processor with two-pass DEM processing, DEM ti
+le caching system, and numpy-optimized topography module with vectorized operat
+ions</p>
+  pr_comment.html:1927:</li>
+  pr_comment.html:1928:<li>
+  pr_comment.html:1929:<p dir="auto"><strong>UI improvements</strong>: Added ra
+dio horizon map type support with antenna height and max flight height controls
+, refactored callbacks to use keyword-only arguments, improved control point ha
+ndling</p>
+  pr_comment.html:1930:</li>
+  pr_comment.html:1931:<li>
+  pr_comment.html:1932:<p dir="auto"><strong>Grid and imaging utilities</strong
+>: New SK-42 coordinate system grid drawing module with adaptive rendering and
+legend gap handling</p>
+  pr_comment.html:1933:</li>
+  pr_comment.html:1934:<li>
+  pr_comment.html:1935:<p dir="auto"><strong>Constants consolidation</strong>:
+Expanded <code class="notranslate">shared/constants.py</code> with radio horizo
+n parameters, moved Helmert tool and grid constants, updated measurements from
+pixels to meters</p>
+  pr_comment.html:1936:</li>
+  pr_comment.html:1937:<li>
+  pr_comment.html:1938:<p dir="auto"><strong>Code quality improvements</strong>
+: Enhanced type hints, improved logging with %-formatting, better error handlin
+g in async functions, refactored marching squares algorithm modularity</p>
+  pr_comment.html:1939:</li>
+  pr_comment.html:1940:</ul>
+  pr_comment.html:1941:<hr>
+  pr_comment.html:1942:<h3 dir="auto">Diagram Walkthrough</h3>
+  pr_comment.html:1943:<section class="js-render-needs-enrichment render-needs-
+enrichment position-relative" data-identity="00731221-ce38-4627-ac0a-30510854b2
+50" data-host="https://viewscreen.githubusercontent.com" data-src="https://view
+screen.githubusercontent.com/markdown/mermaid?docs_host=https%3A%2F%2Fdocs.gith
+ub.com" data-type="mermaid" aria-label="mermaid rendered output container">
+> pr_comment.html:1944:  <div class="js-render-enrichment-target" data-json="{&
+quot;data&quot;:&quot;flowchart LR\n  A[\&quot;Monolithic service.py\&quot;] --
+&amp;gt;|refactored to wrapper| B[\&quot;MapDownloadService\&quot;]\n  B --&amp
+;gt;|orchestrates| C[\&quot;Processors\&quot;]\n  C --&amp;gt;|includes| D[\&qu
+ot;Radio Horizon\&quot;]\n  C --&amp;gt;|includes| E[\&quot;Elevation Contours\
+&quot;]\n  C --&amp;gt;|includes| F[\&quot;XYZ Tiles\&quot;]\n  B --&amp;gt;|po
+st-processes| G[\&quot;Grid/Legend/Rotation\&quot;]\n  D --&amp;gt;|uses| H[\&q
+uot;Topography Module\&quot;]\n  H --&amp;gt;|optimized with| I[\&quot;NumPy +
+Caching\&quot;]\n  J[\&quot;GUI Controller\&quot;] --&amp;gt;|calls| B\n  K[\&q
+uot;Shared Constants\&quot;] --&amp;gt;|provides config| B\n  L[\&quot;Infrastr
+ucture Layer\&quot;] --&amp;gt;|provides HTTP| B\n&quot;}" data-plain="flowchar
+t LR
+  pr_comment.html:1945:  A[&quot;Monolithic service.py&quot;] --&gt;|refactored
+ to wrapper| B[&quot;MapDownloadService&quot;]
+  pr_comment.html:1946:  B --&gt;|orchestrates| C[&quot;Processors&quot;]
+  pr_comment.html:1947:  C --&gt;|includes| D[&quot;Radio Horizon&quot;]
+  pr_comment.html:1948:  C --&gt;|includes| E[&quot;Elevation Contours&quot;]
+  pr_comment.html:1949:  C --&gt;|includes| F[&quot;XYZ Tiles&quot;]
+  pr_comment.html:1950:  B --&gt;|post-processes| G[&quot;Grid/Legend/Rotation&
+quot;]
+  pr_comment.html:1951:  D --&gt;|uses| H[&quot;Topography Module&quot;]
+> pr_comment.html:1952:  H --&gt;|optimized with| I[&quot;NumPy + Caching&quot;
+]
+  pr_comment.html:1953:  J[&quot;GUI Controller&quot;] --&gt;|calls| B
+  pr_comment.html:1954:  K[&quot;Shared Constants&quot;] --&gt;|provides config
+| B
+  pr_comment.html:1955:  L[&quot;Infrastructure Layer&quot;] --&gt;|provides HT
+TP| B
+  pr_comment.html:1956:" dir="auto">
+  pr_comment.html:1957:    <div class="render-plaintext-hidden" dir="auto">
+  pr_comment.html:1958:      <pre lang="mermaid" aria-label="Raw mermaid code"
+class="notranslate">flowchart LR
+  pr_comment.html:1959:  A["Monolithic service.py"] --&gt;|refactored to wrappe
+r| B["MapDownloadService"]
+  pr_comment.html:1960:  B --&gt;|orchestrates| C["Processors"]
+  pr_comment.html:1961:  C --&gt;|includes| D["Radio Horizon"]
+  pr_comment.html:1962:  C --&gt;|includes| E["Elevation Contours"]
+  pr_comment.html:1963:  C --&gt;|includes| F["XYZ Tiles"]
+  pr_comment.html:1964:  B --&gt;|post-processes| G["Grid/Legend/Rotation"]
+  pr_comment.html:1965:  D --&gt;|uses| H["Topography Module"]
+> pr_comment.html:1966:  H --&gt;|optimized with| I["NumPy + Caching"]
+  pr_comment.html:1967:  J["GUI Controller"] --&gt;|calls| B
+  pr_comment.html:1968:  K["Shared Constants"] --&gt;|provides config| B
+  pr_comment.html:1969:  L["Infrastructure Layer"] --&gt;|provides HTTP| B
+  pr_comment.html:1970:</pre>
+  pr_comment.html:1971:    </div>
+  pr_comment.html:1972:  </div>
+  pr_comment.html:1973:  <span class="js-render-enrichment-loader d-flex flex-j
+ustify-center flex-items-center width-full" style="min-height:100px" role="pres
+entation">
+  pr_comment.html:1974:    <span data-view-component="true">
+  pr_comment.html:1975:  <svg style="box-sizing: content-box; color: var(--colo
+r-icon-primary);" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-h
+idden="true" data-view-component="true" class="octospinner mx-auto anim-rotate"
 >
-  pr_comment.html:359:        <svg height="32" aria-hidden="true" viewBox="0 0
-24 24" version="1.1" width="32" data-view-component="true" class="octicon octic
-on-mark-github">
-  pr_comment.html:360:    <path d="M12 1C5.923 1 1 5.923 1 12c0 4.867 3.149 8.9
-79 7.521 10.436.55.096.756-.233.756-.522 0-.262-.013-1.128-.013-2.049-2.764.509
--3.479-.674-3.699-1.292-.124-.317-.66-1.293-1.127-1.554-.385-.207-.936-.715-.01
-4-.729.866-.014 1.485.797 1.691 1.128.99 1.663 2.571 1.196 3.204.907.096-.715.3
-85-1.196.701-1.471-2.448-.275-5.005-1.224-5.005-5.432 0-1.196.426-2.186 1.128-2
-.956-.111-.275-.496-1.402.11-2.915 0 0 .921-.288 3.024 1.128a10.193 10.193 0 0
-1 2.75-.371c.936 0 1.871.123 2.75.371 2.104-1.43 3.025-1.128 3.025-1.128.605 1.
-513.221 2.64.111 2.915.701.77 1.127 1.747 1.127 2.956 0 4.222-2.571 5.157-5.019
- 5.432.399.344.743 1.004.743 2.035 0 1.471-.014 2.654-.014 3.025 0 .289.206.632
-.756.522C19.851 20.979 23 16.854 23 12c0-6.077-4.922-11-11-11Z"></path>
-  pr_comment.html:361:</svg>
-  pr_comment.html:362:      </a>
-  pr_comment.html:363:
-  pr_comment.html:364:      <div class="d-flex flex-1 flex-order-2 text-right d
--lg-none gap-2 flex-justify-end">
-  pr_comment.html:365:          <a
-  pr_comment.html:366:            href="/login?return_to=https%3A%2F%2Fgithub.c
-om%2Fvlakir%2FSK24mapper%2Fpull%2F15"
-  pr_comment.html:367:            class="HeaderMenu-link HeaderMenu-button d-in
-line-flex f5 no-underline border color-border-default rounded-2 px-2 py-1 color
--fg-inherit js-prevent-focus-on-mobile-nav"
-  pr_comment.html:368:            data-hydro-click="{&quot;event_type&quot;:&qu
-ot;authentication.click&quot;,&quot;payload&quot;:{&quot;location_in_page&quot;
-:&quot;site header menu&quot;,&quot;repository_id&quot;:null,&quot;auth_type&qu
-ot;:&quot;SIGN_UP&quot;,&quot;originating_url&quot;:&quot;https://github.com/vl
-akir/SK24mapper/pull/15&quot;,&quot;user_id&quot;:null}}" data-hydro-click-hmac
-="06e8d39731dcb7f39d30452ad830353011b0889eefb8c493455ea3b874694a50"
-> pr_comment.html:369:            data-analytics-event="{&quot;category&quot;:&
-quot;Marketing nav&quot;,&quot;action&quot;:&quot;click to Sign in&quot;,&quot;
-label&quot;:&quot;ref_page:Marketing;ref_cta:Sign in;ref_loc:Header&quot;}"
-  pr_comment.html:370:          >
-  pr_comment.html:371:            Sign in
-  pr_comment.html:372:          </a>
-  pr_comment.html:373:              <div class="AppHeader-appearanceSettings">
-  pr_comment.html:374:    <react-partial-anchor>
-  pr_comment.html:375:      <button data-target="react-partial-anchor.anchor" i
-d="icon-button-5e368f92-2439-4dc7-9471-67680d02eeaf" aria-labelledby="tooltip-a
-909765f-ad3f-4f62-a68e-2e01377e5036" type="button" disabled="disabled" data-vie
-w-component="true" class="Button Button--iconOnly Button--invisible Button--med
-ium AppHeader-button HeaderMenu-link border cursor-wait">  <svg aria-hidden="tr
-ue" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-componen
-t="true" class="octicon octicon-sliders Button-visual">
-  pr_comment.html:376:    <path d="M15 2.75a.75.75 0 0 1-.75.75h-4a.75.75 0 0 1
- 0-1.5h4a.75.75 0 0 1 .75.75Zm-8.5.75v1.25a.75.75 0 0 0 1.5 0v-4a.75.75 0 0 0-1
-.5 0V2H1.75a.75.75 0 0 0 0 1.5H6.5Zm1.25 5.25a.75.75 0 0 0 0-1.5h-6a.75.75 0 0
-0 0 1.5h6ZM15 8a.75.75 0 0 1-.75.75H11.5V10a.75.75 0 1 1-1.5 0V6a.75.75 0 0 1 1
-.5 0v1.25h2.75A.75.75 0 0 1 15 8Zm-9 5.25v-2a.75.75 0 0 0-1.5 0v1.25H1.75a.75.7
-5 0 0 0 0 1.5H4.5v1.25a.75.75 0 0 0 1.5 0v-2Zm9 0a.75.75 0 0 1-.75.75h-6a.75.75
- 0 0 1 0-1.5h6a.75.75 0 0 1 .75.75Z"></path>
-  pr_comment.html:377:</svg>
-  pr_comment.html:378:</button><tool-tip id="tooltip-a909765f-ad3f-4f62-a68e-2e
-01377e5036" for="icon-button-5e368f92-2439-4dc7-9471-67680d02eeaf" popover="man
-ual" data-direction="s" data-type="label" data-view-component="true" class="sr-
-only position-absolute">Appearance settings</tool-tip>
-  pr_comment.html:379:
-  pr_comment.html:380:      <template data-target="react-partial-anchor.templat
-e">
-  pr_comment.html:381:        <link crossorigin="anonymous" media="all" rel="st
-ylesheet" href="https://github.githubassets.com/assets/appearance-settings.753d
-458774a2f782559b.module.css" />
-  pr_comment.html:382:
-  pr_comment.html:383:<react-partial
-  pr_comment.html:384:  partial-name="appearance-settings"
-  pr_comment.html:385:  data-ssr="false"
-  pr_comment.html:386:  data-attempted-ssr="false"
-  pr_comment.html:387:  data-react-profiling="true"
-  pr_comment.html:388:>
-  pr_comment.html:389:
-  pr_comment.html:390:  <script type="application/json" data-target="react-part
-ial.embeddedData">{"props":{}}</script>
-  pr_comment.html:391:  <div data-target="react-partial.reactRoot"></div>
-  pr_comment.html:392:</react-partial>
-  pr_comment.html:393:
-  pr_comment.html:394:
-  pr_comment.html:395:      </template>
-  pr_comment.html:396:    </react-partial-anchor>
-  pr_comment.html:397:  </div>
-  pr_comment.html:398:
-  pr_comment.html:399:      </div>
-  pr_comment.html:400:    </div>
-  pr_comment.html:401:
-  pr_comment.html:402:
-  pr_comment.html:403:    <div class="HeaderMenu js-header-menu height-fit posi
-tion-lg-relative d-lg-flex flex-column flex-auto top-0">
-  pr_comment.html:404:      <div class="HeaderMenu-wrapper d-flex flex-column f
-lex-self-start flex-lg-row flex-auto rounded rounded-lg-0">
-  pr_comment.html:405:            <link crossorigin="anonymous" media="all" rel
-="stylesheet" href="https://github.githubassets.com/assets/marketing-navigation
-.2a752a3c708bb38a3035.module.css" />
-  pr_comment.html:406:
-  pr_comment.html:407:<react-partial
-  pr_comment.html:408:  partial-name="marketing-navigation"
-  pr_comment.html:409:  data-ssr="true"
-  pr_comment.html:410:  data-attempted-ssr="true"
-  pr_comment.html:411:  data-react-profiling="true"
-  pr_comment.html:412:>
-  pr_comment.html:413:
-  pr_comment.html:414:  <script type="application/json" data-target="react-part
-ial.embeddedData">{"props":{"should_use_dotcom_links":true}}</script>
-  pr_comment.html:415:  <div data-target="react-partial.reactRoot"><nav class="
-MarketingNavigation-module__nav--jA9Zq" aria-label="Global"><ul class="Marketin
-gNavigation-module__list--r_vr2"><li><div class="NavDropdown-module__container-
--bmXM2 js-details-container js-header-menu-item"><button type="button" class="N
-avDropdown-module__button--Hq9UR js-details-target" aria-expanded="false">Platf
-orm<svg aria-hidden="true" focusable="false" class="octicon octicon-chevron-rig
-ht NavDropdown-module__buttonIcon--SR0Ke" viewBox="0 0 16 16" width="16" height
-="16" fill="currentColor" display="inline-block" overflow="visible" style="vert
-ical-align:text-bottom"><path d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.7
-5 0 0 1 0 1.06l-4.25 4.25a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L9.
-94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z"></path></svg></button><div class="NavDropd
-own-module__dropdown--Ig57Y"><ul class="NavDropdown-module__list--RwSSK"><li><d
-iv class="NavGroup-module__group--T925n"><span class="NavGroup-module__title--T
-dKyz">AI CODE CREATION</span><ul class="NavGroup-module__list--M8eGv"><li><a hr
-ef="https://github.com/features/copilot" data-analytics-event="{&quot;action&qu
-ot;:&quot;github_copilot&quot;,&quot;tag&quot;:&quot;link&quot;,&quot;context&q
-uot;:&quot;platform&quot;,&quot;location&quot;:&quot;navbar&quot;,&quot;label&q
-uot;:&quot;github_copilot_link_platform_navbar&quot;}" class="NavLink-module__l
-ink--n48VB"><div class="NavLink-module__text--SdWkb"><svg aria-hidden="true" fo
-cusable="false" class="octicon octicon-copilot NavLink-module__icon--h0sw7" vie
-wBox="0 0 24 24" width="24" height="24" fill="currentColor" display="inline-blo
-ck" overflow="visible" style="vertical-align:text-bottom"><path d="M23.922 16.9
-92c-.861 1.495-5.859 5.023-11.922 5.023-6.063 0-11.061-3.528-11.922-5.023A.641.
-641 0 0 1 0 16.736v-2.869a.841.841 0 0 1 .053-.22c.372-.935 1.347-2.292 2.605-2
-.656.167-.429.414-1.055.644-1.517a10.195 10.195 0 0 1-.052-1.086c0-1.331.282-2.
-499 1.132-3.368.397-.406.89-.717 1.474-.952 1.399-1.136 3.392-2.093 6.122-2.093
- 2.731 0 4.767.957 6.166 2.093.584.235 1.077.546 1.474.952.85.869 1.132 2.037 1
-.132 3.368 0 .368-.014.733-.052 1.086.23.462.477 1.088.644 1.517 1.258.364 2.23
-3 1.721 2.605 2.656a.832.832 0 0 1 .053.22v2.869a.641.641 0 0 1-.078.256ZM12.17
-2 11h-.344a4.323 4.323 0 0 1-.355.508C10.703 12.455 9.555 13 7.965 13c-1.725 0-
-2.989-.359-3.782-1.259a2.005 2.005 0 0 1-.085-.104L4 11.741v6.585c1.435.779 4.5
-14 2.179 8 2.179 3.486 0 6.565-1.4 8-2.179v-6.585l-.098-.104s-.033.045-.085.104
-c-.793.9-2.057 1.259-3.782 1.259-1.59 0-2.738-.545-3.508-1.492a4.323 4.323 0 0
-1-.355-.508h-.016.016Zm.641-2.935c.136 1.057.403 1.913.878 2.497.442.544 1.134.
-938 2.344.938 1.573 0 2.292-.337 2.657-.751.384-.435.558-1.15.558-2.361 0-1.14-
-.243-1.847-.705-2.319-.477-.488-1.319-.862-2.824-1.025-1.487-.161-2.192.138-2.5
-33.529-.269.307-.437.808-.438 1.578v.021c0 .265.021.562.063.893Zm-1.626 0c.042-
-.331.063-.628.063-.894v-.02c-.001-.77-.169-1.271-.438-1.578-.341-.391-1.046-.69
--2.533-.529-1.505.163-2.347.537-2.824 1.025-.462.472-.705 1.179-.705 2.319 0 1.
-211.175 1.926.558 2.361.365.414 1.084.751 2.657.751 1.21 0 1.902-.394 2.344-.93
-8.475-.584.742-1.44.878-2.497Z"></path><path d="M14.5 14.25a1 1 0 0 1 1 1v2a1 1
- 0 0 1-2 0v-2a1 1 0 0 1 1-1Zm-5 0a1 1 0 0 1 1 1v2a1 1 0 0 1-2 0v-2a1 1 0 0 1 1-
-1Z"></path></svg><span class="NavLink-module__title--xw3ok">GitHub Copilot</spa
-n><span class="NavLink-module__subtitle--qC15H">Write better code with AI</span
-></div></a></li><li><a href="https://github.com/features/spark" data-analytics-
-event="{&quot;action&quot;:&quot;github_spark&quot;,&quot;tag&quot;:&quot;link&
-quot;,&quot;context&quot;:&quot;platform&quot;,&quot;location&quot;:&quot;navba
-r&quot;,&quot;label&quot;:&quot;github_spark_link_platform_navbar&quot;}" class
-="NavLink-module__link--n48VB"><div class="NavLink-module__text--SdWkb"><svg ar
-ia-hidden="true" focusable="false" class="octicon octicon-sparkle-fill NavLink-
-module__icon--h0sw7" viewBox="0 0 24 24" width="24" height="24" fill="currentCo
-lor" display="inline-block" overflow="visible" style="vertical-align:text-botto
-m"><path d="M11.296 1.924c.24-.656 1.168-.656 1.408 0l.717 1.958a11.25 11.25 0
-0 0 6.697 6.697l1.958.717c.657.24.657 1.168 0 1.408l-1.958.717a11.25 11.25 0 0
-0-6.697 6.697l-.717 1.958c-.24.657-1.168.657-1.408 0l-.717-1.958a11.25 11.25 0
-0 0-6.697-6.697l-1.958-.717c-.656-.24-.656-1.168 0-1.408l1.958-.717a11.25 11.25
- 0 0 0 6.697-6.697l.717-1.958Z"></path></svg><span class="NavLink-module__title
---xw3ok">GitHub Spark</span><span class="NavLink-module__subtitle--qC15H">Build
- and deploy intelligent apps</span></div></a></li><li><a href="https://github.c
-om/features/models" data-analytics-event="{&quot;action&quot;:&quot;github_mode
-ls&quot;,&quot;tag&quot;:&quot;link&quot;,&quot;context&quot;:&quot;platform&qu
-ot;,&quot;location&quot;:&quot;navbar&quot;,&quot;label&quot;:&quot;github_mode
-ls_link_platform_navbar&quot;}" class="NavLink-module__link--n48VB"><div class=
-"NavLink-module__text--SdWkb"><svg aria-hidden="true" focusable="false" class="
-octicon octicon-ai-model NavLink-module__icon--h0sw7" viewBox="0 0 24 24" width
-="24" height="24" fill="currentColor" display="inline-block" overflow="visible"
- style="vertical-align:text-bottom"><path d="M19.375 8.5a3.25 3.25 0 1 1-3.163
-4h-3a3.252 3.252 0 0 1-4.443 2.509L7.214 17.76a3.25 3.25 0 1 1-1.342-.674l1.672
--2.957A3.238 3.238 0 0 1 6.75 12c0-.907.371-1.727.97-2.316L6.117 6.846A3.253 3.
-253 0 0 1 1.875 3.75a3.25 3.25 0 1 1 5.526 2.32l1.603 2.836A3.25 3.25 0 0 1 13.
-093 11h3.119a3.252 3.252 0 0 1 3.163-2.5ZM10 10.25a1.75 1.75 0 1 0-.001 3.499A1
-.75 1.75 0 0 0 10 10.25ZM5.125 2a1.75 1.75 0 1 0 0 3.5 1.75 1.75 0 0 0 0-3.5Zm1
-2.5 9.75a1.75 1.75 0 1 0 3.5 0 1.75 1.75 0 0 0-3.5 0Zm-14.25 8.5a1.75 1.75 0 1
-0 3.501-.001 1.75 1.75 0 0 0-3.501.001Z"></path></svg><span class="NavLink-modu
-le__title--xw3ok">GitHub Models</span><span class="NavLink-module__subtitle--qC
-15H">Manage and compare prompts</span></div></a></li><li><a href="https://githu
-b.com/mcp" data-analytics-event="{&quot;action&quot;:&quot;mcp_registry&quot;,&
-quot;tag&quot;:&quot;link&quot;,&quot;context&quot;:&quot;platform&quot;,&quot;
-location&quot;:&quot;navbar&quot;,&quot;label&quot;:&quot;mcp_registry_link_pla
-tform_navbar&quot;}" class="NavLink-module__link--n48VB"><div class="NavLink-mo
-dule__text--SdWkb"><svg aria-hidden="true" focusable="false" class="octicon oct
-icon-mcp NavLink-module__icon--h0sw7" viewBox="0 0 24 24" width="24" height="24
-" fill="currentColor" display="inline-block" overflow="visible" style="vertical
--align:text-bottom"><path d="M9.795 1.694a4.287 4.287 0 0 1 6.061 0 4.28 4.28 0
- 0 1 1.181 3.819 4.282 4.282 0 0 1 3.819 1.181 4.287 4.287 0 0 1 0 6.061l-6.793
- 6.793a.249.249 0 0 0 0 .353l2.617 2.618a.75.75 0 1 1-1.061 1.061l-2.617-2.618a
-1.75 1.75 0 0 1 0-2.475l6.793-6.793a2.785 2.785 0 1 0-3.939-3.939l-5.9 5.9a.734
-.734 0 0 1-.249.165.749.749 0 0 1-.812-1.225l5.9-5.901a2.785 2.785 0 1 0-3.939-
-3.939L2.931 10.68A.75.75 0 1 1 1.87 9.619l7.925-7.925Z"></path><path d="M12.42
-4.069a.752.752 0 0 1 1.061 0 .752.752 0 0 1 0 1.061L7.33 11.28a2.788 2.788 0 0
-0 0 3.94 2.788 2.788 0 0 0 3.94 0l6.15-6.151a.752.752 0 0 1 1.061 0 .752.752 0
-0 1 0 1.061l-6.151 6.15a4.285 4.285 0 1 1-6.06-6.06l6.15-6.151Z"></path></svg><
-span class="NavLink-module__title--xw3ok">MCP Registry<sup class="NavLink-modul
-e__label--MrIhm">New</sup></span><span class="NavLink-module__subtitle--qC15H">
-Integrate external tools</span></div></a></li></ul></div></li><li><div class="N
-avGroup-module__group--T925n"><span class="NavGroup-module__title--TdKyz">DEVEL
-OPER WORKFLOWS</span><ul class="NavGroup-module__list--M8eGv"><li><a href="http
-s://github.com/features/actions" data-analytics-event="{&quot;action&quot;:&quo
-t;actions&quot;,&quot;tag&quot;:&quot;link&quot;,&quot;context&quot;:&quot;plat
-form&quot;,&quot;location&quot;:&quot;navbar&quot;,&quot;label&quot;:&quot;acti
-ons_link_platform_navbar&quot;}" class="NavLink-module__link--n48VB"><div class
-="NavLink-module__text--SdWkb"><svg aria-hidden="true" focusable="false" class=
-"octicon octicon-workflow NavLink-module__icon--h0sw7" viewBox="0 0 24 24" widt
-h="24" height="24" fill="currentColor" display="inline-block" overflow="visible
-" style="vertical-align:text-bottom"><path d="M1 3a2 2 0 0 1 2-2h6.5a2 2 0 0 1
-2 2v6.5a2 2 0 0 1-2 2H7v4.063C7 16.355 7.644 17 8.438 17H12.5v-2.5a2 2 0 0 1 2-
-2H21a2 2 0 0 1 2 2V21a2 2 0 0 1-2 2h-6.5a2 2 0 0 1-2-2v-2.5H8.437A2.939 2.939 0
- 0 1 5.5 15.562V11.5H3a2 2 0 0 1-2-2Zm2-.5a.5.5 0 0 0-.5.5v6.5a.5.5 0 0 0 .5.5h
-6.5a.5.5 0 0 0 .5-.5V3a.5.5 0 0 0-.5-.5ZM14.5 14a.5.5 0 0 0-.5.5V21a.5.5 0 0 0
-.5.5H21a.5.5 0 0 0 .5-.5v-6.5a.5.5 0 0 0-.5-.5Z"></path></svg><span class="NavL
-ink-module__title--xw3ok">Actions</span><span class="NavLink-module__subtitle--
-qC15H">Automate any workflow</span></div></a></li><li><a href="https://github.c
-om/features/codespaces" data-analytics-event="{&quot;action&quot;:&quot;codespa
-ces&quot;,&quot;tag&quot;:&quot;link&quot;,&quot;context&quot;:&quot;platform&q
-uot;,&quot;location&quot;:&quot;navbar&quot;,&quot;label&quot;:&quot;codespaces
-_link_platform_navbar&quot;}" class="NavLink-module__link--n48VB"><div class="N
-avLink-module__text--SdWkb"><svg aria-hidden="true" focusable="false" class="oc
-ticon octicon-codespaces NavLink-module__icon--h0sw7" viewBox="0 0 24 24" width
-="24" height="24" fill="currentColor" display="inline-block" overflow="visible"
- style="vertical-align:text-bottom"><path d="M3.5 3.75C3.5 2.784 4.284 2 5.25 2
-h13.5c.966 0 1.75.784 1.75 1.75v7.5A1.75 1.75 0 0 1 18.75 13H5.25a1.75 1.75 0 0
- 1-1.75-1.75Zm-2 12c0-.966.784-1.75 1.75-1.75h17.5c.966 0 1.75.784 1.75 1.75v4a
-1.75 1.75 0 0 1-1.75 1.75H3.25a1.75 1.75 0 0 1-1.75-1.75ZM5.25 3.5a.25.25 0 0 0
--.25.25v7.5c0 .138.112.25.25.25h13.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25
--.25Zm-2 12a.25.25 0 0 0-.25.25v4c0 .138.112.25.25.25h17.5a.25.25 0 0 0 .25-.25
-v-4a.25.25 0 0 0-.25-.25Z"></path><path d="M10 17.75a.75.75 0 0 1 .75-.75h6.5a.
-75.75 0 0 1 0 1.5h-6.5a.75.75 0 0 1-.75-.75Zm-4 0a.75.75 0 0 1 .75-.75h.5a.75.7
-5 0 0 1 0 1.5h-.5a.75.75 0 0 1-.75-.75Z"></path></svg><span class="NavLink-modu
-le__title--xw3ok">Codespaces</span><span class="NavLink-module__subtitle--qC15H
-">Instant dev environments</span></div></a></li><li><a href="https://github.com
-/features/issues" data-analytics-event="{&quot;action&quot;:&quot;issues&quot;,
-&quot;tag&quot;:&quot;link&quot;,&quot;context&quot;:&quot;platform&quot;,&quot
-;location&quot;:&quot;navbar&quot;,&quot;label&quot;:&quot;issues_link_platform
-_navbar&quot;}" class="NavLink-module__link--n48VB"><div class="NavLink-module_
-_text--SdWkb"><svg aria-hidden="true" focusable="false" class="octicon octicon-
-issue-opened NavLink-module__icon--h0sw7" viewBox="0 0 24 24" width="24" height
-="24" fill="currentColor" display="inline-block" overflow="visible" style="vert
-ical-align:text-bottom"><path d="M12 1c6.075 0 11 4.925 11 11s-4.925 11-11 11S1
- 18.075 1 12 5.925 1 12 1ZM2.5 12a9.5 9.5 0 0 0 9.5 9.5 9.5 9.5 0 0 0 9.5-9.5A9
-.5 9.5 0 0 0 12 2.5 9.5 9.5 0 0 0 2.5 12Zm9.5 2a2 2 0 1 1-.001-3.999A2 2 0 0 1
-12 14Z"></path></svg><span class="NavLink-module__title--xw3ok">Issues</span><s
-pan class="NavLink-module__subtitle--qC15H">Plan and track work</span></div></a
-></li><li><a href="https://github.com/features/code-review" data-analytics-even
-t="{&quot;action&quot;:&quot;code_review&quot;,&quot;tag&quot;:&quot;link&quot;
-,&quot;context&quot;:&quot;platform&quot;,&quot;location&quot;:&quot;navbar&quo
-t;,&quot;label&quot;:&quot;code_review_link_platform_navbar&quot;}" class="NavL
-ink-module__link--n48VB"><div class="NavLink-module__text--SdWkb"><svg aria-hid
-den="true" focusable="false" class="octicon octicon-code NavLink-module__icon--
-h0sw7" viewBox="0 0 24 24" width="24" height="24" fill="currentColor" display="
-inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="M1
-5.22 4.97a.75.75 0 0 1 1.06 0l6.5 6.5a.75.75 0 0 1 0 1.06l-6.5 6.5a.749.749 0 0
- 1-1.275-.326.749.749 0 0 1 .215-.734L21.19 12l-5.97-5.97a.75.75 0 0 1 0-1.06Zm
--6.44 0a.75.75 0 0 1 0 1.06L2.81 12l5.97 5.97a.749.749 0 0 1-.326 1.275.749.749
- 0 0 1-.734-.215l-6.5-6.5a.75.75 0 0 1 0-1.06l6.5-6.5a.75.75 0 0 1 1.06 0Z"></p
-ath></svg><span class="NavLink-module__title--xw3ok">Code Review</span><span cl
-ass="NavLink-module__subtitle--qC15H">Manage code changes</span></div></a></li>
-</ul></div></li><li><div class="NavGroup-module__group--T925n"><span class="Nav
-Group-module__title--TdKyz">APPLICATION SECURITY</span><ul class="NavGroup-modu
-le__list--M8eGv"><li><a href="https://github.com/security/advanced-security" da
-ta-analytics-event="{&quot;action&quot;:&quot;github_advanced_security&quot;,&q
-uot;tag&quot;:&quot;link&quot;,&quot;context&quot;:&quot;platform&quot;,&quot;l
-ocation&quot;:&quot;navbar&quot;,&quot;label&quot;:&quot;github_advanced_securi
-ty_link_platform_navbar&quot;}" class="NavLink-module__link--n48VB"><div class=
-"NavLink-module__text--SdWkb"><svg aria-hidden="true" focusable="false" class="
-octicon octicon-shield-check NavLink-module__icon--h0sw7" viewBox="0 0 24 24" w
-idth="24" height="24" fill="currentColor" display="inline-block" overflow="visi
-ble" style="vertical-align:text-bottom"><path d="M16.53 9.78a.75.75 0 0 0-1.06-
-1.06L11 13.19l-1.97-1.97a.75.75 0 0 0-1.06 1.06l2.5 2.5a.75.75 0 0 0 1.06 0l5-5
-Z"></path><path d="m12.54.637 8.25 2.675A1.75 1.75 0 0 1 22 4.976V10c0 6.19-3.7
-71 10.704-9.401 12.83a1.704 1.704 0 0 1-1.198 0C5.77 20.705 2 16.19 2 10V4.976c
-0-.758.489-1.43 1.21-1.664L11.46.637a1.748 1.748 0 0 1 1.08 0Zm-.617 1.426-8.25
- 2.676a.249.249 0 0 0-.173.237V10c0 5.46 3.28 9.483 8.43 11.426a.199.199 0 0 0
-.14 0C17.22 19.483 20.5 15.461 20.5 10V4.976a.25.25 0 0 0-.173-.237l-8.25-2.676
-a.253.253 0 0 0-.154 0Z"></path></svg><span class="NavLink-module__title--xw3ok
-">GitHub Advanced Security</span><span class="NavLink-module__subtitle--qC15H">
-Find and fix vulnerabilities</span></div></a></li><li><a href="https://github.c
-om/security/advanced-security/code-security" data-analytics-event="{&quot;actio
-n&quot;:&quot;code_security&quot;,&quot;tag&quot;:&quot;link&quot;,&quot;contex
-t&quot;:&quot;platform&quot;,&quot;location&quot;:&quot;navbar&quot;,&quot;labe
-l&quot;:&quot;code_security_link_platform_navbar&quot;}" class="NavLink-module_
-_link--n48VB"><div class="NavLink-module__text--SdWkb"><svg aria-hidden="true"
-focusable="false" class="octicon octicon-code-square NavLink-module__icon--h0sw
-7" viewBox="0 0 24 24" width="24" height="24" fill="currentColor" display="inli
-ne-block" overflow="visible" style="vertical-align:text-bottom"><path d="M10.3
-8.24a.75.75 0 0 1-.04 1.06L7.352 12l2.908 2.7a.75.75 0 1 1-1.02 1.1l-3.5-3.25a.
-75.75 0 0 1 0-1.1l3.5-3.25a.75.75 0 0 1 1.06.04Zm3.44 1.06a.75.75 0 1 1 1.02-1.
-1l3.5 3.25a.75.75 0 0 1 0 1.1l-3.5 3.25a.75.75 0 1 1-1.02-1.1l2.908-2.7-2.908-2
-.7Z"></path><path d="M2 3.75C2 2.784 2.784 2 3.75 2h16.5c.966 0 1.75.784 1.75 1
-.75v16.5A1.75 1.75 0 0 1 20.25 22H3.75A1.75 1.75 0 0 1 2 20.25Zm1.75-.25a.25.25
- 0 0 0-.25.25v16.5c0 .138.112.25.25.25h16.5a.25.25 0 0 0 .25-.25V3.75a.25.25 0
-0 0-.25-.25Z"></path></svg><span class="NavLink-module__title--xw3ok">Code secu
-rity</span><span class="NavLink-module__subtitle--qC15H">Secure your code as yo
-u build</span></div></a></li><li><a href="https://github.com/security/advanced-
-security/secret-protection" data-analytics-event="{&quot;action&quot;:&quot;sec
-ret_protection&quot;,&quot;tag&quot;:&quot;link&quot;,&quot;context&quot;:&quot
-;platform&quot;,&quot;location&quot;:&quot;navbar&quot;,&quot;label&quot;:&quot
-;secret_protection_link_platform_navbar&quot;}" class="NavLink-module__link--n4
-8VB"><div class="NavLink-module__text--SdWkb"><svg aria-hidden="true" focusable
-="false" class="octicon octicon-lock NavLink-module__icon--h0sw7" viewBox="0 0
-24 24" width="24" height="24" fill="currentColor" display="inline-block" overfl
-ow="visible" style="vertical-align:text-bottom"><path d="M6 9V7.25C6 3.845 8.50
-3 1 12 1s6 2.845 6 6.25V9h.5a2.5 2.5 0 0 1 2.5 2.5v8a2.5 2.5 0 0 1-2.5 2.5h-13A
-2.5 2.5 0 0 1 3 19.5v-8A2.5 2.5 0 0 1 5.5 9Zm-1.5 2.5v8a1 1 0 0 0 1 1h13a1 1 0
-0 0 1-1v-8a1 1 0 0 0-1-1h-13a1 1 0 0 0-1 1Zm3-4.25V9h9V7.25c0-2.67-1.922-4.75-4
-.5-4.75-2.578 0-4.5 2.08-4.5 4.75Z"></path></svg><span class="NavLink-module__t
-itle--xw3ok">Secret protection</span><span class="NavLink-module__subtitle--qC1
-5H">Stop leaks before they start</span></div></a></li></ul></div></li><li><div
-class="NavGroup-module__group--T925n NavGroup-module__hasSeparator--AJeNz"><spa
-n class="NavGroup-module__title--TdKyz">EXPLORE</span><ul class="NavGroup-modul
-e__list--M8eGv"><li><a href="https://github.com/why-github" data-analytics-even
-t="{&quot;action&quot;:&quot;why_github&quot;,&quot;tag&quot;:&quot;link&quot;,
-&quot;context&quot;:&quot;platform&quot;,&quot;location&quot;:&quot;navbar&quot
-;,&quot;label&quot;:&quot;why_github_link_platform_navbar&quot;}" class="NavLin
-k-module__link--n48VB"><span class="NavLink-module__title--xw3ok">Why GitHub</s
-pan></a></li><li><a href="https://docs.github.com" data-analytics-event="{&quot
-;action&quot;:&quot;documentation&quot;,&quot;tag&quot;:&quot;link&quot;,&quot;
-context&quot;:&quot;platform&quot;,&quot;location&quot;:&quot;navbar&quot;,&quo
-t;label&quot;:&quot;documentation_link_platform_navbar&quot;}" class="NavLink-m
-odule__link--n48VB" target="_blank" rel="noreferrer"><span class="NavLink-modul
-e__title--xw3ok">Documentation</span><svg aria-hidden="true" focusable="false"
-class="octicon octicon-link-external NavLink-module__externalIcon--JurQ9" viewB
-ox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block
-" overflow="visible" style="vertical-align:text-bottom"><path d="M3.75 2h3.5a.7
-5.75 0 0 1 0 1.5h-3.5a.25.25 0 0 0-.25.25v8.5c0 .138.112.25.25.25h8.5a.25.25 0
-0 0 .25-.25v-3.5a.75.75 0 0 1 1.5 0v3.5A1.75 1.75 0 0 1 12.25 14h-8.5A1.75 1.75
- 0 0 1 2 12.25v-8.5C2 2.784 2.784 2 3.75 2Zm6.854-1h4.146a.25.25 0 0 1 .25.25v4
-.146a.25.25 0 0 1-.427.177L13.03 4.03 9.28 7.78a.751.751 0 0 1-1.042-.018.751.7
-51 0 0 1-.018-1.042l3.75-3.75-1.543-1.543A.25.25 0 0 1 10.604 1Z"></path></svg>
-</a></li><li><a href="https://github.blog" data-analytics-event="{&quot;action&
-quot;:&quot;blog&quot;,&quot;tag&quot;:&quot;link&quot;,&quot;context&quot;:&qu
-ot;platform&quot;,&quot;location&quot;:&quot;navbar&quot;,&quot;label&quot;:&qu
-ot;blog_link_platform_navbar&quot;}" class="NavLink-module__link--n48VB" target
-="_blank" rel="noreferrer"><span class="NavLink-module__title--xw3ok">Blog</spa
-n><svg aria-hidden="true" focusable="false" class="octicon octicon-link-externa
-l NavLink-module__externalIcon--JurQ9" viewBox="0 0 16 16" width="16" height="1
-6" fill="currentColor" display="inline-block" overflow="visible" style="vertica
-l-align:text-bottom"><path d="M3.75 2h3.5a.75.75 0 0 1 0 1.5h-3.5a.25.25 0 0 0-
-.25.25v8.5c0 .138.112.25.25.25h8.5a.25.25 0 0 0 .25-.25v-3.5a.75.75 0 0 1 1.5 0
-v3.5A1.75 1.75 0 0 1 12.25 14h-8.5A1.75 1.75 0 0 1 2 12.25v-8.5C2 2.784 2.784 2
- 3.75 2Zm6.854-1h4.146a.25.25 0 0 1 .25.25v4.146a.25.25 0 0 1-.427.177L13.03 4.
-03 9.28 7.78a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042l3.75-3.75-1.543
--1.543A.25.25 0 0 1 10.604 1Z"></path></svg></a></li><li><a href="https://githu
-b.blog/changelog" data-analytics-event="{&quot;action&quot;:&quot;changelog&quo
-t;,&quot;tag&quot;:&quot;link&quot;,&quot;context&quot;:&quot;platform&quot;,&q
-uot;location&quot;:&quot;navbar&quot;,&quot;label&quot;:&quot;changelog_link_pl
-atform_navbar&quot;}" class="NavLink-module__link--n48VB" target="_blank" rel="
-noreferrer"><span class="NavLink-module__title--xw3ok">Changelog</span><svg ari
-a-hidden="true" focusable="false" class="octicon octicon-link-external NavLink-
-module__externalIcon--JurQ9" viewBox="0 0 16 16" width="16" height="16" fill="c
-urrentColor" display="inline-block" overflow="visible" style="vertical-align:te
-xt-bottom"><path d="M3.75 2h3.5a.75.75 0 0 1 0 1.5h-3.5a.25.25 0 0 0-.25.25v8.5
-c0 .138.112.25.25.25h8.5a.25.25 0 0 0 .25-.25v-3.5a.75.75 0 0 1 1.5 0v3.5A1.75
-1.75 0 0 1 12.25 14h-8.5A1.75 1.75 0 0 1 2 12.25v-8.5C2 2.784 2.784 2 3.75 2Zm6
-.854-1h4.146a.25.25 0 0 1 .25.25v4.146a.25.25 0 0 1-.427.177L13.03 4.03 9.28 7.
-78a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042l3.75-3.75-1.543-1.543A.25
-.25 0 0 1 10.604 1Z"></path></svg></a></li><li><a href="https://github.com/mark
-etplace" data-analytics-event="{&quot;action&quot;:&quot;marketplace&quot;,&quo
-t;tag&quot;:&quot;link&quot;,&quot;context&quot;:&quot;platform&quot;,&quot;loc
-ation&quot;:&quot;navbar&quot;,&quot;label&quot;:&quot;marketplace_link_platfor
-m_navbar&quot;}" class="NavLink-module__link--n48VB"><span class="NavLink-modul
-e__title--xw3ok">Marketplace</span></a></li></ul></div></li></ul><div class="Na
-vDropdown-module__trailingLinkContainer--MNB5T"><a href="https://github.com/fea
-tures" data-analytics-event="{&quot;action&quot;:&quot;view_all_features&quot;,
-&quot;tag&quot;:&quot;link&quot;,&quot;context&quot;:&quot;platform&quot;,&quot
-;location&quot;:&quot;navbar&quot;,&quot;label&quot;:&quot;view_all_features_li
-nk_platform_navbar&quot;}" class="NavLink-module__link--n48VB"><span class="Nav
-Link-module__title--xw3ok">View all features</span><svg aria-hidden="true" focu
-sable="false" class="octicon octicon-chevron-right NavLink-module__arrowIcon--g
-6Lip" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="i
-nline-block" overflow="visible" style="vertical-align:text-bottom"><path d="M6.
-22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.751.751 0
- 0 1-1.042-.018.751.751 0 0 1-.018-1.042L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z"
-></path></svg></a></div></div></div></li><li><div class="NavDropdown-module__co
-ntainer--bmXM2 js-details-container js-header-menu-item"><button type="button"
-class="NavDropdown-module__button--Hq9UR js-details-target" aria-expanded="fals
-e">Solutions<svg aria-hidden="true" focusable="false" class="octicon octicon-ch
-evron-right NavDropdown-module__buttonIcon--SR0Ke" viewBox="0 0 16 16" width="1
-6" height="16" fill="currentColor" display="inline-block" overflow="visible" st
-yle="vertical-align:text-bottom"><path d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4
-.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018
--1.042L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z"></path></svg></button><div class=
-"NavDropdown-module__dropdown--Ig57Y"><ul class="NavDropdown-module__list--RwSS
-K"><li><div class="NavGroup-module__group--T925n"><span class="NavGroup-module_
-_title--TdKyz">BY COMPANY SIZE</span><ul class="NavGroup-module__list--M8eGv"><
-li><a href="https://github.com/enterprise" data-analytics-event="{&quot;action&
-quot;:&quot;enterprises&quot;,&quot;tag&quot;:&quot;link&quot;,&quot;context&qu
-ot;:&quot;solutions&quot;,&quot;location&quot;:&quot;navbar&quot;,&quot;label&q
-uot;:&quot;enterprises_link_solutions_navbar&quot;}" class="NavLink-module__lin
-k--n48VB"><span class="NavLink-module__title--xw3ok">Enterprises</span></a></li
-><li><a href="https://github.com/team" data-analytics-event="{&quot;action&quot
-;:&quot;small_and_medium_teams&quot;,&quot;tag&quot;:&quot;link&quot;,&quot;con
-text&quot;:&quot;solutions&quot;,&quot;location&quot;:&quot;navbar&quot;,&quot;
-label&quot;:&quot;small_and_medium_teams_link_solutions_navbar&quot;}" class="N
-avLink-module__link--n48VB"><span class="NavLink-module__title--xw3ok">Small an
-d medium teams</span></a></li><li><a href="https://github.com/enterprise/startu
-ps" data-analytics-event="{&quot;action&quot;:&quot;startups&quot;,&quot;tag&qu
-ot;:&quot;link&quot;,&quot;context&quot;:&quot;solutions&quot;,&quot;location&q
-uot;:&quot;navbar&quot;,&quot;label&quot;:&quot;startups_link_solutions_navbar&
-quot;}" class="NavLink-module__link--n48VB"><span class="NavLink-module__title-
--xw3ok">Startups</span></a></li><li><a href="https://github.com/solutions/indus
-try/nonprofits" data-analytics-event="{&quot;action&quot;:&quot;nonprofits&quot
-;,&quot;tag&quot;:&quot;link&quot;,&quot;context&quot;:&quot;solutions&quot;,&q
-uot;location&quot;:&quot;navbar&quot;,&quot;label&quot;:&quot;nonprofits_link_s
-olutions_navbar&quot;}" class="NavLink-module__link--n48VB"><span class="NavLin
-k-module__title--xw3ok">Nonprofits</span></a></li></ul></div></li><li><div clas
-s="NavGroup-module__group--T925n"><span class="NavGroup-module__title--TdKyz">B
-Y USE CASE</span><ul class="NavGroup-module__list--M8eGv"><li><a href="https://
-github.com/solutions/use-case/app-modernization" data-analytics-event="{&quot;a
-ction&quot;:&quot;app_modernization&quot;,&quot;tag&quot;:&quot;link&quot;,&quo
-t;context&quot;:&quot;solutions&quot;,&quot;location&quot;:&quot;navbar&quot;,&
-quot;label&quot;:&quot;app_modernization_link_solutions_navbar&quot;}" class="N
-avLink-module__link--n48VB"><span class="NavLink-module__title--xw3ok">App Mode
-rnization</span></a></li><li><a href="https://github.com/solutions/use-case/dev
-secops" data-analytics-event="{&quot;action&quot;:&quot;devsecops&quot;,&quot;t
-ag&quot;:&quot;link&quot;,&quot;context&quot;:&quot;solutions&quot;,&quot;locat
-ion&quot;:&quot;navbar&quot;,&quot;label&quot;:&quot;devsecops_link_solutions_n
-avbar&quot;}" class="NavLink-module__link--n48VB"><span class="NavLink-module__
-title--xw3ok">DevSecOps</span></a></li><li><a href="https://github.com/solution
-s/use-case/devops" data-analytics-event="{&quot;action&quot;:&quot;devops&quot;
-,&quot;tag&quot;:&quot;link&quot;,&quot;context&quot;:&quot;solutions&quot;,&qu
-ot;location&quot;:&quot;navbar&quot;,&quot;label&quot;:&quot;devops_link_soluti
-ons_navbar&quot;}" class="NavLink-module__link--n48VB"><span class="NavLink-mod
-ule__title--xw3ok">DevOps</span></a></li><li><a href="https://github.com/soluti
-ons/use-case/ci-cd" data-analytics-event="{&quot;action&quot;:&quot;ci/cd&quot;
-,&quot;tag&quot;:&quot;link&quot;,&quot;context&quot;:&quot;solutions&quot;,&qu
-ot;location&quot;:&quot;navbar&quot;,&quot;label&quot;:&quot;ci/cd_link_solutio
-ns_navbar&quot;}" class="NavLink-module__link--n48VB"><span class="NavLink-modu
-le__title--xw3ok">CI/CD</span></a></li><li><a href="https://github.com/solution
-s/use-case" data-analytics-event="{&quot;action&quot;:&quot;view_all_use_cases&
-quot;,&quot;tag&quot;:&quot;link&quot;,&quot;context&quot;:&quot;solutions&quot
-;,&quot;location&quot;:&quot;navbar&quot;,&quot;label&quot;:&quot;view_all_use_
-cases_link_solutions_navbar&quot;}" class="NavLink-module__link--n48VB"><span c
-lass="NavLink-module__title--xw3ok">View all use cases</span><svg aria-hidden="
-true" focusable="false" class="octicon octicon-chevron-right NavLink-module__ar
-rowIcon--g6Lip" viewBox="0 0 16 16" width="16" height="16" fill="currentColor"
-display="inline-block" overflow="visible" style="vertical-align:text-bottom"><p
-ath d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a
-.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L9.94 8 6.22 4.28a.75.75 0 0
-1 0-1.06Z"></path></svg></a></li></ul></div></li><li><div class="NavGroup-modul
-e__group--T925n"><span class="NavGroup-module__title--TdKyz">BY INDUSTRY</span>
-<ul class="NavGroup-module__list--M8eGv"><li><a href="https://github.com/soluti
-ons/industry/healthcare" data-analytics-event="{&quot;action&quot;:&quot;health
-care&quot;,&quot;tag&quot;:&quot;link&quot;,&quot;context&quot;:&quot;solutions
-&quot;,&quot;location&quot;:&quot;navbar&quot;,&quot;label&quot;:&quot;healthca
-re_link_solutions_navbar&quot;}" class="NavLink-module__link--n48VB"><span clas
-s="NavLink-module__title--xw3ok">Healthcare</span></a></li><li><a href="https:/
-/github.com/solutions/industry/financial-services" data-analytics-event="{&quot
-;action&quot;:&quot;financial_services&quot;,&quot;tag&quot;:&quot;link&quot;,&
-quot;context&quot;:&quot;solutions&quot;,&quot;location&quot;:&quot;navbar&quot
-;,&quot;label&quot;:&quot;financial_services_link_solutions_navbar&quot;}" clas
-s="NavLink-module__link--n48VB"><span class="NavLink-module__title--xw3ok">Fina
-ncial services</span></a></li><li><a href="https://github.com/solutions/industr
-y/manufacturing" data-analytics-event="{&quot;action&quot;:&quot;manufacturing&
-quot;,&quot;tag&quot;:&quot;link&quot;,&quot;context&quot;:&quot;solutions&quot
-;,&quot;location&quot;:&quot;navbar&quot;,&quot;label&quot;:&quot;manufacturing
-_link_solutions_navbar&quot;}" class="NavLink-module__link--n48VB"><span class=
-"NavLink-module__title--xw3ok">Manufacturing</span></a></li><li><a href="https:
-//github.com/solutions/industry/government" data-analytics-event="{&quot;action
-&quot;:&quot;government&quot;,&quot;tag&quot;:&quot;link&quot;,&quot;context&qu
-ot;:&quot;solutions&quot;,&quot;location&quot;:&quot;navbar&quot;,&quot;label&q
-uot;:&quot;government_link_solutions_navbar&quot;}" class="NavLink-module__link
---n48VB"><span class="NavLink-module__title--xw3ok">Government</span></a></li><
-li><a href="https://github.com/solutions/industry" data-analytics-event="{&quot
-;action&quot;:&quot;view_all_industries&quot;,&quot;tag&quot;:&quot;link&quot;,
-&quot;context&quot;:&quot;solutions&quot;,&quot;location&quot;:&quot;navbar&quo
-t;,&quot;label&quot;:&quot;view_all_industries_link_solutions_navbar&quot;}" cl
-ass="NavLink-module__link--n48VB"><span class="NavLink-module__title--xw3ok">Vi
-ew all industries</span><svg aria-hidden="true" focusable="false" class="octico
-n octicon-chevron-right NavLink-module__arrowIcon--g6Lip" viewBox="0 0 16 16" w
-idth="16" height="16" fill="currentColor" display="inline-block" overflow="visi
-ble" style="vertical-align:text-bottom"><path d="M6.22 3.22a.75.75 0 0 1 1.06 0
-l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.751.751 0 0 1-1.042-.018.751.751 0 0
- 1-.018-1.042L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z"></path></svg></a></li></ul
-></div></li></ul><div class="NavDropdown-module__trailingLinkContainer--MNB5T">
-<a href="https://github.com/solutions" data-analytics-event="{&quot;action&quot
-;:&quot;view_all_solutions&quot;,&quot;tag&quot;:&quot;link&quot;,&quot;context
-&quot;:&quot;solutions&quot;,&quot;location&quot;:&quot;navbar&quot;,&quot;labe
-l&quot;:&quot;view_all_solutions_link_solutions_navbar&quot;}" class="NavLink-m
-odule__link--n48VB"><span class="NavLink-module__title--xw3ok">View all solutio
-ns</span><svg aria-hidden="true" focusable="false" class="octicon octicon-chevr
-on-right NavLink-module__arrowIcon--g6Lip" viewBox="0 0 16 16" width="16" heigh
-t="16" fill="currentColor" display="inline-block" overflow="visible" style="ver
-tical-align:text-bottom"><path d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.
-75 0 0 1 0 1.06l-4.25 4.25a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L9
-.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z"></path></svg></a></div></div></div></li><
-li><div class="NavDropdown-module__container--bmXM2 js-details-container js-hea
-der-menu-item"><button type="button" class="NavDropdown-module__button--Hq9UR j
-s-details-target" aria-expanded="false">Resources<svg aria-hidden="true" focusa
-ble="false" class="octicon octicon-chevron-right NavDropdown-module__buttonIcon
---SR0Ke" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display
-="inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="
-M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.751.75
-1 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.0
-6Z"></path></svg></button><div class="NavDropdown-module__dropdown--Ig57Y"><ul
-class="NavDropdown-module__list--RwSSK"><li><div class="NavGroup-module__group-
--T925n"><span class="NavGroup-module__title--TdKyz">EXPLORE BY TOPIC</span><ul
-class="NavGroup-module__list--M8eGv"><li><a href="https://github.com/resources/
-articles?topic=ai" data-analytics-event="{&quot;action&quot;:&quot;ai&quot;,&qu
-ot;tag&quot;:&quot;link&quot;,&quot;context&quot;:&quot;resources&quot;,&quot;l
-ocation&quot;:&quot;navbar&quot;,&quot;label&quot;:&quot;ai_link_resources_navb
-ar&quot;}" class="NavLink-module__link--n48VB"><span class="NavLink-module__tit
-le--xw3ok">AI</span></a></li><li><a href="https://github.com/resources/articles
-?topic=software-development" data-analytics-event="{&quot;action&quot;:&quot;so
-ftware_development&quot;,&quot;tag&quot;:&quot;link&quot;,&quot;context&quot;:&
-quot;resources&quot;,&quot;location&quot;:&quot;navbar&quot;,&quot;label&quot;:
-&quot;software_development_link_resources_navbar&quot;}" class="NavLink-module_
-_link--n48VB"><span class="NavLink-module__title--xw3ok">Software Development</
-span></a></li><li><a href="https://github.com/resources/articles?topic=devops"
-data-analytics-event="{&quot;action&quot;:&quot;devops&quot;,&quot;tag&quot;:&q
-uot;link&quot;,&quot;context&quot;:&quot;resources&quot;,&quot;location&quot;:&
-quot;navbar&quot;,&quot;label&quot;:&quot;devops_link_resources_navbar&quot;}"
-class="NavLink-module__link--n48VB"><span class="NavLink-module__title--xw3ok">
-DevOps</span></a></li><li><a href="https://github.com/resources/articles?topic=
-security" data-analytics-event="{&quot;action&quot;:&quot;security&quot;,&quot;
-tag&quot;:&quot;link&quot;,&quot;context&quot;:&quot;resources&quot;,&quot;loca
-tion&quot;:&quot;navbar&quot;,&quot;label&quot;:&quot;security_link_resources_n
-avbar&quot;}" class="NavLink-module__link--n48VB"><span class="NavLink-module__
-title--xw3ok">Security</span></a></li><li><a href="https://github.com/resources
-/articles" data-analytics-event="{&quot;action&quot;:&quot;view_all_topics&quot
-;,&quot;tag&quot;:&quot;link&quot;,&quot;context&quot;:&quot;resources&quot;,&q
-uot;location&quot;:&quot;navbar&quot;,&quot;label&quot;:&quot;view_all_topics_l
-ink_resources_navbar&quot;}" class="NavLink-module__link--n48VB"><span class="N
-avLink-module__title--xw3ok">View all topics</span><svg aria-hidden="true" focu
-sable="false" class="octicon octicon-chevron-right NavLink-module__arrowIcon--g
-6Lip" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="i
-nline-block" overflow="visible" style="vertical-align:text-bottom"><path d="M6.
-22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.751.751 0
- 0 1-1.042-.018.751.751 0 0 1-.018-1.042L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z"
-></path></svg></a></li></ul></div></li><li><div class="NavGroup-module__group--
-T925n"><span class="NavGroup-module__title--TdKyz">EXPLORE BY TYPE</span><ul cl
-ass="NavGroup-module__list--M8eGv"><li><a href="https://github.com/customer-sto
-ries" data-analytics-event="{&quot;action&quot;:&quot;customer_stories&quot;,&q
-uot;tag&quot;:&quot;link&quot;,&quot;context&quot;:&quot;resources&quot;,&quot;
-location&quot;:&quot;navbar&quot;,&quot;label&quot;:&quot;customer_stories_link
-_resources_navbar&quot;}" class="NavLink-module__link--n48VB"><span class="NavL
-ink-module__title--xw3ok">Customer stories</span></a></li><li><a href="https://
-github.com/resources/events" data-analytics-event="{&quot;action&quot;:&quot;ev
-ents__webinars&quot;,&quot;tag&quot;:&quot;link&quot;,&quot;context&quot;:&quot
-;resources&quot;,&quot;location&quot;:&quot;navbar&quot;,&quot;label&quot;:&quo
-t;events__webinars_link_resources_navbar&quot;}" class="NavLink-module__link--n
-48VB"><span class="NavLink-module__title--xw3ok">Events &amp; webinars</span></
-a></li><li><a href="https://github.com/resources/whitepapers" data-analytics-ev
-ent="{&quot;action&quot;:&quot;ebooks__reports&quot;,&quot;tag&quot;:&quot;link
-&quot;,&quot;context&quot;:&quot;resources&quot;,&quot;location&quot;:&quot;nav
-bar&quot;,&quot;label&quot;:&quot;ebooks__reports_link_resources_navbar&quot;}"
- class="NavLink-module__link--n48VB"><span class="NavLink-module__title--xw3ok"
->Ebooks &amp; reports</span></a></li><li><a href="https://github.com/solutions/
-executive-insights" data-analytics-event="{&quot;action&quot;:&quot;business_in
-sights&quot;,&quot;tag&quot;:&quot;link&quot;,&quot;context&quot;:&quot;resourc
-es&quot;,&quot;location&quot;:&quot;navbar&quot;,&quot;label&quot;:&quot;busine
-ss_insights_link_resources_navbar&quot;}" class="NavLink-module__link--n48VB"><
-span class="NavLink-module__title--xw3ok">Business insights</span></a></li><li>
-<a href="https://skills.github.com" data-analytics-event="{&quot;action&quot;:&
-quot;github_skills&quot;,&quot;tag&quot;:&quot;link&quot;,&quot;context&quot;:&
-quot;resources&quot;,&quot;location&quot;:&quot;navbar&quot;,&quot;label&quot;:
-&quot;github_skills_link_resources_navbar&quot;}" class="NavLink-module__link--
-n48VB" target="_blank" rel="noreferrer"><span class="NavLink-module__title--xw3
-ok">GitHub Skills</span><svg aria-hidden="true" focusable="false" class="octico
-n octicon-link-external NavLink-module__externalIcon--JurQ9" viewBox="0 0 16 16
-" width="16" height="16" fill="currentColor" display="inline-block" overflow="v
-isible" style="vertical-align:text-bottom"><path d="M3.75 2h3.5a.75.75 0 0 1 0
-1.5h-3.5a.25.25 0 0 0-.25.25v8.5c0 .138.112.25.25.25h8.5a.25.25 0 0 0 .25-.25v-
-3.5a.75.75 0 0 1 1.5 0v3.5A1.75 1.75 0 0 1 12.25 14h-8.5A1.75 1.75 0 0 1 2 12.2
-5v-8.5C2 2.784 2.784 2 3.75 2Zm6.854-1h4.146a.25.25 0 0 1 .25.25v4.146a.25.25 0
- 0 1-.427.177L13.03 4.03 9.28 7.78a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018
--1.042l3.75-3.75-1.543-1.543A.25.25 0 0 1 10.604 1Z"></path></svg></a></li></ul
-></div></li><li><div class="NavGroup-module__group--T925n"><span class="NavGrou
-p-module__title--TdKyz">SUPPORT &amp; SERVICES</span><ul class="NavGroup-module
-__list--M8eGv"><li><a href="https://docs.github.com" data-analytics-event="{&qu
-ot;action&quot;:&quot;documentation&quot;,&quot;tag&quot;:&quot;link&quot;,&quo
-t;context&quot;:&quot;resources&quot;,&quot;location&quot;:&quot;navbar&quot;,&
-quot;label&quot;:&quot;documentation_link_resources_navbar&quot;}" class="NavLi
-nk-module__link--n48VB" target="_blank" rel="noreferrer"><span class="NavLink-m
-odule__title--xw3ok">Documentation</span><svg aria-hidden="true" focusable="fal
-se" class="octicon octicon-link-external NavLink-module__externalIcon--JurQ9" v
-iewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-b
-lock" overflow="visible" style="vertical-align:text-bottom"><path d="M3.75 2h3.
-5a.75.75 0 0 1 0 1.5h-3.5a.25.25 0 0 0-.25.25v8.5c0 .138.112.25.25.25h8.5a.25.2
-5 0 0 0 .25-.25v-3.5a.75.75 0 0 1 1.5 0v3.5A1.75 1.75 0 0 1 12.25 14h-8.5A1.75
-1.75 0 0 1 2 12.25v-8.5C2 2.784 2.784 2 3.75 2Zm6.854-1h4.146a.25.25 0 0 1 .25.
-25v4.146a.25.25 0 0 1-.427.177L13.03 4.03 9.28 7.78a.751.751 0 0 1-1.042-.018.7
-51.751 0 0 1-.018-1.042l3.75-3.75-1.543-1.543A.25.25 0 0 1 10.604 1Z"></path></
-svg></a></li><li><a href="https://support.github.com" data-analytics-event="{&q
-uot;action&quot;:&quot;customer_support&quot;,&quot;tag&quot;:&quot;link&quot;,
-&quot;context&quot;:&quot;resources&quot;,&quot;location&quot;:&quot;navbar&quo
-t;,&quot;label&quot;:&quot;customer_support_link_resources_navbar&quot;}" class
-="NavLink-module__link--n48VB" target="_blank" rel="noreferrer"><span class="Na
-vLink-module__title--xw3ok">Customer support</span><svg aria-hidden="true" focu
-sable="false" class="octicon octicon-link-external NavLink-module__externalIcon
---JurQ9" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display
-="inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="
-M3.75 2h3.5a.75.75 0 0 1 0 1.5h-3.5a.25.25 0 0 0-.25.25v8.5c0 .138.112.25.25.25
-h8.5a.25.25 0 0 0 .25-.25v-3.5a.75.75 0 0 1 1.5 0v3.5A1.75 1.75 0 0 1 12.25 14h
--8.5A1.75 1.75 0 0 1 2 12.25v-8.5C2 2.784 2.784 2 3.75 2Zm6.854-1h4.146a.25.25
-0 0 1 .25.25v4.146a.25.25 0 0 1-.427.177L13.03 4.03 9.28 7.78a.751.751 0 0 1-1.
-042-.018.751.751 0 0 1-.018-1.042l3.75-3.75-1.543-1.543A.25.25 0 0 1 10.604 1Z"
-></path></svg></a></li><li><a href="https://github.com/orgs/community/discussio
-ns" data-analytics-event="{&quot;action&quot;:&quot;community_forum&quot;,&quot
-;tag&quot;:&quot;link&quot;,&quot;context&quot;:&quot;resources&quot;,&quot;loc
-ation&quot;:&quot;navbar&quot;,&quot;label&quot;:&quot;community_forum_link_res
-ources_navbar&quot;}" class="NavLink-module__link--n48VB"><span class="NavLink-
-module__title--xw3ok">Community forum</span></a></li><li><a href="https://githu
-b.com/trust-center" data-analytics-event="{&quot;action&quot;:&quot;trust_cente
-r&quot;,&quot;tag&quot;:&quot;link&quot;,&quot;context&quot;:&quot;resources&qu
-ot;,&quot;location&quot;:&quot;navbar&quot;,&quot;label&quot;:&quot;trust_cente
-r_link_resources_navbar&quot;}" class="NavLink-module__link--n48VB"><span class
-="NavLink-module__title--xw3ok">Trust center</span></a></li><li><a href="https:
-//github.com/partners" data-analytics-event="{&quot;action&quot;:&quot;partners
-&quot;,&quot;tag&quot;:&quot;link&quot;,&quot;context&quot;:&quot;resources&quo
-t;,&quot;location&quot;:&quot;navbar&quot;,&quot;label&quot;:&quot;partners_lin
-k_resources_navbar&quot;}" class="NavLink-module__link--n48VB"><span class="Nav
-Link-module__title--xw3ok">Partners</span></a></li></ul></div></li></ul></div><
-/div></li><li><div class="NavDropdown-module__container--bmXM2 js-details-conta
-iner js-header-menu-item"><button type="button" class="NavDropdown-module__butt
-on--Hq9UR js-details-target" aria-expanded="false">Open Source<svg aria-hidden=
-"true" focusable="false" class="octicon octicon-chevron-right NavDropdown-modul
-e__buttonIcon--SR0Ke" viewBox="0 0 16 16" width="16" height="16" fill="currentC
-olor" display="inline-block" overflow="visible" style="vertical-align:text-bott
-om"><path d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25
- 4.25a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L9.94 8 6.22 4.28a.75.7
-5 0 0 1 0-1.06Z"></path></svg></button><div class="NavDropdown-module__dropdown
---Ig57Y"><ul class="NavDropdown-module__list--RwSSK"><li><div class="NavGroup-m
-odule__group--T925n"><span class="NavGroup-module__title--TdKyz">COMMUNITY</spa
-n><ul class="NavGroup-module__list--M8eGv"><li><a href="https://github.com/spon
-sors" data-analytics-event="{&quot;action&quot;:&quot;github_sponsors&quot;,&qu
-ot;tag&quot;:&quot;link&quot;,&quot;context&quot;:&quot;open_source&quot;,&quot
-;location&quot;:&quot;navbar&quot;,&quot;label&quot;:&quot;github_sponsors_link
-_open_source_navbar&quot;}" class="NavLink-module__link--n48VB"><div class="Nav
-Link-module__text--SdWkb"><svg aria-hidden="true" focusable="false" class="octi
-con octicon-sponsor-tiers NavLink-module__icon--h0sw7" viewBox="0 0 24 24" widt
-h="24" height="24" fill="currentColor" display="inline-block" overflow="visible
-" style="vertical-align:text-bottom"><path d="M16.004 1.25C18.311 1.25 20 3.128
- 20 5.75c0 2.292-1.23 4.464-3.295 6.485-.481.47-.98.909-1.482 1.31l.265 1.32 1.
-375 7.5a.75.75 0 0 1-.982.844l-3.512-1.207a.75.75 0 0 0-.488 0L8.37 23.209a.75.
-75 0 0 1-.982-.844l1.378-7.512.261-1.309c-.5-.4-1-.838-1.481-1.31C5.479 10.215
-4.25 8.043 4.25 5.75c0-2.622 1.689-4.5 3.996-4.5 1.55 0 2.947.752 3.832 1.967l.
-047.067.047-.067a4.726 4.726 0 0 1 3.612-1.962l.22-.005ZM13.89 14.531c-.418.285
--.828.542-1.218.77l-.18.103a.75.75 0 0 1-.734 0l-.071-.04-.46-.272c-.282-.173-.
-573-.36-.868-.562l-.121.605-1.145 6.239 2.3-.79a2.248 2.248 0 0 1 1.284-.054l.1
-8.053 2.299.79-1.141-6.226-.125-.616ZM16.004 2.75c-1.464 0-2.731.983-3.159 2.45
-9-.209.721-1.231.721-1.44 0-.428-1.476-1.695-2.459-3.16-2.459-1.44 0-2.495 1.17
-3-2.495 3 0 1.811 1.039 3.647 2.844 5.412a19.624 19.624 0 0 0 3.734 2.84l-.019-
-.011-.184-.111.147-.088a19.81 19.81 0 0 0 3.015-2.278l.37-.352C17.46 9.397 18.5
- 7.561 18.5 5.75c0-1.827-1.055-3-2.496-3Z"></path></svg><span class="NavLink-mo
-dule__title--xw3ok">GitHub Sponsors</span><span class="NavLink-module__subtitle
---qC15H">Fund open source developers</span></div></a></li></ul></div></li><li><
-div class="NavGroup-module__group--T925n"><span class="NavGroup-module__title--
-TdKyz">PROGRAMS</span><ul class="NavGroup-module__list--M8eGv"><li><a href="htt
-ps://securitylab.github.com" data-analytics-event="{&quot;action&quot;:&quot;se
-curity_lab&quot;,&quot;tag&quot;:&quot;link&quot;,&quot;context&quot;:&quot;ope
-n_source&quot;,&quot;location&quot;:&quot;navbar&quot;,&quot;label&quot;:&quot;
-security_lab_link_open_source_navbar&quot;}" class="NavLink-module__link--n48VB
-" target="_blank" rel="noreferrer"><span class="NavLink-module__title--xw3ok">S
-ecurity Lab</span><svg aria-hidden="true" focusable="false" class="octicon octi
-con-link-external NavLink-module__externalIcon--JurQ9" viewBox="0 0 16 16" widt
-h="16" height="16" fill="currentColor" display="inline-block" overflow="visible
-" style="vertical-align:text-bottom"><path d="M3.75 2h3.5a.75.75 0 0 1 0 1.5h-3
-.5a.25.25 0 0 0-.25.25v8.5c0 .138.112.25.25.25h8.5a.25.25 0 0 0 .25-.25v-3.5a.7
-5.75 0 0 1 1.5 0v3.5A1.75 1.75 0 0 1 12.25 14h-8.5A1.75 1.75 0 0 1 2 12.25v-8.5
-C2 2.784 2.784 2 3.75 2Zm6.854-1h4.146a.25.25 0 0 1 .25.25v4.146a.25.25 0 0 1-.
-427.177L13.03 4.03 9.28 7.78a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042
-l3.75-3.75-1.543-1.543A.25.25 0 0 1 10.604 1Z"></path></svg></a></li><li><a hre
-f="https://maintainers.github.com" data-analytics-event="{&quot;action&quot;:&q
-uot;maintainer_community&quot;,&quot;tag&quot;:&quot;link&quot;,&quot;context&q
-uot;:&quot;open_source&quot;,&quot;location&quot;:&quot;navbar&quot;,&quot;labe
-l&quot;:&quot;maintainer_community_link_open_source_navbar&quot;}" class="NavLi
-nk-module__link--n48VB" target="_blank" rel="noreferrer"><span class="NavLink-m
-odule__title--xw3ok">Maintainer Community</span><svg aria-hidden="true" focusab
-le="false" class="octicon octicon-link-external NavLink-module__externalIcon--J
-urQ9" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="i
-nline-block" overflow="visible" style="vertical-align:text-bottom"><path d="M3.
-75 2h3.5a.75.75 0 0 1 0 1.5h-3.5a.25.25 0 0 0-.25.25v8.5c0 .138.112.25.25.25h8.
-5a.25.25 0 0 0 .25-.25v-3.5a.75.75 0 0 1 1.5 0v3.5A1.75 1.75 0 0 1 12.25 14h-8.
-5A1.75 1.75 0 0 1 2 12.25v-8.5C2 2.784 2.784 2 3.75 2Zm6.854-1h4.146a.25.25 0 0
- 1 .25.25v4.146a.25.25 0 0 1-.427.177L13.03 4.03 9.28 7.78a.751.751 0 0 1-1.042
--.018.751.751 0 0 1-.018-1.042l3.75-3.75-1.543-1.543A.25.25 0 0 1 10.604 1Z"></
-path></svg></a></li><li><a href="https://github.com/accelerator" data-analytics
--event="{&quot;action&quot;:&quot;accelerator&quot;,&quot;tag&quot;:&quot;link&
-quot;,&quot;context&quot;:&quot;open_source&quot;,&quot;location&quot;:&quot;na
-vbar&quot;,&quot;label&quot;:&quot;accelerator_link_open_source_navbar&quot;}"
-class="NavLink-module__link--n48VB"><span class="NavLink-module__title--xw3ok">
-Accelerator</span></a></li><li><a href="https://archiveprogram.github.com" data
--analytics-event="{&quot;action&quot;:&quot;archive_program&quot;,&quot;tag&quo
-t;:&quot;link&quot;,&quot;context&quot;:&quot;open_source&quot;,&quot;location&
-quot;:&quot;navbar&quot;,&quot;label&quot;:&quot;archive_program_link_open_sour
-ce_navbar&quot;}" class="NavLink-module__link--n48VB" target="_blank" rel="nore
-ferrer"><span class="NavLink-module__title--xw3ok">Archive Program</span><svg a
-ria-hidden="true" focusable="false" class="octicon octicon-link-external NavLin
-k-module__externalIcon--JurQ9" viewBox="0 0 16 16" width="16" height="16" fill=
-"currentColor" display="inline-block" overflow="visible" style="vertical-align:
-text-bottom"><path d="M3.75 2h3.5a.75.75 0 0 1 0 1.5h-3.5a.25.25 0 0 0-.25.25v8
-.5c0 .138.112.25.25.25h8.5a.25.25 0 0 0 .25-.25v-3.5a.75.75 0 0 1 1.5 0v3.5A1.7
-5 1.75 0 0 1 12.25 14h-8.5A1.75 1.75 0 0 1 2 12.25v-8.5C2 2.784 2.784 2 3.75 2Z
-m6.854-1h4.146a.25.25 0 0 1 .25.25v4.146a.25.25 0 0 1-.427.177L13.03 4.03 9.28
-7.78a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042l3.75-3.75-1.543-1.543A.
-25.25 0 0 1 10.604 1Z"></path></svg></a></li></ul></div></li><li><div class="Na
-vGroup-module__group--T925n"><span class="NavGroup-module__title--TdKyz">REPOSI
-TORIES</span><ul class="NavGroup-module__list--M8eGv"><li><a href="https://gith
-ub.com/topics" data-analytics-event="{&quot;action&quot;:&quot;topics&quot;,&qu
-ot;tag&quot;:&quot;link&quot;,&quot;context&quot;:&quot;open_source&quot;,&quot
-;location&quot;:&quot;navbar&quot;,&quot;label&quot;:&quot;topics_link_open_sou
-rce_navbar&quot;}" class="NavLink-module__link--n48VB"><span class="NavLink-mod
-ule__title--xw3ok">Topics</span></a></li><li><a href="https://github.com/trendi
-ng" data-analytics-event="{&quot;action&quot;:&quot;trending&quot;,&quot;tag&qu
-ot;:&quot;link&quot;,&quot;context&quot;:&quot;open_source&quot;,&quot;location
-&quot;:&quot;navbar&quot;,&quot;label&quot;:&quot;trending_link_open_source_nav
-bar&quot;}" class="NavLink-module__link--n48VB"><span class="NavLink-module__ti
-tle--xw3ok">Trending</span></a></li><li><a href="https://github.com/collections
-" data-analytics-event="{&quot;action&quot;:&quot;collections&quot;,&quot;tag&q
-uot;:&quot;link&quot;,&quot;context&quot;:&quot;open_source&quot;,&quot;locatio
-n&quot;:&quot;navbar&quot;,&quot;label&quot;:&quot;collections_link_open_source
-_navbar&quot;}" class="NavLink-module__link--n48VB"><span class="NavLink-module
-__title--xw3ok">Collections</span></a></li></ul></div></li></ul></div></div></l
-i><li><div class="NavDropdown-module__container--bmXM2 js-details-container js-
-header-menu-item"><button type="button" class="NavDropdown-module__button--Hq9U
-R js-details-target" aria-expanded="false">Enterprise<svg aria-hidden="true" fo
-cusable="false" class="octicon octicon-chevron-right NavDropdown-module__button
-Icon--SR0Ke" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" dis
-play="inline-block" overflow="visible" style="vertical-align:text-bottom"><path
- d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75
-1.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L9.94 8 6.22 4.28a.75.75 0 0 1 0
--1.06Z"></path></svg></button><div class="NavDropdown-module__dropdown--Ig57Y">
-<ul class="NavDropdown-module__list--RwSSK"><li><div class="NavGroup-module__gr
-oup--T925n"><span class="NavGroup-module__title--TdKyz">ENTERPRISE SOLUTIONS</s
-pan><ul class="NavGroup-module__list--M8eGv"><li><a href="https://github.com/en
-terprise" data-analytics-event="{&quot;action&quot;:&quot;enterprise_platform&q
-uot;,&quot;tag&quot;:&quot;link&quot;,&quot;context&quot;:&quot;enterprise&quot
-;,&quot;location&quot;:&quot;navbar&quot;,&quot;label&quot;:&quot;enterprise_pl
-atform_link_enterprise_navbar&quot;}" class="NavLink-module__link--n48VB"><div
-class="NavLink-module__text--SdWkb"><svg aria-hidden="true" focusable="false" c
-lass="octicon octicon-stack NavLink-module__icon--h0sw7" viewBox="0 0 24 24" wi
-dth="24" height="24" fill="currentColor" display="inline-block" overflow="visib
-le" style="vertical-align:text-bottom"><path d="M11.063 1.456a1.749 1.749 0 0 1
- 1.874 0l8.383 5.316a1.751 1.751 0 0 1 0 2.956l-8.383 5.316a1.749 1.749 0 0 1-1
-.874 0L2.68 9.728a1.751 1.751 0 0 1 0-2.956Zm1.071 1.267a.25.25 0 0 0-.268 0L3.
-483 8.039a.25.25 0 0 0 0 .422l8.383 5.316a.25.25 0 0 0 .268 0l8.383-5.316a.25.2
-5 0 0 0 0-.422Z"></path><path d="M1.867 12.324a.75.75 0 0 1 1.035-.232l8.964 5.
-685a.25.25 0 0 0 .268 0l8.964-5.685a.75.75 0 0 1 .804 1.267l-8.965 5.685a1.749
-1.749 0 0 1-1.874 0l-8.965-5.685a.75.75 0 0 1-.231-1.035Z"></path><path d="M1.8
-67 16.324a.75.75 0 0 1 1.035-.232l8.964 5.685a.25.25 0 0 0 .268 0l8.964-5.685a.
-75.75 0 0 1 .804 1.267l-8.965 5.685a1.749 1.749 0 0 1-1.874 0l-8.965-5.685a.75.
-75 0 0 1-.231-1.035Z"></path></svg><span class="NavLink-module__title--xw3ok">E
-nterprise platform</span><span class="NavLink-module__subtitle--qC15H">AI-power
-ed developer platform</span></div></a></li></ul></div></li><li><div class="NavG
-roup-module__group--T925n"><span class="NavGroup-module__title--TdKyz">AVAILABL
-E ADD-ONS</span><ul class="NavGroup-module__list--M8eGv"><li><a href="https://g
-ithub.com/security/advanced-security" data-analytics-event="{&quot;action&quot;
-:&quot;github_advanced_security&quot;,&quot;tag&quot;:&quot;link&quot;,&quot;co
-ntext&quot;:&quot;enterprise&quot;,&quot;location&quot;:&quot;navbar&quot;,&quo
-t;label&quot;:&quot;github_advanced_security_link_enterprise_navbar&quot;}" cla
-ss="NavLink-module__link--n48VB"><div class="NavLink-module__text--SdWkb"><svg
-aria-hidden="true" focusable="false" class="octicon octicon-shield-check NavLin
-k-module__icon--h0sw7" viewBox="0 0 24 24" width="24" height="24" fill="current
-Color" display="inline-block" overflow="visible" style="vertical-align:text-bot
-tom"><path d="M16.53 9.78a.75.75 0 0 0-1.06-1.06L11 13.19l-1.97-1.97a.75.75 0 0
- 0-1.06 1.06l2.5 2.5a.75.75 0 0 0 1.06 0l5-5Z"></path><path d="m12.54.637 8.25
-2.675A1.75 1.75 0 0 1 22 4.976V10c0 6.19-3.771 10.704-9.401 12.83a1.704 1.704 0
- 0 1-1.198 0C5.77 20.705 2 16.19 2 10V4.976c0-.758.489-1.43 1.21-1.664L11.46.63
-7a1.748 1.748 0 0 1 1.08 0Zm-.617 1.426-8.25 2.676a.249.249 0 0 0-.173.237V10c0
- 5.46 3.28 9.483 8.43 11.426a.199.199 0 0 0 .14 0C17.22 19.483 20.5 15.461 20.5
- 10V4.976a.25.25 0 0 0-.173-.237l-8.25-2.676a.253.253 0 0 0-.154 0Z"></path></s
-vg><span class="NavLink-module__title--xw3ok">GitHub Advanced Security</span><s
-pan class="NavLink-module__subtitle--qC15H">Enterprise-grade security features<
-/span></div></a></li><li><a href="https://github.com/features/copilot/copilot-b
-usiness" data-analytics-event="{&quot;action&quot;:&quot;copilot_for_business&q
-uot;,&quot;tag&quot;:&quot;link&quot;,&quot;context&quot;:&quot;enterprise&quot
-;,&quot;location&quot;:&quot;navbar&quot;,&quot;label&quot;:&quot;copilot_for_b
-usiness_link_enterprise_navbar&quot;}" class="NavLink-module__link--n48VB"><div
- class="NavLink-module__text--SdWkb"><svg aria-hidden="true" focusable="false"
-class="octicon octicon-copilot NavLink-module__icon--h0sw7" viewBox="0 0 24 24"
- width="24" height="24" fill="currentColor" display="inline-block" overflow="vi
-sible" style="vertical-align:text-bottom"><path d="M23.922 16.992c-.861 1.495-5
-.859 5.023-11.922 5.023-6.063 0-11.061-3.528-11.922-5.023A.641.641 0 0 1 0 16.7
-36v-2.869a.841.841 0 0 1 .053-.22c.372-.935 1.347-2.292 2.605-2.656.167-.429.41
-4-1.055.644-1.517a10.195 10.195 0 0 1-.052-1.086c0-1.331.282-2.499 1.132-3.368.
-397-.406.89-.717 1.474-.952 1.399-1.136 3.392-2.093 6.122-2.093 2.731 0 4.767.9
-57 6.166 2.093.584.235 1.077.546 1.474.952.85.869 1.132 2.037 1.132 3.368 0 .36
-8-.014.733-.052 1.086.23.462.477 1.088.644 1.517 1.258.364 2.233 1.721 2.605 2.
-656a.832.832 0 0 1 .053.22v2.869a.641.641 0 0 1-.078.256ZM12.172 11h-.344a4.323
- 4.323 0 0 1-.355.508C10.703 12.455 9.555 13 7.965 13c-1.725 0-2.989-.359-3.782
--1.259a2.005 2.005 0 0 1-.085-.104L4 11.741v6.585c1.435.779 4.514 2.179 8 2.179
- 3.486 0 6.565-1.4 8-2.179v-6.585l-.098-.104s-.033.045-.085.104c-.793.9-2.057 1
-.259-3.782 1.259-1.59 0-2.738-.545-3.508-1.492a4.323 4.323 0 0 1-.355-.508h-.01
-6.016Zm.641-2.935c.136 1.057.403 1.913.878 2.497.442.544 1.134.938 2.344.938 1.
-573 0 2.292-.337 2.657-.751.384-.435.558-1.15.558-2.361 0-1.14-.243-1.847-.705-
-2.319-.477-.488-1.319-.862-2.824-1.025-1.487-.161-2.192.138-2.533.529-.269.307-
-.437.808-.438 1.578v.021c0 .265.021.562.063.893Zm-1.626 0c.042-.331.063-.628.06
-3-.894v-.02c-.001-.77-.169-1.271-.438-1.578-.341-.391-1.046-.69-2.533-.529-1.50
-5.163-2.347.537-2.824 1.025-.462.472-.705 1.179-.705 2.319 0 1.211.175 1.926.55
-8 2.361.365.414 1.084.751 2.657.751 1.21 0 1.902-.394 2.344-.938.475-.584.742-1
-.44.878-2.497Z"></path><path d="M14.5 14.25a1 1 0 0 1 1 1v2a1 1 0 0 1-2 0v-2a1
-1 0 0 1 1-1Zm-5 0a1 1 0 0 1 1 1v2a1 1 0 0 1-2 0v-2a1 1 0 0 1 1-1Z"></path></svg
-><span class="NavLink-module__title--xw3ok">Copilot for Business</span><span cl
-ass="NavLink-module__subtitle--qC15H">Enterprise-grade AI features</span></div>
-</a></li><li><a href="https://github.com/premium-support" data-analytics-event=
-"{&quot;action&quot;:&quot;premium_support&quot;,&quot;tag&quot;:&quot;link&quo
-t;,&quot;context&quot;:&quot;enterprise&quot;,&quot;location&quot;:&quot;navbar
-&quot;,&quot;label&quot;:&quot;premium_support_link_enterprise_navbar&quot;}" c
-lass="NavLink-module__link--n48VB"><div class="NavLink-module__text--SdWkb"><sv
-g aria-hidden="true" focusable="false" class="octicon octicon-comment-discussio
-n NavLink-module__icon--h0sw7" viewBox="0 0 24 24" width="24" height="24" fill=
-"currentColor" display="inline-block" overflow="visible" style="vertical-align:
-text-bottom"><path d="M1.75 1h12.5c.966 0 1.75.784 1.75 1.75v9.5A1.75 1.75 0 0
-1 14.25 14H8.061l-2.574 2.573A1.458 1.458 0 0 1 3 15.543V14H1.75A1.75 1.75 0 0
-1 0 12.25v-9.5C0 1.784.784 1 1.75 1ZM1.5 2.75v9.5c0 .138.112.25.25.25h2a.75.75
-0 0 1 .75.75v2.19l2.72-2.72a.749.749 0 0 1 .53-.22h6.5a.25.25 0 0 0 .25-.25v-9.
-5a.25.25 0 0 0-.25-.25H1.75a.25.25 0 0 0-.25.25Z"></path><path d="M22.5 8.75a.2
-5.25 0 0 0-.25-.25h-3.5a.75.75 0 0 1 0-1.5h3.5c.966 0 1.75.784 1.75 1.75v9.5A1.
-75 1.75 0 0 1 22.25 20H21v1.543a1.457 1.457 0 0 1-2.487 1.03L15.939 20H10.75A1.
-75 1.75 0 0 1 9 18.25v-1.465a.75.75 0 0 1 1.5 0v1.465c0 .138.112.25.25.25h5.5a.
-75.75 0 0 1 .53.22l2.72 2.72v-2.19a.75.75 0 0 1 .75-.75h2a.25.25 0 0 0 .25-.25v
--9.5Z"></path></svg><span class="NavLink-module__title--xw3ok">Premium Support<
-/span><span class="NavLink-module__subtitle--qC15H">Enterprise-grade 24/7 suppo
-rt</span></div></a></li></ul></div></li></ul></div></div></li><li><a href="http
-s://github.com/pricing" data-analytics-event="{&quot;action&quot;:&quot;pricing
-&quot;,&quot;tag&quot;:&quot;link&quot;,&quot;context&quot;:&quot;pricing&quot;
-,&quot;location&quot;:&quot;navbar&quot;,&quot;label&quot;:&quot;pricing_link_p
-ricing_navbar&quot;}" class="NavLink-module__link--n48VB MarketingNavigation-mo
-dule__navLink--U9Uuk"><span class="NavLink-module__title--xw3ok">Pricing</span>
-</a></li></ul></nav><script type="application/json" id="__PRIMER_DATA__R_0___">
-{"resolvedServerColorMode":"day"}</script></div>
-  pr_comment.html:416:</react-partial>
-  pr_comment.html:417:
-  pr_comment.html:418:
-  pr_comment.html:419:
-  pr_comment.html:420:        <div class="d-flex flex-column flex-lg-row width-
-full flex-justify-end flex-lg-items-center text-center mt-3 mt-lg-0 text-lg-lef
-t ml-lg-3">
-  pr_comment.html:421:
-  pr_comment.html:422:
-  pr_comment.html:423:
-  pr_comment.html:424:<qbsearch-input class="search-input" data-scope="repo:vla
-kir/SK24mapper" data-custom-scopes-path="/search/custom_scopes" data-delete-cus
-tom-scopes-csrf="B8i388BzIU8t-O4sPHmD5-2F5JejYJe64sEf7jFIz4xonLsM4HZxQ2vwNtU32B
-uN8DTah9TzZPaX4ZMNXNXE_w" data-max-custom-scopes="10" data-header-redesign-enab
-led="false" data-initial-value="" data-blackbird-suggestions-path="/search/sugg
-estions" data-jump-to-suggestions-path="/_graphql/GetSuggestedNavigationDestina
-tions" data-current-repository="vlakir/SK24mapper" data-current-org="" data-cur
-rent-owner="vlakir" data-logged-in="false" data-copilot-chat-enabled="false" da
-ta-nl-search-enabled="false" data-retain-scroll-position="true">
-  pr_comment.html:425:  <div
-  pr_comment.html:426:    class="search-input-container search-with-dialog posi
-tion-relative d-flex flex-row flex-items-center mr-4 rounded"
-  pr_comment.html:427:    data-action="click:qbsearch-input#searchInputContaine
-rClicked"
-  pr_comment.html:428:  >
-  pr_comment.html:429:      <button
-  pr_comment.html:430:        type="button"
-  pr_comment.html:431:        class="header-search-button placeholder  input-bu
-tton form-control d-flex flex-1 flex-self-stretch flex-items-center no-wrap wid
-th-full py-0 pl-2 pr-0 text-left border-0 box-shadow-none"
-  pr_comment.html:432:        data-target="qbsearch-input.inputButton"
-  pr_comment.html:433:        aria-label="Search or jump to…"
-  pr_comment.html:434:        aria-haspopup="dialog"
-  pr_comment.html:435:        placeholder="Search or jump to..."
-  pr_comment.html:436:        data-hotkey=s,/
-  pr_comment.html:437:        autocapitalize="off"
-  pr_comment.html:438:        data-analytics-event="{&quot;location&quot;:&quot
-;navbar&quot;,&quot;action&quot;:&quot;searchbar&quot;,&quot;context&quot;:&quo
-t;global&quot;,&quot;tag&quot;:&quot;input&quot;,&quot;label&quot;:&quot;search
-bar_input_global_navbar&quot;}"
-  pr_comment.html:439:        data-action="click:qbsearch-input#handleExpand"
-  pr_comment.html:440:      >
-  pr_comment.html:441:        <div class="mr-2 color-fg-muted">
-  pr_comment.html:442:          <svg aria-hidden="true" height="16" viewBox="0
-0 16 16" version="1.1" width="16" data-view-component="true" class="octicon oct
-icon-search">
-  pr_comment.html:443:    <path d="M10.68 11.74a6 6 0 0 1-7.922-8.982 6 6 0 0 1
- 8.982 7.922l3.04 3.04a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215ZM11.5
-7a4.499 4.499 0 1 0-8.997 0A4.499 4.499 0 0 0 11.5 7Z"></path>
-  pr_comment.html:444:</svg>
-  pr_comment.html:445:        </div>
-  pr_comment.html:446:        <span class="flex-1" data-target="qbsearch-input.
-inputButtonText">Search or jump to...</span>
-  pr_comment.html:447:          <div class="d-flex" data-target="qbsearch-input
-.hotkeyIndicator">
-  pr_comment.html:448:            <svg xmlns="http://www.w3.org/2000/svg" width
-="22" height="20" aria-hidden="true" class="mr-1"><path fill="none" stroke="#97
-9A9C" opacity=".4" d="M3.5.5h12c1.7 0 3 1.3 3 3v13c0 1.7-1.3 3-3 3h-12c-1.7 0-3
--1.3-3-3v-13c0-1.7 1.3-3 3-3z"></path><path fill="#979A9C" d="M11.8 6L8 15.1h-.
-9L10.8 6h1z"></path></svg>
-  pr_comment.html:449:          </div>
-  pr_comment.html:450:      </button>
-  pr_comment.html:451:
-  pr_comment.html:452:    <input type="hidden" name="type" class="js-site-searc
-h-type-field">
-  pr_comment.html:453:
-  pr_comment.html:454:
-  pr_comment.html:455:<div class="Overlay--hidden " data-modal-dialog-overlay>
-  pr_comment.html:456:  <modal-dialog data-action="close:qbsearch-input#handleC
-lose cancel:qbsearch-input#handleClose" data-target="qbsearch-input.searchSugge
-stionsDialog" role="dialog" id="search-suggestions-dialog" aria-modal="true" ar
-ia-labelledby="search-suggestions-dialog-header" data-view-component="true" cla
-ss="Overlay Overlay--width-large Overlay--height-auto">
-  pr_comment.html:457:      <h1 id="search-suggestions-dialog-header" class="sr
--only">Search code, repositories, users, issues, pull requests...</h1>
-  pr_comment.html:458:    <div class="Overlay-body Overlay-body--paddingNone">
-  pr_comment.html:459:
-  pr_comment.html:460:          <div data-view-component="true">        <div cl
-ass="search-suggestions position-fixed width-full color-shadow-large border col
-or-fg-default color-bg-default overflow-hidden d-flex flex-column query-builder
--container"
-  pr_comment.html:461:          style="border-radius: 12px;"
-  pr_comment.html:462:          data-target="qbsearch-input.queryBuilderContain
-er"
-  pr_comment.html:463:          hidden
-  pr_comment.html:464:        >
-  pr_comment.html:465:          <!-- '"` --><!-- </textarea></xmp> --></option>
-</form><form id="query-builder-test-form" action="" accept-charset="UTF-8" meth
-od="get">
-  pr_comment.html:466:  <query-builder data-target="qbsearch-input.queryBuilder
-" id="query-builder-query-builder-test" data-filter-key=":" data-view-component
-="true" class="QueryBuilder search-query-builder">
-  pr_comment.html:467:    <div class="FormControl FormControl--fullWidth">
-  pr_comment.html:468:      <label id="query-builder-test-label" for="query-bui
-lder-test" class="FormControl-label sr-only">
-  pr_comment.html:469:        Search
-> pr_comment.html:869:                data-analytics-event="{&quot;category&quo
-t;:&quot;Marketing nav&quot;,&quot;action&quot;:&quot;click to go to homepage&q
-uot;,&quot;label&quot;:&quot;ref_page:Marketing;ref_cta:Sign in;ref_loc:Header&
-quot;}"
-  pr_comment.html:870:              >
-  pr_comment.html:871:                Sign in
-  pr_comment.html:872:              </a>
-  pr_comment.html:873:            </div>
-  pr_comment.html:874:
-  pr_comment.html:875:              <a href="/signup?ref_cta=Sign+up&amp;ref_lo
-c=header+logged+out&amp;ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E%2Fvoltron
-%2Fpull_requests_fragments%2Fpull_request_layout&amp;source=header-repo&amp;sou
-rce_repo=vlakir%2FSK24mapper"
-  pr_comment.html:876:                class="HeaderMenu-link HeaderMenu-link--s
-ign-up HeaderMenu-button flex-shrink-0 d-flex d-lg-inline-flex no-underline bor
-der color-border-default rounded px-2 py-1"
-  pr_comment.html:877:                data-hydro-click="{&quot;event_type&quot;
-:&quot;authentication.click&quot;,&quot;payload&quot;:{&quot;location_in_page&q
-uot;:&quot;site header menu&quot;,&quot;repository_id&quot;:null,&quot;auth_typ
-e&quot;:&quot;SIGN_UP&quot;,&quot;originating_url&quot;:&quot;https://github.co
-m/vlakir/SK24mapper/pull/15&quot;,&quot;user_id&quot;:null}}" data-hydro-click-
-hmac="06e8d39731dcb7f39d30452ad830353011b0889eefb8c493455ea3b874694a50"
-> pr_comment.html:878:                data-analytics-event="{&quot;category&quo
-t;:&quot;Sign up&quot;,&quot;action&quot;:&quot;click to sign up for account&qu
-ot;,&quot;label&quot;:&quot;ref_page:/&lt;user-name&gt;/&lt;repo-name&gt;/voltr
-on/pull_requests_fragments/pull_request_layout;ref_cta:Sign up;ref_loc:header l
-ogged out&quot;}"
-  pr_comment.html:879:              >
-  pr_comment.html:880:                Sign up
-  pr_comment.html:881:              </a>
-  pr_comment.html:882:
-  pr_comment.html:883:                <div class="AppHeader-appearanceSettings"
->
-  pr_comment.html:884:    <react-partial-anchor>
-  pr_comment.html:885:      <button data-target="react-partial-anchor.anchor" i
-d="icon-button-2c8aaa36-278b-4f0f-8ecb-1e5cb40f7266" aria-labelledby="tooltip-e
-84df9a2-481c-47bd-9521-2d2e576588fe" type="button" disabled="disabled" data-vie
-w-component="true" class="Button Button--iconOnly Button--invisible Button--med
-ium AppHeader-button HeaderMenu-link border cursor-wait">  <svg aria-hidden="tr
-ue" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-componen
-t="true" class="octicon octicon-sliders Button-visual">
-  pr_comment.html:886:    <path d="M15 2.75a.75.75 0 0 1-.75.75h-4a.75.75 0 0 1
- 0-1.5h4a.75.75 0 0 1 .75.75Zm-8.5.75v1.25a.75.75 0 0 0 1.5 0v-4a.75.75 0 0 0-1
-.5 0V2H1.75a.75.75 0 0 0 0 1.5H6.5Zm1.25 5.25a.75.75 0 0 0 0-1.5h-6a.75.75 0 0
-0 0 1.5h6ZM15 8a.75.75 0 0 1-.75.75H11.5V10a.75.75 0 1 1-1.5 0V6a.75.75 0 0 1 1
-.5 0v1.25h2.75A.75.75 0 0 1 15 8Zm-9 5.25v-2a.75.75 0 0 0-1.5 0v1.25H1.75a.75.7
-5 0 0 0 0 1.5H4.5v1.25a.75.75 0 0 0 1.5 0v-2Zm9 0a.75.75 0 0 1-.75.75h-6a.75.75
- 0 0 1 0-1.5h6a.75.75 0 0 1 .75.75Z"></path>
-  pr_comment.html:887:</svg>
-  pr_comment.html:888:</button><tool-tip id="tooltip-e84df9a2-481c-47bd-9521-2d
-2e576588fe" for="icon-button-2c8aaa36-278b-4f0f-8ecb-1e5cb40f7266" popover="man
-ual" data-direction="s" data-type="label" data-view-component="true" class="sr-
-only position-absolute">Appearance settings</tool-tip>
-  pr_comment.html:889:
-  pr_comment.html:890:      <template data-target="react-partial-anchor.templat
-e">
-  pr_comment.html:891:        <link crossorigin="anonymous" media="all" rel="st
-ylesheet" href="https://github.githubassets.com/assets/appearance-settings.753d
-458774a2f782559b.module.css" />
-  pr_comment.html:892:
-  pr_comment.html:893:<react-partial
-  pr_comment.html:894:  partial-name="appearance-settings"
-  pr_comment.html:895:  data-ssr="false"
-  pr_comment.html:896:  data-attempted-ssr="false"
-  pr_comment.html:897:  data-react-profiling="true"
-  pr_comment.html:898:>
-  pr_comment.html:899:
-  pr_comment.html:900:  <script type="application/json" data-target="react-part
-ial.embeddedData">{"props":{}}</script>
-  pr_comment.html:901:  <div data-target="react-partial.reactRoot"></div>
-  pr_comment.html:902:</react-partial>
-  pr_comment.html:903:
-  pr_comment.html:904:
-  pr_comment.html:905:      </template>
-  pr_comment.html:906:    </react-partial-anchor>
-  pr_comment.html:907:  </div>
-  pr_comment.html:908:
-  pr_comment.html:909:          <button type="button" class="sr-only js-header-
-menu-focus-trap d-block d-lg-none">Resetting focus</button>
-  pr_comment.html:910:        </div>
-  pr_comment.html:911:      </div>
-  pr_comment.html:912:    </div>
-  pr_comment.html:913:  </div>
-  pr_comment.html:914:</header>
-  pr_comment.html:915:
-  pr_comment.html:916:      <div hidden="hidden" data-view-component="true" cla
-ss="js-stale-session-flash stale-session-flash flash flash-warn flash-full">
-  pr_comment.html:917:
-  pr_comment.html:918:        <svg aria-hidden="true" height="16" viewBox="0 0
-16 16" version="1.1" width="16" data-view-component="true" class="octicon octic
-on-alert">
-  pr_comment.html:919:    <path d="M6.457 1.047c.659-1.234 2.427-1.234 3.086 0l
-6.082 11.378A1.75 1.75 0 0 1 14.082 15H1.918a1.75 1.75 0 0 1-1.543-2.575Zm1.763
-.707a.25.25 0 0 0-.44 0L1.698 13.132a.25.25 0 0 0 .22.368h12.164a.25.25 0 0 0 .
-22-.368Zm.53 3.996v2.5a.75.75 0 0 1-1.5 0v-2.5a.75.75 0 0 1 1.5 0ZM9 11a1 1 0 1
- 1-2 0 1 1 0 0 1 2 0Z"></path>
-  pr_comment.html:920:</svg>
-  pr_comment.html:921:        <span class="js-stale-session-flash-signed-in" hi
-dden>You signed in with another tab or window. <a class="Link--inTextBlock" hre
-f="">Reload</a> to refresh your session.</span>
-  pr_comment.html:922:        <span class="js-stale-session-flash-signed-out" h
-idden>You signed out in another tab or window. <a class="Link--inTextBlock" hre
-f="">Reload</a> to refresh your session.</span>
-  pr_comment.html:923:        <span class="js-stale-session-flash-switched" hid
-den>You switched accounts on another tab or window. <a class="Link--inTextBlock
-" href="">Reload</a> to refresh your session.</span>
-  pr_comment.html:924:
-  pr_comment.html:925:    <button id="icon-button-cc1647dc-6cbd-421b-8c58-2a119
-7fd54f3" aria-labelledby="tooltip-0ab82e6d-b504-451b-8aef-dffb7fff38c7" type="b
-utton" data-view-component="true" class="Button Button--iconOnly Button--invisi
-ble Button--medium flash-close js-flash-close">  <svg aria-hidden="true" height
-="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" c
-lass="octicon octicon-x Button-visual">
-  pr_comment.html:926:    <path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3
-.22a.749.749 0 0 1 1.275.326.749.749 0 0 1-.215.734L9.06 8l3.22 3.22a.749.749 0
- 0 1-.326 1.275.749.749 0 0 1-.734-.215L8 9.06l-3.22 3.22a.751.751 0 0 1-1.042-
-.018.751.751 0 0 1-.018-1.042L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z"></path>
-  pr_comment.html:927:</svg>
-  pr_comment.html:928:</button><tool-tip id="tooltip-0ab82e6d-b504-451b-8aef-df
-fb7fff38c7" for="icon-button-cc1647dc-6cbd-421b-8c58-2a1197fd54f3" popover="man
-ual" data-direction="s" data-type="label" data-view-component="true" class="sr-
-only position-absolute">Dismiss alert</tool-tip>
-  pr_comment.html:929:
-  pr_comment.html:930:
-  pr_comment.html:931:
-  pr_comment.html:932:</div>
-  pr_comment.html:933:    </div>
-  pr_comment.html:934:
-  pr_comment.html:935:  <div id="start-of-content" class="show-on-focus"></div>
-  pr_comment.html:936:
-  pr_comment.html:937:
-  pr_comment.html:938:
-  pr_comment.html:939:
-  pr_comment.html:940:
-  pr_comment.html:941:
-  pr_comment.html:942:
-  pr_comment.html:943:
-  pr_comment.html:944:    <div id="js-flash-container" class="flash-container"
-data-turbo-replace>
-  pr_comment.html:945:
-  pr_comment.html:946:
-  pr_comment.html:947:
-  pr_comment.html:948:
-  pr_comment.html:949:  <template class="js-flash-template">
-  pr_comment.html:950:
-  pr_comment.html:951:<div class="flash flash-full   {{ className }}">
-  pr_comment.html:952:  <div >
-  pr_comment.html:953:    <button autofocus class="flash-close js-flash-close"
-type="button" aria-label="Dismiss this message">
-  pr_comment.html:954:      <svg aria-hidden="true" height="16" viewBox="0 0 16
- 16" version="1.1" width="16" data-view-component="true" class="octicon octicon
--x">
-  pr_comment.html:955:    <path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3
-.22a.749.749 0 0 1 1.275.326.749.749 0 0 1-.215.734L9.06 8l3.22 3.22a.749.749 0
- 0 1-.326 1.275.749.749 0 0 1-.734-.215L8 9.06l-3.22 3.22a.751.751 0 0 1-1.042-
-.018.751.751 0 0 1-.018-1.042L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z"></path>
-  pr_comment.html:956:</svg>
-  pr_comment.html:957:    </button>
-  pr_comment.html:958:    <div aria-atomic="true" role="alert" class="js-flash-
-alert">
-  pr_comment.html:959:
-  pr_comment.html:960:      <div>{{ message }}</div>
-  pr_comment.html:961:
-  pr_comment.html:962:    </div>
-  pr_comment.html:963:  </div>
-  pr_comment.html:964:</div>
-  pr_comment.html:965:  </template>
-  pr_comment.html:966:</div>
-  pr_comment.html:967:
-  pr_comment.html:968:
-  pr_comment.html:969:
-  pr_comment.html:970:
-  pr_comment.html:971:
-  pr_comment.html:972:
-  pr_comment.html:973:
-  pr_comment.html:974:
-  pr_comment.html:975:
-  pr_comment.html:976:  <div
-  pr_comment.html:977:    class="application-main "
-  pr_comment.html:978:    data-commit-hovercards-enabled
-> pr_comment.html:1071:  <a id="code-tab" href="/vlakir/SK24mapper" data-tab-it
-em="i0code-tab" data-selected-links="repo_source repo_downloads repo_commits re
-po_releases repo_tags repo_branches repo_packages repo_deployments repo_attesta
-tions /vlakir/SK24mapper" data-pjax="#repo-content-pjax-container" data-turbo-f
-rame="repo-content-turbo-frame" data-hotkey="g c" data-react-nav="code-view" da
-ta-react-nav-anchor="code-view-repo-link" data-analytics-event="{&quot;category
-&quot;:&quot;Underline navbar&quot;,&quot;action&quot;:&quot;Click tab&quot;,&q
-uot;label&quot;:&quot;Code&quot;,&quot;target&quot;:&quot;UNDERLINE_NAV.TAB&quo
-t;}" data-view-component="true" class="UnderlineNav-item no-wrap js-responsive-
-underlinenav-item js-selected-navigation-item">
-  pr_comment.html:1072:
-  pr_comment.html:1073:              <svg aria-hidden="true" height="16" viewBo
-x="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octico
-n octicon-code UnderlineNav-octicon d-none d-sm-inline">
-  pr_comment.html:1074:    <path d="m11.28 3.22 4.25 4.25a.75.75 0 0 1 0 1.06l-
-4.25 4.25a.749.749 0 0 1-1.275-.326.749.749 0 0 1 .215-.734L13.94 8l-3.72-3.72a
-.749.749 0 0 1 .326-1.275.749.749 0 0 1 .734.215Zm-6.56 0a.751.751 0 0 1 1.042.
-018.751.751 0 0 1 .018 1.042L2.06 8l3.72 3.72a.749.749 0 0 1-.326 1.275.749.749
- 0 0 1-.734-.215L.47 8.53a.75.75 0 0 1 0-1.06Z"></path>
-  pr_comment.html:1075:</svg>
-  pr_comment.html:1076:        <span data-content="Code">Code</span>
-  pr_comment.html:1077:          <span id="code-repo-tab-count" data-pjax-repla
-ce="" data-turbo-replace="" title="Not available" data-view-component="true" cl
-ass="Counter"></span>
-  pr_comment.html:1078:
-  pr_comment.html:1079:
-  pr_comment.html:1080:
-  pr_comment.html:1081:</a></li>
-  pr_comment.html:1082:      <li data-view-component="true" class="d-inline-fle
-x">
-> pr_comment.html:1083:  <a id="issues-tab" href="/vlakir/SK24mapper/issues" da
-ta-tab-item="i1issues-tab" data-selected-links="repo_issues repo_labels repo_mi
-lestones /vlakir/SK24mapper/issues" data-pjax="#repo-content-pjax-container" da
-ta-turbo-frame="repo-content-turbo-frame" data-hotkey="g i" data-react-nav="iss
-ues-react" data-analytics-event="{&quot;category&quot;:&quot;Underline navbar&q
-uot;,&quot;action&quot;:&quot;Click tab&quot;,&quot;label&quot;:&quot;Issues&qu
-ot;,&quot;target&quot;:&quot;UNDERLINE_NAV.TAB&quot;}" data-view-component="tru
-e" class="UnderlineNav-item no-wrap js-responsive-underlinenav-item js-selected
--navigation-item">
-  pr_comment.html:1084:
-  pr_comment.html:1085:              <svg aria-hidden="true" height="16" viewBo
-x="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octico
-n octicon-issue-opened UnderlineNav-octicon d-none d-sm-inline">
-  pr_comment.html:1086:    <path d="M8 9.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z
-"></path><path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6
-.5 6.5 0 0 0-13 0Z"></path>
-  pr_comment.html:1087:</svg>
-  pr_comment.html:1088:        <span data-content="Issues">Issues</span>
-  pr_comment.html:1089:          <span id="issues-repo-tab-count" data-pjax-rep
-lace="" data-turbo-replace="" title="2" data-view-component="true" class="Count
-er">2</span>
-  pr_comment.html:1090:
-  pr_comment.html:1091:
-  pr_comment.html:1092:
-  pr_comment.html:1093:</a></li>
-  pr_comment.html:1094:      <li data-view-component="true" class="d-inline-fle
-x">
-> pr_comment.html:1095:  <a id="pull-requests-tab" href="/vlakir/SK24mapper/pul
-ls" data-tab-item="i2pull-requests-tab" data-selected-links="repo_pulls checks
-/vlakir/SK24mapper/pulls" data-pjax="#repo-content-pjax-container" data-turbo-f
-rame="repo-content-turbo-frame" data-hotkey="g p" data-analytics-event="{&quot;
-category&quot;:&quot;Underline navbar&quot;,&quot;action&quot;:&quot;Click tab&
-quot;,&quot;label&quot;:&quot;Pull requests&quot;,&quot;target&quot;:&quot;UNDE
-RLINE_NAV.TAB&quot;}" aria-current="page" data-view-component="true" class="Und
-erlineNav-item no-wrap js-responsive-underlinenav-item js-selected-navigation-i
-tem selected">
-  pr_comment.html:1096:
-  pr_comment.html:1097:              <svg aria-hidden="true" height="16" viewBo
-x="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octico
-n octicon-git-pull-request UnderlineNav-octicon d-none d-sm-inline">
-  pr_comment.html:1098:    <path d="M1.5 3.25a2.25 2.25 0 1 1 3 2.122v5.256a2.2
-51 2.251 0 1 1-1.5 0V5.372A2.25 2.25 0 0 1 1.5 3.25Zm5.677-.177L9.573.677A.25.2
-5 0 0 1 10 .854V2.5h1A2.5 2.5 0 0 1 13.5 5v5.628a2.251 2.251 0 1 1-1.5 0V5a1 1
-0 0 0-1-1h-1v1.646a.25.25 0 0 1-.427.177L7.177 3.427a.25.25 0 0 1 0-.354ZM3.75
-2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm0 9.5a.75.75 0 1 0 0 1.5.75.75 0 0 0
-0-1.5Zm8.25.75a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Z"></path>
-  pr_comment.html:1099:</svg>
-  pr_comment.html:1100:        <span data-content="Pull requests">Pull requests
-</span>
-  pr_comment.html:1101:          <span id="pull-requests-repo-tab-count" data-p
-jax-replace="" data-turbo-replace="" title="1" data-view-component="true" class
-="Counter">1</span>
-  pr_comment.html:1102:
-  pr_comment.html:1103:
-  pr_comment.html:1104:
-  pr_comment.html:1105:</a></li>
-  pr_comment.html:1106:      <li data-view-component="true" class="d-inline-fle
-x">
-> pr_comment.html:1107:  <a id="actions-tab" href="/vlakir/SK24mapper/actions"
-data-tab-item="i3actions-tab" data-selected-links="repo_actions /vlakir/SK24map
-per/actions" data-pjax="#repo-content-pjax-container" data-turbo-frame="repo-co
-ntent-turbo-frame" data-hotkey="g a" data-analytics-event="{&quot;category&quot
-;:&quot;Underline navbar&quot;,&quot;action&quot;:&quot;Click tab&quot;,&quot;l
-abel&quot;:&quot;Actions&quot;,&quot;target&quot;:&quot;UNDERLINE_NAV.TAB&quot;
-}" data-view-component="true" class="UnderlineNav-item no-wrap js-responsive-un
-derlinenav-item js-selected-navigation-item">
-  pr_comment.html:1108:
-  pr_comment.html:1109:              <svg aria-hidden="true" height="16" viewBo
-x="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octico
-n octicon-play UnderlineNav-octicon d-none d-sm-inline">
-  pr_comment.html:1110:    <path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.
-5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Zm4.879-2.773 4.264 2.559a.25.25 0 0 1 0 .42
-8l-4.264 2.559A.25.25 0 0 1 6 10.559V5.442a.25.25 0 0 1 .379-.215Z"></path>
-  pr_comment.html:1111:</svg>
-  pr_comment.html:1112:        <span data-content="Actions">Actions</span>
-  pr_comment.html:1113:          <span id="actions-repo-tab-count" data-pjax-re
-place="" data-turbo-replace="" title="Not available" data-view-component="true"
- class="Counter"></span>
-  pr_comment.html:1114:
-  pr_comment.html:1115:
-  pr_comment.html:1116:
-  pr_comment.html:1117:</a></li>
-  pr_comment.html:1118:      <li data-view-component="true" class="d-inline-fle
-x">
-> pr_comment.html:1119:  <a id="projects-tab" href="/vlakir/SK24mapper/projects
-" data-tab-item="i4projects-tab" data-selected-links="repo_projects new_repo_pr
-oject repo_project /vlakir/SK24mapper/projects" data-pjax="#repo-content-pjax-c
-ontainer" data-turbo-frame="repo-content-turbo-frame" data-hotkey="g b" data-an
-alytics-event="{&quot;category&quot;:&quot;Underline navbar&quot;,&quot;action&
-quot;:&quot;Click tab&quot;,&quot;label&quot;:&quot;Projects&quot;,&quot;target
-&quot;:&quot;UNDERLINE_NAV.TAB&quot;}" data-view-component="true" class="Underl
-ineNav-item no-wrap js-responsive-underlinenav-item js-selected-navigation-item
-">
-  pr_comment.html:1120:
-  pr_comment.html:1121:              <svg aria-hidden="true" height="16" viewBo
-x="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octico
-n octicon-table UnderlineNav-octicon d-none d-sm-inline">
-  pr_comment.html:1122:    <path d="M0 1.75C0 .784.784 0 1.75 0h12.5C15.216 0 1
-6 .784 16 1.75v12.5A1.75 1.75 0 0 1 14.25 16H1.75A1.75 1.75 0 0 1 0 14.25ZM6.5
-6.5v8h7.75a.25.25 0 0 0 .25-.25V6.5Zm8-1.5V1.75a.25.25 0 0 0-.25-.25H6.5V5Zm-13
- 1.5v7.75c0 .138.112.25.25.25H5v-8ZM5 5V1.5H1.75a.25.25 0 0 0-.25.25V5Z"></path
->
-  pr_comment.html:1123:</svg>
-  pr_comment.html:1124:        <span data-content="Projects">Projects</span>
-  pr_comment.html:1125:          <span id="projects-repo-tab-count" data-pjax-r
-eplace="" data-turbo-replace="" title="0" hidden="hidden" data-view-component="
-true" class="Counter">0</span>
-  pr_comment.html:1126:
-  pr_comment.html:1127:
-  pr_comment.html:1128:
-  pr_comment.html:1129:</a></li>
-  pr_comment.html:1130:      <li data-view-component="true" class="d-inline-fle
-x">
-> pr_comment.html:1131:  <a id="security-tab" href="/vlakir/SK24mapper/security
-" data-tab-item="i5security-tab" data-selected-links="security overview alerts
-policy token_scanning code_scanning /vlakir/SK24mapper/security" data-pjax="#re
-po-content-pjax-container" data-turbo-frame="repo-content-turbo-frame" data-hot
-key="g s" data-analytics-event="{&quot;category&quot;:&quot;Underline navbar&qu
-ot;,&quot;action&quot;:&quot;Click tab&quot;,&quot;label&quot;:&quot;Security&q
-uot;,&quot;target&quot;:&quot;UNDERLINE_NAV.TAB&quot;}" data-view-component="tr
-ue" class="UnderlineNav-item no-wrap js-responsive-underlinenav-item js-selecte
-d-navigation-item">
-  pr_comment.html:1132:
-  pr_comment.html:1133:              <svg aria-hidden="true" height="16" viewBo
-x="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octico
-n octicon-shield UnderlineNav-octicon d-none d-sm-inline">
-  pr_comment.html:1134:    <path d="M7.467.133a1.748 1.748 0 0 1 1.066 0l5.25 1
-.68A1.75 1.75 0 0 1 15 3.48V7c0 1.566-.32 3.182-1.303 4.682-.983 1.498-2.585 2.
-813-5.032 3.855a1.697 1.697 0 0 1-1.33 0c-2.447-1.042-4.049-2.357-5.032-3.855C1
-.32 10.182 1 8.566 1 7V3.48a1.75 1.75 0 0 1 1.217-1.667Zm.61 1.429a.25.25 0 0 0
--.153 0l-5.25 1.68a.25.25 0 0 0-.174.238V7c0 1.358.275 2.666 1.057 3.86.784 1.1
-94 2.121 2.34 4.366 3.297a.196.196 0 0 0 .154 0c2.245-.956 3.582-2.104 4.366-3.
-298C13.225 9.666 13.5 8.36 13.5 7V3.48a.251.251 0 0 0-.174-.237l-5.25-1.68ZM8.7
-5 4.75v3a.75.75 0 0 1-1.5 0v-3a.75.75 0 0 1 1.5 0ZM9 10.5a1 1 0 1 1-2 0 1 1 0 0
- 1 2 0Z"></path>
-  pr_comment.html:1135:</svg>
-  pr_comment.html:1136:        <span data-content="Security">Security</span>
-  pr_comment.html:1137:          <span id="security-repo-tab-count" data-pjax-r
-eplace="" data-turbo-replace="" title="0" hidden="hidden" data-view-component="
-true" class="Counter">0</span>
-  pr_comment.html:1138:
-  pr_comment.html:1139:
-  pr_comment.html:1140:
-  pr_comment.html:1141:</a></li>
-  pr_comment.html:1142:      <li data-view-component="true" class="d-inline-fle
-x">
-> pr_comment.html:1143:  <a id="insights-tab" href="/vlakir/SK24mapper/pulse" d
-ata-tab-item="i6insights-tab" data-selected-links="repo_graphs repo_contributor
-s dependency_graph dependabot_updates pulse people community /vlakir/SK24mapper
-/pulse" data-pjax="#repo-content-pjax-container" data-turbo-frame="repo-content
--turbo-frame" data-analytics-event="{&quot;category&quot;:&quot;Underline navba
-r&quot;,&quot;action&quot;:&quot;Click tab&quot;,&quot;label&quot;:&quot;Insigh
-ts&quot;,&quot;target&quot;:&quot;UNDERLINE_NAV.TAB&quot;}" data-view-component
-="true" class="UnderlineNav-item no-wrap js-responsive-underlinenav-item js-sel
-ected-navigation-item">
-  pr_comment.html:1144:
-  pr_comment.html:1145:              <svg aria-hidden="true" height="16" viewBo
-x="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octico
-n octicon-graph UnderlineNav-octicon d-none d-sm-inline">
-  pr_comment.html:1146:    <path d="M1.5 1.75V13.5h13.75a.75.75 0 0 1 0 1.5H.75
-a.75.75 0 0 1-.75-.75V1.75a.75.75 0 0 1 1.5 0Zm14.28 2.53-5.25 5.25a.75.75 0 0
-1-1.06 0L7 7.06 4.28 9.78a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042l3.
-25-3.25a.75.75 0 0 1 1.06 0L10 7.94l4.72-4.72a.751.751 0 0 1 1.042.018.751.751
-0 0 1 .018 1.042Z"></path>
-  pr_comment.html:1147:</svg>
-  pr_comment.html:1148:        <span data-content="Insights">Insights</span>
-  pr_comment.html:1149:          <span id="insights-repo-tab-count" data-pjax-r
-eplace="" data-turbo-replace="" title="Not available" data-view-component="true
-" class="Counter"></span>
-  pr_comment.html:1150:
-  pr_comment.html:1151:
-  pr_comment.html:1152:
-  pr_comment.html:1153:</a></li>
-  pr_comment.html:1154:</ul>
-  pr_comment.html:1155:    <div style="visibility:hidden;" data-view-component=
-"true" class="UnderlineNav-actions js-responsive-underlinenav-overflow position
--absolute pr-3 pr-md-4 pr-lg-5 right-0">      <action-menu data-select-variant=
-"none" data-view-component="true">
-  pr_comment.html:1156:  <focus-group direction="vertical" mnemonics retain>
-  pr_comment.html:1157:    <button id="action-menu-d22b3643-720c-42f0-afef-0a41
-d147c9d2-button" popovertarget="action-menu-d22b3643-720c-42f0-afef-0a41d147c9d
-2-overlay" aria-controls="action-menu-d22b3643-720c-42f0-afef-0a41d147c9d2-list
-" aria-haspopup="true" aria-labelledby="tooltip-e2bf8381-af2b-4ba5-8b88-46ac31d
-9e20b" type="button" data-view-component="true" class="Button Button--iconOnly
-Button--secondary Button--medium UnderlineNav-item">  <svg aria-hidden="true" h
-eight="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="tr
-ue" class="octicon octicon-kebab-horizontal Button-visual">
-  pr_comment.html:1158:    <path d="M8 9a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3ZM1
-.5 9a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Zm13 0a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0
-0 3Z"></path>
-  pr_comment.html:1159:</svg>
-  pr_comment.html:1160:</button><tool-tip id="tooltip-e2bf8381-af2b-4ba5-8b88-4
-6ac31d9e20b" for="action-menu-d22b3643-720c-42f0-afef-0a41d147c9d2-button" popo
-ver="manual" data-direction="s" data-type="label" data-view-component="true" cl
-ass="sr-only position-absolute">Additional navigation options</tool-tip>
-  pr_comment.html:1161:
-  pr_comment.html:1162:
-  pr_comment.html:1163:<anchored-position data-target="action-menu.overlay" id=
-"action-menu-d22b3643-720c-42f0-afef-0a41d147c9d2-overlay" anchor="action-menu-
-d22b3643-720c-42f0-afef-0a41d147c9d2-button" align="start" side="outside-bottom
-" anchor-offset="normal" popover="auto" data-view-component="true">
-  pr_comment.html:1164:  <div data-view-component="true" class="Overlay Overlay
---size-auto">
-  pr_comment.html:1165:
-  pr_comment.html:1166:      <div data-view-component="true" class="Overlay-bod
-y Overlay-body--paddingNone">          <action-list>
-  pr_comment.html:1167:  <div data-view-component="true">
-  pr_comment.html:1168:    <ul aria-labelledby="action-menu-d22b3643-720c-42f0-
-afef-0a41d147c9d2-button" id="action-menu-d22b3643-720c-42f0-afef-0a41d147c9d2-
-list" role="menu" data-view-component="true" class="ActionListWrap--inset Actio
-nListWrap">
-  pr_comment.html:1169:        <li hidden="hidden" data-menu-item="i0code-tab"
-data-targets="action-list.items" role="none" data-view-component="true" class="
-ActionListItem">
-  pr_comment.html:1170:
-  pr_comment.html:1171:
-  pr_comment.html:1172:    <a tabindex="-1" id="item-702b0b82-530d-496a-bd00-da
-22de1cd2fd" href="/vlakir/SK24mapper" role="menuitem" data-view-component="true
-" class="ActionListContent ActionListContent--visual16">
-  pr_comment.html:1173:        <span class="ActionListItem-visual ActionListIte
-m-visual--leading">
-  pr_comment.html:1174:          <svg aria-hidden="true" height="16" viewBox="0
- 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon oc
-ticon-code">
-  pr_comment.html:1175:    <path d="m11.28 3.22 4.25 4.25a.75.75 0 0 1 0 1.06l-
-4.25 4.25a.749.749 0 0 1-1.275-.326.749.749 0 0 1 .215-.734L13.94 8l-3.72-3.72a
-.749.749 0 0 1 .326-1.275.749.749 0 0 1 .734.215Zm-6.56 0a.751.751 0 0 1 1.042.
-018.751.751 0 0 1 .018 1.042L2.06 8l3.72 3.72a.749.749 0 0 1-.326 1.275.749.749
- 0 0 1-.734-.215L.47 8.53a.75.75 0 0 1 0-1.06Z"></path>
-  pr_comment.html:1176:</svg>
-  pr_comment.html:1177:        </span>
-  pr_comment.html:1178:
-  pr_comment.html:1179:        <span data-view-component="true" class="ActionLi
-stItem-label">
-  pr_comment.html:1180:          Code
-  pr_comment.html:1181:</span>
-  pr_comment.html:1182:</a>
-  pr_comment.html:1183:
-  pr_comment.html:1184:</li>
-  pr_comment.html:1185:        <li hidden="hidden" data-menu-item="i1issues-tab
-" data-targets="action-list.items" role="none" data-view-component="true" class
-="ActionListItem">
-  pr_comment.html:1186:
-  pr_comment.html:1187:
-  pr_comment.html:1188:    <a tabindex="-1" id="item-289c29ea-edab-4f49-847d-0c
-1ace9dbacf" href="/vlakir/SK24mapper/issues" role="menuitem" data-view-componen
-t="true" class="ActionListContent ActionListContent--visual16">
-  pr_comment.html:1189:        <span class="ActionListItem-visual ActionListIte
-m-visual--leading">
-  pr_comment.html:1190:          <svg aria-hidden="true" height="16" viewBox="0
- 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon oc
-ticon-issue-opened">
-  pr_comment.html:1191:    <path d="M8 9.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z
-"></path><path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6
-.5 6.5 0 0 0-13 0Z"></path>
-  pr_comment.html:1192:</svg>
-  pr_comment.html:1193:        </span>
-  pr_comment.html:1194:
-  pr_comment.html:1195:        <span data-view-component="true" class="ActionLi
-stItem-label">
-  pr_comment.html:1196:          Issues
-  pr_comment.html:1197:</span>
-  pr_comment.html:1198:</a>
-  pr_comment.html:1199:
-  pr_comment.html:1200:</li>
-  pr_comment.html:1201:        <li hidden="hidden" data-menu-item="i2pull-reque
-sts-tab" data-targets="action-list.items" role="none" data-view-component="true
-" class="ActionListItem">
-  pr_comment.html:1202:
-  pr_comment.html:1203:
-  pr_comment.html:1204:    <a tabindex="-1" id="item-40728797-bcd8-4266-9b7a-af
-b8bbc6592a" href="/vlakir/SK24mapper/pulls" role="menuitem" data-view-component
-="true" class="ActionListContent ActionListContent--visual16">
-  pr_comment.html:1205:        <span class="ActionListItem-visual ActionListIte
-m-visual--leading">
-  pr_comment.html:1206:          <svg aria-hidden="true" height="16" viewBox="0
- 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon oc
-ticon-git-pull-request">
-  pr_comment.html:1207:    <path d="M1.5 3.25a2.25 2.25 0 1 1 3 2.122v5.256a2.2
-51 2.251 0 1 1-1.5 0V5.372A2.25 2.25 0 0 1 1.5 3.25Zm5.677-.177L9.573.677A.25.2
-5 0 0 1 10 .854V2.5h1A2.5 2.5 0 0 1 13.5 5v5.628a2.251 2.251 0 1 1-1.5 0V5a1 1
-0 0 0-1-1h-1v1.646a.25.25 0 0 1-.427.177L7.177 3.427a.25.25 0 0 1 0-.354ZM3.75
-2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm0 9.5a.75.75 0 1 0 0 1.5.75.75 0 0 0
-0-1.5Zm8.25.75a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Z"></path>
-  pr_comment.html:1208:</svg>
-  pr_comment.html:1209:        </span>
-  pr_comment.html:1210:
-  pr_comment.html:1211:        <span data-view-component="true" class="ActionLi
-stItem-label">
-  pr_comment.html:1212:          Pull requests
-  pr_comment.html:1213:</span>
-  pr_comment.html:1214:</a>
-  pr_comment.html:1215:
-  pr_comment.html:1216:</li>
-  pr_comment.html:1217:        <li hidden="hidden" data-menu-item="i3actions-ta
-b" data-targets="action-list.items" role="none" data-view-component="true" clas
-s="ActionListItem">
-  pr_comment.html:1218:
-  pr_comment.html:1219:
-  pr_comment.html:1220:    <a tabindex="-1" id="item-953faef6-72f8-4f16-9afb-1d
-26e36883da" href="/vlakir/SK24mapper/actions" role="menuitem" data-view-compone
-nt="true" class="ActionListContent ActionListContent--visual16">
-  pr_comment.html:1221:        <span class="ActionListItem-visual ActionListIte
-m-visual--leading">
-  pr_comment.html:1222:          <svg aria-hidden="true" height="16" viewBox="0
- 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon oc
-ticon-play">
-  pr_comment.html:1223:    <path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.
-5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Zm4.879-2.773 4.264 2.559a.25.25 0 0 1 0 .42
-8l-4.264 2.559A.25.25 0 0 1 6 10.559V5.442a.25.25 0 0 1 .379-.215Z"></path>
-  pr_comment.html:1224:</svg>
-  pr_comment.html:1225:        </span>
-  pr_comment.html:1226:
-  pr_comment.html:1227:        <span data-view-component="true" class="ActionLi
-stItem-label">
-  pr_comment.html:1228:          Actions
-  pr_comment.html:1229:</span>
-  pr_comment.html:1230:</a>
-  pr_comment.html:1231:
-  pr_comment.html:1232:</li>
-  pr_comment.html:1233:        <li hidden="hidden" data-menu-item="i4projects-t
-ab" data-targets="action-list.items" role="none" data-view-component="true" cla
-ss="ActionListItem">
-  pr_comment.html:1234:
-  pr_comment.html:1235:
-  pr_comment.html:1236:    <a tabindex="-1" id="item-7e671f84-ebcf-405a-9ce3-7b
-da649e6785" href="/vlakir/SK24mapper/projects" role="menuitem" data-view-compon
-ent="true" class="ActionListContent ActionListContent--visual16">
-  pr_comment.html:1237:        <span class="ActionListItem-visual ActionListIte
-m-visual--leading">
-  pr_comment.html:1238:          <svg aria-hidden="true" height="16" viewBox="0
- 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon oc
-ticon-table">
-  pr_comment.html:1239:    <path d="M0 1.75C0 .784.784 0 1.75 0h12.5C15.216 0 1
-6 .784 16 1.75v12.5A1.75 1.75 0 0 1 14.25 16H1.75A1.75 1.75 0 0 1 0 14.25ZM6.5
-6.5v8h7.75a.25.25 0 0 0 .25-.25V6.5Zm8-1.5V1.75a.25.25 0 0 0-.25-.25H6.5V5Zm-13
- 1.5v7.75c0 .138.112.25.25.25H5v-8ZM5 5V1.5H1.75a.25.25 0 0 0-.25.25V5Z"></path
->
-  pr_comment.html:1240:</svg>
-  pr_comment.html:1241:        </span>
-  pr_comment.html:1242:
-  pr_comment.html:1243:        <span data-view-component="true" class="ActionLi
-stItem-label">
-> pr_comment.html:3626:<markdown-accessiblity-table><table role="table"><thead>
-<tr><td><strong>Category</strong></td><td align="left"><strong>Suggestion
-
-                                               </strong></td><td align="center"
-><strong>Impact</strong></td></tr></thead><tbody><tr><td rowspan="3">General</t
-d>
-  pr_comment.html:3627:<td>
-  pr_comment.html:3628:<details><summary>Remove incorrect await on sync call</s
-ummary>
-  pr_comment.html:3629:<hr>
-  pr_comment.html:3630:<p dir="auto"><strong>Remove the <code class="notranslat
-e">await</code> keyword from the call to <code class="notranslate">tile_progres
-s.step(1)</code> as it is a <br>synchronous method.</strong></p>
-  pr_comment.html:3631:<p dir="auto"><a href="https://github.com/vlakir/SK24map
-per/pull/15/files#diff-da444852451cc45911302f9583e7ada83a161d0496b6edbde8ffdc23
-852b85d4R95-R95">src/services/processors/elevation_contours.py [95]</a></p>
-  pr_comment.html:3632:<div class="highlight highlight-source-diff notranslate
-position-relative overflow-auto" dir="auto" data-snippet-clipboard-copy-content
-="-await tile_progress.step(1)
-  pr_comment.html:3633:+tile_progress.step(1)"><pre class="notranslate"><span c
-lass="pl-md"><span class="pl-md">-</span>await tile_progress.step(1)</span>
-  pr_comment.html:3634:<span class="pl-mi1"><span class="pl-mi1">+</span>tile_p
-rogress.step(1)</span></pre></div>
-  pr_comment.html:3635:<p dir="auto"><code class="notranslate">[To ensure code
-accuracy, apply this suggestion manually]</code></p>
-  pr_comment.html:3636:<details><summary>Suggestion importance[1-10]: 9</summar
-y>
-  pr_comment.html:3637:<p dir="auto">__</p>
-  pr_comment.html:3638:<p dir="auto">Why: The suggestion correctly identifies a
- <code class="notranslate">TypeError</code> that would occur at runtime by awai
-ting a synchronous method, and the fix is simple and correct.</p>
-  pr_comment.html:3639:</details></details></td><td align="center">High
-  pr_comment.html:3640:</td></tr><tr><td>
-  pr_comment.html:3641:<details><summary>Replace manual loop with optimized fun
+  pr_comment.html:1976:    <circle cx="8" cy="8" r="7" stroke="currentColor" st
+roke-opacity="0.25" stroke-width="2" vector-effect="non-scaling-stroke" fill="n
+one"></circle>
+  pr_comment.html:1977:    <path d="M15 8a7.002 7.002 0 00-7-7" stroke="current
+Color" stroke-width="2" stroke-linecap="round" vector-effect="non-scaling-strok
+e"></path>
+  pr_comment.html:1978:</svg>    <span class="sr-only">Loading</span>
+  pr_comment.html:1979:</span>
+  pr_comment.html:1980:  </span>
+  pr_comment.html:1981:</section>
+  pr_comment.html:1982:
+  pr_comment.html:1983:<details><summary><h3 dir="auto">File Walkthrough</h3></
+summary>
+  pr_comment.html:1984:<markdown-accessiblity-table><table role="table"><thead>
+<tr><th></th><th align="left">Relevant files</th></tr></thead><tbody><tr><td><s
+trong>Refactoring</strong></td><td><details><summary>6 files</summary><table ro
+le="table">
+  pr_comment.html:1985:<tbody><tr>
+  pr_comment.html:1986:  <td>
+  pr_comment.html:1987:    <details>
+  pr_comment.html:1988:      <summary><strong>service.py</strong><dd><code clas
+s="notranslate">Refactor service.py to wrapper around MapDownloadService</code>
+  </dd></summary>
+  pr_comment.html:1989:<hr>
+  pr_comment.html:1990:<p dir="auto">src/service.py</p>
+  pr_comment.html:1991:<ul dir="auto"><li>Refactored from monolithic implementa
+tion to a thin <br>backward-compatibility wrapper<br> </li><li> Removed ~1700 l
+ines of core download logic and delegated to <br><code class="notranslate">MapD
+ownloadService</code><br> </li><li> Simplified function to create service insta
+nce and call its <code class="notranslate">download</code> <br>method<br> </li>
+<li> Updated imports to use new service architecture and shared constants</li><
+/ul>
+  pr_comment.html:1992:</details>
+  pr_comment.html:1993:  </td>
+  pr_comment.html:1994:  <td><a href="https://github.com/vlakir/SK24mapper/pull
+/15/files#diff-552a6400d70e70b3add52c1eae6e2cde3db3b4156f57acf8e23ec469e921fb50
+">+40/-1846</a></td>
+  pr_comment.html:1995:</tr>
+  pr_comment.html:1996:<tr>
+> pr_comment.html:2102:<ul dir="auto"><li>Converted <code class="notranslate">d
+ecode_terrain_rgb_to_elevation_m()</code> to return numpy array <br>instead of
+list for better performance<br> </li><li> Added DEM tile caching system with <c
+ode class="notranslate">get_cached_dem_tile()</code>, <br><code class="notransl
+ate">cache_dem_tile()</code>, and <code class="notranslate">clear_dem_cache()</
+code> functions<br> </li><li> Optimized <code class="notranslate">colorize_dem_
+to_image()</code> with vectorized numpy operations and <br>LUT-based color mapp
+ing<br> </li><li> Refactored <code class="notranslate">assemble_dem()</code> to
+ use numpy arrays for memory efficiency <br>and faster operations</li></ul>
+  pr_comment.html:2103:</details>
+  pr_comment.html:2104:  </td>
+  pr_comment.html:2105:  <td><a href="https://github.com/vlakir/SK24mapper/pull
+/15/files#diff-1bdb7fe2939d4a2e06e695aa8978e365ca1634f85276e7b7396fbcb97d0d544e
+">+188/-107</a></td>
+  pr_comment.html:2106:</tr>
+  pr_comment.html:2107:<tr>
+  pr_comment.html:2108:  <td>
+  pr_comment.html:2109:    <details>
+  pr_comment.html:2110:      <summary><strong>stats.py</strong><dd><code class=
+"notranslate">Elevation stats module reorganization and tile caching</code>
+  </dd></summary>
+  pr_comment.html:2111:<hr>
+  pr_comment.html:2112:<p dir="auto">src/elevation/stats.py</p>
+  pr_comment.html:2113:<ul dir="auto"><li>Updated import paths to use new modul
+e structure (<code class="notranslate">geo.topography</code>, <br><code class="
+notranslate">geo.geometry</code>, <code class="notranslate">shared.constants</c
+ode>, <code class="notranslate">contours.helpers</code>)<br> </li><li> Added op
+tional tile caching feature to <code class="notranslate">sample_elevation_perce
+ntiles()</code> <br>with <code class="notranslate">cache_tiles</code> parameter
+<br> </li><li> Enhanced return type to include optional tile cache dictionary f
+or <br>reuse in downstream processing<br> </li><li> Improved type hints with <c
+ode class="notranslate">Semaphore</code> import and better documentation</li></
+ul>
+  pr_comment.html:2114:</details>
+  pr_comment.html:2115:  </td>
+  pr_comment.html:2116:  <td><a href="https://github.com/vlakir/SK24mapper/pull
+/15/files#diff-5f66912312b4b6d9c4c8184de89c5bc018d820e4f9e75cbe8b02801d360a7761
+">+31/-14</a>  </td>
+  pr_comment.html:2117:</tr>
+  pr_comment.html:2118:<tr>
+  pr_comment.html:2119:  <td>
+  pr_comment.html:2120:    <details>
+  pr_comment.html:2121:      <summary><strong>radio_horizon.py</strong><dd><cod
+e class="notranslate">Radio horizon calculation service with terrain analysis</
+code>    </dd></summary>
+  pr_comment.html:2122:<hr>
+  pr_comment.html:2123:<p dir="auto">src/services/radio_horizon.py</p>
+  pr_comment.html:2124:<ul dir="auto"><li>New module implementing radio horizon
+ calculation for UAV visibility <br>analysis<br> </li><li> Computes minimum UAV
+ height above ground for direct radio <br>line-of-sight with ground station<br>
+ </li><li> Accounts for terrain relief and Earth curvature using numpy and Numb
+a <br>JIT optimization<br> </li><li> Includes DEM downsampling, bilinear interp
+olation, ray tracing, and <br>colorization functions</li></ul>
+  pr_comment.html:2125:</details>
+  pr_comment.html:2126:  </td>
+  pr_comment.html:2127:  <td><a href="https://github.com/vlakir/SK24mapper/pull
+/15/files#diff-bf2e3ad21c041476dcf7f619511689a09e3280d37d5628e649fa3b58a105edae
+">+613/-0</a>  </td>
+  pr_comment.html:2128:</tr>
+  pr_comment.html:2129:<tr>
+  pr_comment.html:2130:  <td>
+  pr_comment.html:2131:    <details>
+  pr_comment.html:2132:      <summary><strong>grid.py</strong><dd><code class="
+notranslate">Grid drawing utilities for SK-42 coordinate system</code>
+     </dd></summary>
+> pr_comment.html:3641:<details><summary>Replace manual loop with optimized fun
 ctions</summary>
   pr_comment.html:3642:<hr>
-  pr_comment.html:3643:<p dir="auto"><strong>Refactor <code class="notranslate"
+> pr_comment.html:3643:<p dir="auto"><strong>Refactor <code class="notranslate"
 >compute_and_colorize_radio_horizon</code> to improve performance. Replace the
 <br>slow, manual Python loop for interpolation and colorization with calls to t
 he <br>existing optimized functions <code class="notranslate">compute_radio_hor
@@ -1556,289 +241,50 @@ p
 ти.
   pr_comment.html:3672:+    &quot;&quot;&quot;
   pr_comment.html:3673:+    if dem.size == 0:
-  pr_comment.html:3674:+        return Image.new(
-  pr_comment.html:3675:+            'RGB', RADIO_HORIZON_EMPTY_IMAGE_SIZE_PX, R
-ADIO_HORIZON_EMPTY_IMAGE_COLOR
-  pr_comment.html:3676:+        )
-  pr_comment.html:3677:
-  pr_comment.html:3678:-            # Интерполяция
-  pr_comment.html:3679:-            v00 = grid_values[gr0, gc0]
-  pr_comment.html:3680:-            v01 = grid_values[gr0, gc1]
-  pr_comment.html:3681:-            v10 = grid_values[gr1, gc0]
-  pr_comment.html:3682:-            v11 = grid_values[gr1, gc1]
-  pr_comment.html:3683:+    horizon_matrix = compute_radio_horizon(
-  pr_comment.html:3684:+        dem,
-  pr_comment.html:3685:+        antenna_row,
-  pr_comment.html:3686:+        antenna_col,
-  pr_comment.html:3687:+        antenna_height_m,
-  pr_comment.html:3688:+        pixel_size_m,
-  pr_comment.html:3689:+        earth_radius_m,
-  pr_comment.html:3690:+        refraction_k,
-  pr_comment.html:3691:+        grid_step,
-  pr_comment.html:3692:+    )
-  pr_comment.html:3693:
-  pr_comment.html:3694:-            v0 = v00 + (v01 - v00) * dc
-  pr_comment.html:3695:-            v1 = v10 + (v11 - v10) * dc
-  pr_comment.html:3696:-            val = v0 + (v1 - v0) * dr
-  pr_comment.html:3697:+    return colorize_radio_horizon(
-  pr_comment.html:3698:+        horizon_matrix, max_height_m, color_ramp, unrea
-chable_color
-  pr_comment.html:3699:+    )
-  pr_comment.html:3700:
-  pr_comment.html:3701:-            # Цвет: значения &gt; max_height_m отобража
-ются серым
-  pr_comment.html:3702:-            if val &gt; max_height_m:
-  pr_comment.html:3703:-                idx = unreachable_idx
-  pr_comment.html:3704:-            else:
-  pr_comment.html:3705:-                idx = int(val * inv_max)
-  pr_comment.html:3706:-                idx = max(0, min(idx, lut_size - 1))
-  pr_comment.html:3707:-
-  pr_comment.html:3708:-            rgb[row, col] = lut[idx]
-  pr_comment.html:3709:-
-  pr_comment.html:3710:-    return Image.fromarray(rgb)
-  pr_comment.html:3711:-"><pre class="notranslate"> def compute_and_colorize_ra
-dio_horizon(
-  pr_comment.html:3712:<span class="pl-md"><span class="pl-md">-</span>    ...<
-/span>
-  pr_comment.html:3713:<span class="pl-mi1"><span class="pl-mi1">+</span>    de
-m: np.ndarray,</span>
-  pr_comment.html:3714:<span class="pl-mi1"><span class="pl-mi1">+</span>    an
-tenna_row: int,</span>
-  pr_comment.html:3715:<span class="pl-mi1"><span class="pl-mi1">+</span>    an
-tenna_col: int,</span>
-  pr_comment.html:3716:<span class="pl-mi1"><span class="pl-mi1">+</span>    an
-tenna_height_m: float,</span>
-  pr_comment.html:3717:<span class="pl-mi1"><span class="pl-mi1">+</span>    pi
-xel_size_m: float,</span>
-  pr_comment.html:3718:<span class="pl-mi1"><span class="pl-mi1">+</span>    ea
-rth_radius_m: float = EARTH_RADIUS_M,</span>
-  pr_comment.html:3719:<span class="pl-mi1"><span class="pl-mi1">+</span>    re
-fraction_k: float = RADIO_HORIZON_REFRACTION_K,</span>
-  pr_comment.html:3720:<span class="pl-mi1"><span class="pl-mi1">+</span>    gr
-id_step: int = RADIO_HORIZON_GRID_STEP,</span>
-  pr_comment.html:3721:<span class="pl-mi1"><span class="pl-mi1">+</span>    ma
-x_height_m: float = RADIO_HORIZON_MAX_HEIGHT_M,</span>
-  pr_comment.html:3722:<span class="pl-mi1"><span class="pl-mi1">+</span>    co
-lor_ramp: list[tuple[float, tuple[int, int, int]]] | None = None,</span>
-  pr_comment.html:3723:<span class="pl-mi1"><span class="pl-mi1">+</span>    un
-reachable_color: tuple[int, int, int] = RADIO_HORIZON_UNREACHABLE_COLOR,</span>
-  pr_comment.html:3724: ) -&gt; Image.Image:
-  pr_comment.html:3725:<span class="pl-md"><span class="pl-md">-</span>    ...<
-/span>
-  pr_comment.html:3726:<span class="pl-md"><span class="pl-md">-</span>    for
-row in range(h):</span>
-> pr_comment.html:4577:            <a data-analytics-event="{&quot;category&quo
-t;:&quot;Footer&quot;,&quot;action&quot;:&quot;go to Terms&quot;,&quot;label&qu
-ot;:&quot;text:terms&quot;}" href="https://docs.github.com/site-policy/github-t
-erms/github-terms-of-service" data-view-component="true" class="Link--secondary
- Link">Terms</a>
-  pr_comment.html:4578:          </li>
-  pr_comment.html:4579:
-  pr_comment.html:4580:          <li class="mx-2">
-> pr_comment.html:4581:            <a data-analytics-event="{&quot;category&quo
-t;:&quot;Footer&quot;,&quot;action&quot;:&quot;go to privacy&quot;,&quot;label&
-quot;:&quot;text:privacy&quot;}" href="https://docs.github.com/site-policy/priv
-acy-policies/github-privacy-statement" data-view-component="true" class="Link--
-secondary Link">Privacy</a>
-  pr_comment.html:4582:          </li>
-  pr_comment.html:4583:
-  pr_comment.html:4584:          <li class="mx-2">
-> pr_comment.html:4585:            <a data-analytics-event="{&quot;category&quo
-t;:&quot;Footer&quot;,&quot;action&quot;:&quot;go to security&quot;,&quot;label
-&quot;:&quot;text:security&quot;}" href="https://github.com/security" data-view
--component="true" class="Link--secondary Link">Security</a>
-  pr_comment.html:4586:          </li>
-  pr_comment.html:4587:
-  pr_comment.html:4588:          <li class="mx-2">
-> pr_comment.html:4589:            <a data-analytics-event="{&quot;category&quo
-t;:&quot;Footer&quot;,&quot;action&quot;:&quot;go to status&quot;,&quot;label&q
-uot;:&quot;text:status&quot;}" href="https://www.githubstatus.com/" data-view-c
-omponent="true" class="Link--secondary Link">Status</a>
-  pr_comment.html:4590:          </li>
-  pr_comment.html:4591:
-  pr_comment.html:4592:          <li class="mx-2">
-> pr_comment.html:4593:            <a data-analytics-event="{&quot;category&quo
-t;:&quot;Footer&quot;,&quot;action&quot;:&quot;go to community&quot;,&quot;labe
-l&quot;:&quot;text:community&quot;}" href="https://github.community/" data-view
--component="true" class="Link--secondary Link">Community</a>
-  pr_comment.html:4594:          </li>
-  pr_comment.html:4595:
-  pr_comment.html:4596:          <li class="mx-2">
-> pr_comment.html:4597:            <a data-analytics-event="{&quot;category&quo
-t;:&quot;Footer&quot;,&quot;action&quot;:&quot;go to docs&quot;,&quot;label&quo
-t;:&quot;text:docs&quot;}" href="https://docs.github.com/" data-view-component=
-"true" class="Link--secondary Link">Docs</a>
-  pr_comment.html:4598:          </li>
-  pr_comment.html:4599:
-  pr_comment.html:4600:          <li class="mx-2">
-> pr_comment.html:4601:            <a data-analytics-event="{&quot;category&quo
-t;:&quot;Footer&quot;,&quot;action&quot;:&quot;go to contact&quot;,&quot;label&
-quot;:&quot;text:contact&quot;}" href="https://support.github.com?tags=dotcom-f
-ooter" data-view-component="true" class="Link--secondary Link">Contact</a>
-  pr_comment.html:4602:          </li>
-  pr_comment.html:4603:
-  pr_comment.html:4604:          <li class="mx-2" >
-  pr_comment.html:4605:  <cookie-consent-link>
-  pr_comment.html:4606:    <button
-  pr_comment.html:4607:      type="button"
-  pr_comment.html:4608:      class="Link--secondary underline-on-hover border-0
- p-0 color-bg-transparent"
-  pr_comment.html:4609:      data-action="click:cookie-consent-link#showConsent
-Management"
-  pr_comment.html:4610:      data-analytics-event="{&quot;location&quot;:&quot;
-footer&quot;,&quot;action&quot;:&quot;cookies&quot;,&quot;context&quot;:&quot;s
-ubfooter&quot;,&quot;tag&quot;:&quot;link&quot;,&quot;label&quot;:&quot;cookies
-_link_subfooter_footer&quot;}"
-  pr_comment.html:4611:    >
-  pr_comment.html:4612:       Manage cookies
-  pr_comment.html:4613:    </button>
-  pr_comment.html:4614:  </cookie-consent-link>
-  pr_comment.html:4615:</li>
-  pr_comment.html:4616:
-  pr_comment.html:4617:<li class="mx-2">
-  pr_comment.html:4618:  <cookie-consent-link>
-  pr_comment.html:4619:    <button
-  pr_comment.html:4620:      type="button"
-  pr_comment.html:4621:      class="Link--secondary underline-on-hover border-0
- p-0 color-bg-transparent text-left"
-  pr_comment.html:4622:      data-action="click:cookie-consent-link#showConsent
-Management"
-  pr_comment.html:4623:      data-analytics-event="{&quot;location&quot;:&quot;
-footer&quot;,&quot;action&quot;:&quot;dont_share_info&quot;,&quot;context&quot;
-:&quot;subfooter&quot;,&quot;tag&quot;:&quot;link&quot;,&quot;label&quot;:&quot
-;dont_share_info_link_subfooter_footer&quot;}"
-  pr_comment.html:4624:    >
-  pr_comment.html:4625:      Do not share my personal information
-  pr_comment.html:4626:    </button>
-  pr_comment.html:4627:  </cookie-consent-link>
-  pr_comment.html:4628:</li>
-  pr_comment.html:4629:
-  pr_comment.html:4630:      </ul>
-  pr_comment.html:4631:    </nav>
-  pr_comment.html:4632:  </div>
-  pr_comment.html:4633:</footer>
-  pr_comment.html:4634:
-  pr_comment.html:4635:
-  pr_comment.html:4636:
-  pr_comment.html:4637:    <ghcc-consent id="ghcc" class="position-fixed bottom
--0 left-0" style="z-index: 999999"
-  pr_comment.html:4638:      data-locale="en"
-  pr_comment.html:4639:      data-initial-cookie-consent-allowed=""
-  pr_comment.html:4640:      data-cookie-consent-required="false"
-  pr_comment.html:4641:    ></ghcc-consent>
-  pr_comment.html:4642:
-  pr_comment.html:4643:
-  pr_comment.html:4644:
-  pr_comment.html:4645:
-  pr_comment.html:4646:  <div id="ajax-error-message" class="ajax-error-message
- flash flash-error" hidden>
-  pr_comment.html:4647:    <svg aria-hidden="true" height="16" viewBox="0 0 16
-16" version="1.1" width="16" data-view-component="true" class="octicon octicon-
-alert">
-  pr_comment.html:4648:    <path d="M6.457 1.047c.659-1.234 2.427-1.234 3.086 0
-l6.082 11.378A1.75 1.75 0 0 1 14.082 15H1.918a1.75 1.75 0 0 1-1.543-2.575Zm1.76
-3.707a.25.25 0 0 0-.44 0L1.698 13.132a.25.25 0 0 0 .22.368h12.164a.25.25 0 0 0
-.22-.368Zm.53 3.996v2.5a.75.75 0 0 1-1.5 0v-2.5a.75.75 0 0 1 1.5 0ZM9 11a1 1 0
-1 1-2 0 1 1 0 0 1 2 0Z"></path>
-  pr_comment.html:4649:</svg>
-  pr_comment.html:4650:    <button type="button" class="flash-close js-ajax-err
-or-dismiss" aria-label="Dismiss error">
-  pr_comment.html:4651:      <svg aria-hidden="true" height="16" viewBox="0 0 1
-6 16" version="1.1" width="16" data-view-component="true" class="octicon octico
-n-x">
-  pr_comment.html:4652:    <path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-
-3.22a.749.749 0 0 1 1.275.326.749.749 0 0 1-.215.734L9.06 8l3.22 3.22a.749.749
-0 0 1-.326 1.275.749.749 0 0 1-.734-.215L8 9.06l-3.22 3.22a.751.751 0 0 1-1.042
--.018.751.751 0 0 1-.018-1.042L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z"></path>
-  pr_comment.html:4653:</svg>
-  pr_comment.html:4654:    </button>
-  pr_comment.html:4655:    You can’t perform that action at this time.
-  pr_comment.html:4656:  </div>
-  pr_comment.html:4657:
-  pr_comment.html:4658:    <template id="site-details-dialog">
-  pr_comment.html:4659:  <details class="details-reset details-overlay details-
-overlay-dark lh-default color-fg-default hx_rsm" open>
-  pr_comment.html:4660:    <summary role="button" aria-label="Close dialog"></s
-ummary>
-  pr_comment.html:4661:    <details-dialog class="Box Box--overlay d-flex flex-
-column anim-fade-in fast hx_rsm-dialog hx_rsm-modal">
-  pr_comment.html:4662:      <button class="Box-btn-octicon m-0 btn-octicon pos
-ition-absolute right-0 top-0" type="button" aria-label="Close dialog" data-clos
-e-dialog>
-  pr_comment.html:4663:        <svg aria-hidden="true" height="16" viewBox="0 0
- 16 16" version="1.1" width="16" data-view-component="true" class="octicon octi
-con-x">
-  pr_comment.html:4664:    <path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-
-3.22a.749.749 0 0 1 1.275.326.749.749 0 0 1-.215.734L9.06 8l3.22 3.22a.749.749
-0 0 1-.326 1.275.749.749 0 0 1-.734-.215L8 9.06l-3.22 3.22a.751.751 0 0 1-1.042
--.018.751.751 0 0 1-.018-1.042L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z"></path>
-  pr_comment.html:4665:</svg>
-  pr_comment.html:4666:      </button>
-  pr_comment.html:4667:      <div class="octocat-spinner my-6 js-details-dialog
--spinner"></div>
-  pr_comment.html:4668:    </details-dialog>
-  pr_comment.html:4669:  </details>
-  pr_comment.html:4670:</template>
-  pr_comment.html:4671:
-  pr_comment.html:4672:    <div class="Popover js-hovercard-content position-ab
-solute" style="display: none; outline: none;">
-  pr_comment.html:4673:  <div class="Popover-message Popover-message--bottom-le
-ft Popover-message--large Box color-shadow-large" style="width:360px;">
-  pr_comment.html:4674:  </div>
-  pr_comment.html:4675:</div>
-  pr_comment.html:4676:
-  pr_comment.html:4677:    <template id="snippet-clipboard-copy-button">
-  pr_comment.html:4678:  <div class="zeroclipboard-container position-absolute
-right-0 top-0">
-  pr_comment.html:4679:    <clipboard-copy aria-label="Copy" class="ClipboardBu
-tton btn js-clipboard-copy m-2 p-0" data-copy-feedback="Copied!" data-tooltip-d
-irection="w">
-  pr_comment.html:4680:      <svg aria-hidden="true" height="16" viewBox="0 0 1
-6 16" version="1.1" width="16" data-view-component="true" class="octicon octico
-n-copy js-clipboard-copy-icon m-2">
-  pr_comment.html:4681:    <path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0
- 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-
-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0
-14.25Z"></path><path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1
-.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0
- 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-
-.25-.25Z"></path>
-  pr_comment.html:4682:</svg>
-  pr_comment.html:4683:      <svg aria-hidden="true" height="16" viewBox="0 0 1
-6 16" version="1.1" width="16" data-view-component="true" class="octicon octico
-n-check js-clipboard-check-icon color-fg-success d-none m-2">
-  pr_comment.html:4684:    <path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a
-.75.75 0 0 1-1.06 0L2.22 9.28a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.01
-8L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z"></path>
-  pr_comment.html:4685:</svg>
-  pr_comment.html:4686:    </clipboard-copy>
-  pr_comment.html:4687:  </div>
-  pr_comment.html:4688:</template>
-  pr_comment.html:4689:<template id="snippet-clipboard-copy-button-unpositioned
-">
-  pr_comment.html:4690:  <div class="zeroclipboard-container">
-  pr_comment.html:4691:    <clipboard-copy aria-label="Copy" class="ClipboardBu
-tton btn btn-invisible js-clipboard-copy m-2 p-0 d-flex flex-justify-center fle
-x-items-center" data-copy-feedback="Copied!" data-tooltip-direction="w">
-  pr_comment.html:4692:      <svg aria-hidden="true" height="16" viewBox="0 0 1
-6 16" version="1.1" width="16" data-view-component="true" class="octicon octico
-n-copy js-clipboard-copy-icon">
-  pr_comment.html:4693:    <path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0
- 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-
-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0
-14.25Z"></path><path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1
-.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0
- 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-
-.25-.25Z"></path>
-  pr_comment.html:4694:</svg>
-  pr_comment.html:4695:      <svg aria-hidden="true" height="16" viewBox="0 0 1
-6 16" version="1.1" width="16" data-view-component="true" class="octicon octico
-n-check js-clipboard-check-icon color-fg-success d-none">
-  pr_comment.html:4696:    <path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a
-.75.75 0 0 1-1.06 0L2.22 9.28a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.01
-8L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z"></path>
-  pr_comment.html:4697:</svg>
-  pr_comment.html:4698:    </clipboard-copy>
-  pr_comment.html:4699:  </div>
-  pr_comment.html:4700:</template>
-  pr_comment.html:4701:
+> pr_comment.html:3781:<p dir="auto">Why: The suggestion correctly identifies a
+ significant performance bottleneck due to manual, per-pixel processing in a Py
+thon loop and proposes refactoring to use existing, highly optimized vectorized
+ functions, which drastically improves performance and reduces code duplication
+.</p>
+  pr_comment.html:3782:</details></details></td><td align="center">Medium
+  pr_comment.html:3783:</td></tr><tr><td>
+  pr_comment.html:3784:<details><summary>Add map type check for label</summary>
+  pr_comment.html:3785:<hr>
+  pr_comment.html:3786:<p dir="auto"><strong>Add a check for <code class="notra
+nslate">ctx.is_radio_horizon</code> at the beginning of <br><code class="notran
+slate">_draw_control_point_label</code> to ensure it only executes for radio ho
+rizon maps.</strong></p>
+  pr_comment.html:3787:<p dir="auto"><a href="https://github.com/vlakir/SK24map
+per/pull/15/files#diff-25e4e12c4d309f38c5a399360f3e135d59734a1c458e44749b28ce96
+e54f554fR590-R654">src/services/map_download_service.py [590-654]</a></p>
+  pr_comment.html:3788:<div class="highlight highlight-source-diff notranslate
+position-relative overflow-auto" dir="auto" data-snippet-clipboard-copy-content
+=" def _draw_control_point_label(
+  pr_comment.html:3789:     self,
+  pr_comment.html:3790:     ctx: MapDownloadContext,
+  pr_comment.html:3791:     result: Image.Image,
+  pr_comment.html:3792:     cx_img: float,
+  pr_comment.html:3793:     cy_img: float,
+  pr_comment.html:3794:     mpp: float,
+  pr_comment.html:3795: ) -&gt; None:
+  pr_comment.html:3796:     &quot;&quot;&quot;Draw control point label for radi
+o horizon maps.&quot;&quot;&quot;
+  pr_comment.html:3797:+    if not ctx.is_radio_horizon:
+  pr_comment.html:3798:+        return
+  pr_comment.html:3799:+
+  pr_comment.html:3800:     try:
+  pr_comment.html:3801:         ppm = 1.0 / mpp if mpp &gt; 0 else 0.0
+  pr_comment.html:3802:         font_size_px = max(12, round(ctx.settings.grid_
+font_size_m * ppm))
+  pr_comment.html:3803:         label_font = load_grid_font(font_size_px)
+  pr_comment.html:3804:         subscript_font = load_grid_font(max(8, font_siz
+e_px * 2 // 3))
+  pr_comment.html:3805:         bg_padding_px = max(2, round(ctx.settings.grid_
+label_bg_padding_m * ppm))
+  pr_comment.html:3806:
+  pr_comment.html:3807:         draw = ImageDraw.Draw(result)
+  pr_comment.html:3808:         cp_name = getattr(ctx.settings, 'control_point_
+name', None)
+  pr_comment.html:3809:         antenna_h = ctx.settings.antenna_height_m
+  pr_comment.html:3810:
+  pr_comment.html:3811:         # Position below triangle
