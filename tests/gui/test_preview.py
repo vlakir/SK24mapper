@@ -34,4 +34,4 @@ class TestPublishPreviewImage:
         """Should call underlying publish function."""
         img = MagicMock()
         publish_preview_image(img)
-        mock_pub.assert_called_once_with(img)
+        mock_pub.assert_called_once_with(img, None)

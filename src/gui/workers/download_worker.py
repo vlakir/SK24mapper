@@ -24,7 +24,7 @@ class DownloadWorker(QThread):
 
     finished = Signal(bool, str)  # success, error_message
     progress_update = Signal(int, int, str)  # done, total, label
-    preview_ready = Signal(Image.Image)  # PIL Image object
+    preview_ready = Signal(Image.Image, object)  # PIL Image object, MapMetadata
 
     def __init__(self, controller: MilMapperController) -> None:
         super().__init__()
@@ -38,11 +38,11 @@ class DownloadWorker(QThread):
 
         try:
             # Setup thread-safe callbacks that emit signals instead of direct UI updates
-            def preview_callback(img_obj: Image.Image) -> bool:
+            def preview_callback(img_obj: Image.Image, metadata: object | None) -> bool:
                 """Handle preview image from map generation."""
                 try:
                     if isinstance(img_obj, Image.Image):
-                        self.preview_ready.emit(img_obj)
+                        self.preview_ready.emit(img_obj, metadata)
                         return True
                 except Exception:
                     logger.warning('Failed to process preview image')

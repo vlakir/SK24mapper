@@ -6,7 +6,6 @@ from collections.abc import Callable
 from PIL import Image, ImageDraw
 
 from shared.constants import (
-    CENTER_CROSS_COLOR,
     CENTER_CROSS_LENGTH_M,
     CENTER_CROSS_LINE_WIDTH_M,
     CONTROL_POINT_COLOR,
@@ -19,7 +18,7 @@ def draw_center_cross_on_image(
     meters_per_px: float,
 ) -> None:
     """
-    Draw a cross marker at the center of the image.
+    Draw a red cross marker at the center of the image.
 
     Args:
         img: PIL Image to draw on (modified in place)
@@ -37,7 +36,8 @@ def draw_center_cross_on_image(
     line_w = max(1, round(CENTER_CROSS_LINE_WIDTH_M * ppm))
 
     draw = ImageDraw.Draw(img)
-    color = tuple(CENTER_CROSS_COLOR)
+    # Red color for center cross for consistency with informer and CP markers
+    color = (255, 0, 0)
     draw.line([(cx, cy - half), (cx, cy + half)], fill=color, width=line_w)
     draw.line([(cx - half, cy), (cx + half, cy)], fill=color, width=line_w)
 

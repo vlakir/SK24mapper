@@ -12,11 +12,12 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from shared.constants import EARTH_RADIUS_M, RADIO_HORIZON_REFRACTION_K
+from shared.constants import EARTH_RADIUS_M, RADIO_HORIZON_REFRACTION_K, UavHeightReference
 from services.radio_horizon import (
     _bilinear_interpolate,
     _trace_line_of_sight,
     colorize_radio_horizon,
+    compute_and_colorize_radio_horizon,
     compute_downsample_factor,
     compute_radio_horizon,
     downsample_dem,
@@ -432,4 +433,123 @@ class TestComputeDownsampleFactor:
         # 20000×20000 = 400M > 16M×16 = 256M, нужен factor 8
         factor = compute_downsample_factor(20000, 20000, max_pixels=16_000_000)
         assert factor == 8
+
+
+class TestUavHeightReference:
+    """Тесты режимов отсчёта высоты БпЛА."""
+
+    def test_ground_reference_default(self) -> None:
+        """Режим GROUND — значения без изменений (по умолчанию)."""
+        dem = np.full((20, 20), 100.0, dtype=np.float32)
+        dem[10, 10] = 150.0  # Контрольная точка выше
+
+        image = compute_and_colorize_radio_horizon(
+            dem=dem,
+            antenna_row=10,
+            antenna_col=10,
+            antenna_height_m=10.0,
+            pixel_size_m=10.0,
+            max_height_m=500.0,
+            uav_height_reference=UavHeightReference.GROUND,
+        )
+
+        assert image.size == (20, 20)
+        assert image.mode == 'RGB'
+
+    def test_control_point_reference(self) -> None:
+        """Режим CONTROL_POINT — высоты пересчитываются от уровня КТ."""
+        # DEM с разной высотой: КТ на 100м, остальное на 50м
+        dem = np.full((20, 20), 50.0, dtype=np.float32)
+        dem[10, 10] = 100.0  # Контрольная точка
+
+        image_ground = compute_and_colorize_radio_horizon(
+            dem=dem,
+            antenna_row=10,
+            antenna_col=10,
+            antenna_height_m=10.0,
+            pixel_size_m=10.0,
+            max_height_m=500.0,
+            uav_height_reference=UavHeightReference.GROUND,
+        )
+
+        image_cp = compute_and_colorize_radio_horizon(
+            dem=dem,
+            antenna_row=10,
+            antenna_col=10,
+            antenna_height_m=10.0,
+            pixel_size_m=10.0,
+            max_height_m=500.0,
+            uav_height_reference=UavHeightReference.CONTROL_POINT,
+            cp_elevation=100.0,
+        )
+
+        # Изображения должны отличаться (разные режимы отсчёта)
+        assert image_ground.size == image_cp.size
+        # Пиксели должны отличаться из-за разного пересчёта
+        arr_ground = np.array(image_ground)
+        arr_cp = np.array(image_cp)
+        # Не все пиксели одинаковы
+        assert not np.array_equal(arr_ground, arr_cp)
+
+    def test_sea_level_reference(self) -> None:
+        """Режим SEA_LEVEL — абсолютные высоты от уровня моря."""
+        dem = np.full((20, 20), 200.0, dtype=np.float32)
+
+        image_ground = compute_and_colorize_radio_horizon(
+            dem=dem,
+            antenna_row=10,
+            antenna_col=10,
+            antenna_height_m=10.0,
+            pixel_size_m=10.0,
+            max_height_m=500.0,
+            uav_height_reference=UavHeightReference.GROUND,
+        )
+
+        image_sea = compute_and_colorize_radio_horizon(
+            dem=dem,
+            antenna_row=10,
+            antenna_col=10,
+            antenna_height_m=10.0,
+            pixel_size_m=10.0,
+            max_height_m=500.0,
+            uav_height_reference=UavHeightReference.SEA_LEVEL,
+        )
+
+        # Изображения должны отличаться
+        arr_ground = np.array(image_ground)
+        arr_sea = np.array(image_sea)
+        assert not np.array_equal(arr_ground, arr_sea)
+
+    def test_cp_elevation_auto_from_dem(self) -> None:
+        """Если cp_elevation не задан, берётся из DEM."""
+        dem = np.full((20, 20), 50.0, dtype=np.float32)
+        dem[10, 10] = 100.0
+
+        # Без явного cp_elevation
+        image1 = compute_and_colorize_radio_horizon(
+            dem=dem,
+            antenna_row=10,
+            antenna_col=10,
+            antenna_height_m=10.0,
+            pixel_size_m=10.0,
+            max_height_m=500.0,
+            uav_height_reference=UavHeightReference.CONTROL_POINT,
+        )
+
+        # С явным cp_elevation = 100 (как в DEM)
+        image2 = compute_and_colorize_radio_horizon(
+            dem=dem,
+            antenna_row=10,
+            antenna_col=10,
+            antenna_height_m=10.0,
+            pixel_size_m=10.0,
+            max_height_m=500.0,
+            uav_height_reference=UavHeightReference.CONTROL_POINT,
+            cp_elevation=100.0,
+        )
+
+        # Результаты должны быть идентичны
+        arr1 = np.array(image1)
+        arr2 = np.array(image2)
+        assert np.array_equal(arr1, arr2)
 

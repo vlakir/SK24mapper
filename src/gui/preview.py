@@ -9,5 +9,5 @@ stable API for preview publication.
 """
 
 
-def publish_preview_image(img: object) -> bool:
-    return _publish_preview_image(img)
+def publish_preview_image(img: object, metadata: object | None = None) -> bool:
+    return _publish_preview_image(img, metadata)

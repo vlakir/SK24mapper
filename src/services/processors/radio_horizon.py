@@ -157,6 +157,10 @@ async def process_radio_horizon(ctx: MapDownloadContext) -> Image.Image:
         meters_per_pixel(ctx.center_lat_wgs, ctx.zoom, scale=ctx.eff_scale) * ds_factor
     )
 
+    # Get control point elevation from DEM
+    cp_elevation = float(dem_full[antenna_row, antenna_col])
+    ctx.control_point_elevation = cp_elevation
+
     # Compute radio horizon
     sp = LiveSpinner('Вычисление радиогоризонта')
     sp.start()
@@ -167,6 +171,9 @@ async def process_radio_horizon(ctx: MapDownloadContext) -> Image.Image:
         antenna_col=antenna_col,
         antenna_height_m=ctx.settings.antenna_height_m,
         pixel_size_m=pixel_size_m,
+        max_height_m=ctx.settings.max_flight_height_m,
+        uav_height_reference=ctx.settings.uav_height_reference,
+        cp_elevation=cp_elevation,
     )
 
     sp.stop('Радиогоризонт вычислен')

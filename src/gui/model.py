@@ -7,7 +7,7 @@ from enum import Enum
 
 from pydantic import BaseModel, Field
 
-from domain.models import MapSettings
+from domain.models import MapMetadata, MapSettings
 from shared.constants import (
     MODEL_EVENT_DOWNLOAD_COMPLETED,
     MODEL_EVENT_DOWNLOAD_FAILED,
@@ -103,6 +103,7 @@ class ApplicationState(BaseModel):
     download_label: str = ''
     last_error: str | None = None
     preview_image_path: str | None = None
+    last_map_metadata: MapMetadata | None = None
 
     class Config:
         """Pydantic configuration."""
@@ -246,9 +247,17 @@ class MilMapperModel(Observable):
             )
             logger.error(f'Download failed: {error_msg}')
 
-    def update_preview(self, image_path: str | None) -> None:
+    def update_preview(
+        self,
+        image_path: str | None,
+        metadata: MapMetadata | None = None,
+    ) -> None:
         """Update preview image and notify observers."""
         self._state.preview_image_path = image_path
+        self._state.last_map_metadata = metadata
 
-        self.notify_observers(ModelEvent.PREVIEW_UPDATED, {'image_path': image_path})
+        self.notify_observers(
+            ModelEvent.PREVIEW_UPDATED,
+            {'image_path': image_path, 'metadata': metadata},
+        )
         logger.debug(f'Preview updated: {image_path}')
