@@ -136,14 +136,7 @@ def draw_axis_aligned_km_grid(
     cx_world, cy_world = latlng_to_pixel_xy(center_lat_wgs, center_lng_wgs, zoom)
 
     def gk_to_pixel(x_gk: float, y_gk: float) -> tuple[float, float]:
-        """
-        Преобразует координаты СК-42 ГК (метры) в пиксели изображения.
-
-        Выполняет полную цепочку преобразований:
-        СК-42 ГК → СК-42 географические → WGS-84 → Web Mercator
-        пиксели → пиксели изображения
-        После этого применяется поворот на угол rotation_deg вокруг центра изображения.
-        """
+        """Преобразует координаты СК-42 ГК (метры) в пиксели изображения."""
         # СК-42 ГК (метры) → СК-42 географические (градусы)
         lng_sk42, lat_sk42 = t_sk42gk_to_sk42.transform(x_gk, y_gk)
         # СК-42 географические → WGS-84

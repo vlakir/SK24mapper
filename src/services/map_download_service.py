@@ -12,7 +12,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
-from domain.models import MapSettings
+from domain.models import MapMetadata, MapSettings
 from geo.topography import (
     ELEVATION_COLOR_RAMP,
     choose_zoom_with_limit,
@@ -66,6 +66,7 @@ from shared.constants import (
     PIL_DISABLE_LIMIT,
     RADIO_HORIZON_COLOR_RAMP,
     RADIO_HORIZON_USE_RETINA,
+    UAV_HEIGHT_REFERENCE_ABBR,
     XYZ_TILE_SIZE,
     XYZ_USE_RETINA,
     MapType,
@@ -100,7 +101,7 @@ class MapDownloadService:
         output_path: str,
         max_zoom: int = MAX_ZOOM,
         settings: MapSettings | None = None,
-    ) -> str:
+    ) -> tuple[str, MapMetadata]:
         """
         Download and generate map.
 
@@ -114,7 +115,7 @@ class MapDownloadService:
             settings: Map settings
 
         Returns:
-            Output file path
+            Tuple of (output file path, map metadata)
 
         """
         overall_start_time = time.monotonic()
@@ -155,6 +156,7 @@ class MapDownloadService:
             self._cleanup_session(session_ctx, cache_dir_resolved)
 
         # Save result
+        metadata = ctx.to_metadata()
         result_path = await self._save(ctx)
 
         overall_elapsed = time.monotonic() - overall_start_time
@@ -163,7 +165,7 @@ class MapDownloadService:
             overall_elapsed,
         )
 
-        return result_path
+        return result_path, metadata
 
     async def _create_context(
         self,
@@ -513,7 +515,15 @@ class MapDownloadService:
                 color_ramp = RADIO_HORIZON_COLOR_RAMP
                 min_elev = 0.0
                 max_elev = ctx.settings.max_flight_height_m
-                title = 'Минимальная высота БпЛА'
+
+                abbr = UAV_HEIGHT_REFERENCE_ABBR.get(
+                    ctx.settings.uav_height_reference, ''
+                )
+                title = (
+                    f'Минимальная высота БпЛА ({abbr}) для устойчивой радиосвязи'
+                    if abbr
+                    else 'Минимальная высота БпЛА'
+                )
 
             draw_elevation_legend(
                 img=result,
@@ -535,6 +545,7 @@ class MapDownloadService:
         """Draw center cross on the result image."""
         try:
             mpp = meters_per_pixel(ctx.center_lat_wgs, ctx.zoom, scale=ctx.eff_scale)
+            # Use red color for center cross as requested for consistency
             draw_center_cross_on_image(result, mpp)
         except Exception as e:
             logger.warning('Не удалось нарисовать центральный крест: %s', e)
@@ -595,9 +606,11 @@ class MapDownloadService:
         cy_img: float,
         mpp: float,
     ) -> None:
-        """Draw control point label for radio horizon maps."""
-        # Only draw detailed label for radio horizon maps
-        if not ctx.is_radio_horizon:
+        """Draw control point label for maps."""
+        # Always draw name if provided.
+        # Detailed label (height) is only for radio horizon maps.
+        cp_name = getattr(ctx.settings, 'control_point_name', None)
+        if not cp_name and not ctx.is_radio_horizon:
             return
 
         try:
@@ -608,7 +621,6 @@ class MapDownloadService:
             bg_padding_px = max(2, round(ctx.settings.grid_label_bg_padding_m * ppm))
 
             draw = ImageDraw.Draw(result)
-            cp_name = getattr(ctx.settings, 'control_point_name', None)
             antenna_h = ctx.settings.antenna_height_m
 
             # Position below triangle
@@ -637,22 +649,32 @@ class MapDownloadService:
                 name_height = name_bbox[3] - name_bbox[1]
                 current_y += name_height + bg_padding_px * 2
 
-            # Height line with subscript
-            height_parts = [
-                ('(h', False),
-                ('ант', True),
-                (f' = {int(antenna_h)} м)', False),
-            ]
-            draw_label_with_subscript_bg(
-                draw,
-                (label_x, current_y),
-                height_parts,
-                font=label_font,
-                subscript_font=subscript_font,
-                anchor='mt',
-                img_size=result.size,
-                padding=bg_padding_px,
-            )
+            # Height line with subscript (Radio Horizon only)
+            if ctx.is_radio_horizon:
+                cp_elev = ctx.control_point_elevation
+                if cp_elev is not None:
+                    height_parts = [
+                        ('h = ', False),
+                        (f'{int(cp_elev)}', False),
+                        (' + ', False),
+                        (f'{int(antenna_h)} м', False),
+                    ]
+                else:
+                    height_parts = [
+                        ('h', False),
+                        ('ант', True),
+                        (f' = {int(antenna_h)} м', False),
+                    ]
+                draw_label_with_subscript_bg(
+                    draw,
+                    (label_x, current_y),
+                    height_parts,
+                    font=label_font,
+                    subscript_font=subscript_font,
+                    anchor='mt',
+                    img_size=result.size,
+                    padding=bg_padding_px,
+                )
         except Exception as e:
             logger.warning('Не удалось нарисовать подпись контрольной точки: %s', e)
 
@@ -689,10 +711,18 @@ class MapDownloadService:
                 gui_image = result.copy()
             except Exception:
                 gui_image = None
+            metadata = ctx.to_metadata()
+            # Log center resolution for diagnostics
+            logger.info(
+                'Map resolution at center: %.4f m/px (zoom %d, scale %d)',
+                metadata.meters_per_pixel,
+                metadata.zoom,
+                metadata.scale,
+            )
             if gui_image is not None:
-                did_publish = publish_preview_image(gui_image)
+                did_publish = publish_preview_image(gui_image, metadata)
             else:
-                did_publish = publish_preview_image(result)
+                did_publish = publish_preview_image(result, metadata)
         except Exception:
             did_publish = False
         preview_elapsed = time.monotonic() - preview_start_time
@@ -758,7 +788,7 @@ async def download_map(
     This is a wrapper around MapDownloadService for backward compatibility.
     """
     service = MapDownloadService(api_key)
-    return await service.download(
+    path, _ = await service.download(
         center_x_sk42_gk=center_x_sk42_gk,
         center_y_sk42_gk=center_y_sk42_gk,
         width_m=width_m,
@@ -767,3 +797,4 @@ async def download_map(
         max_zoom=max_zoom,
         settings=settings,
     )
+    return path

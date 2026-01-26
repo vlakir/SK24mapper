@@ -36,6 +36,7 @@ from shared.constants import (
     RADIO_HORIZON_MIN_HEIGHT_M,
     RADIO_HORIZON_REFRACTION_K,
     RADIO_HORIZON_UNREACHABLE_COLOR,
+    UavHeightReference,
 )
 
 
@@ -449,11 +450,32 @@ def compute_and_colorize_radio_horizon(
     max_height_m: float = RADIO_HORIZON_MAX_HEIGHT_M,
     color_ramp: list[tuple[float, tuple[int, int, int]]] | None = None,
     unreachable_color: tuple[int, int, int] = RADIO_HORIZON_UNREACHABLE_COLOR,
+    uav_height_reference: UavHeightReference = UavHeightReference.GROUND,
+    cp_elevation: float | None = None,
 ) -> Image.Image:
     """
     Оптимизированная функция: вычисляет и раскрашивает радиогоризонт.
 
     Numpy версия с оптимизированным использованием памяти.
+
+    Args:
+        dem: Цифровая модель рельефа (массив высот).
+        antenna_row: Индекс строки установки антенны в DEM.
+        antenna_col: Индекс столбца установки антенны в DEM.
+        antenna_height_m: Высота антенны над поверхностью земли (метры).
+        pixel_size_m: Размер пикселя DEM (метры на пиксель).
+        earth_radius_m: Радиус Земли (метры).
+        refraction_k: Коэффициент атмосферной рефракции.
+        grid_step: Шаг расчетной сетки.
+        max_height_m: Максимальная высота шкалы (метры).
+        color_ramp: Цветовая палитра (список кортежей).
+        unreachable_color: Цвет для недостижимых зон (RGB).
+        uav_height_reference: Режим отсчёта высоты БпЛА:
+            - GROUND: от земной поверхности под БпЛА (по умолчанию, текущее поведение)
+            - CONTROL_POINT: от уровня контрольной точки
+            - SEA_LEVEL: от уровня моря (абсолютная высота)
+        cp_elevation: Высота контрольной точки (требуется для CONTROL_POINT режима)
+
     """
     if color_ramp is None:
         color_ramp = RADIO_HORIZON_COLOR_RAMP
@@ -515,6 +537,18 @@ def compute_and_colorize_radio_horizon(
     full_values = cv2.resize(
         grid_values, (w, h), interpolation=cv2.INTER_LINEAR
     ).astype(np.float32)
+
+    # 1.5. Пересчёт высот в зависимости от режима отсчёта
+    # full_values содержит минимальную высоту БпЛА над землёй под ним
+    if uav_height_reference == UavHeightReference.CONTROL_POINT:
+        # От уровня КТ: высота = результат + высота_земли - высота_КТ
+        if cp_elevation is None:
+            cp_elevation = float(dem[antenna_row, antenna_col])
+        full_values = full_values + dem.astype(np.float32) - cp_elevation
+    elif uav_height_reference == UavHeightReference.SEA_LEVEL:
+        # От уровня моря: высота = результат + высота_земли
+        full_values = full_values + dem.astype(np.float32)
+    # GROUND: без изменений (текущее поведение)
 
     # 2. Масштабируем значения в индексы LUT
     # Предотвращаем деление на ноль и NaN

@@ -2,36 +2,51 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import (
+    QColor,
     QImage,
     QMouseEvent,
     QPainter,
+    QPen,
     QPixmap,
     QResizeEvent,
     QTransform,
     QWheelEvent,
 )
 from PySide6.QtWidgets import (
+    QGraphicsLineItem,
     QGraphicsPixmapItem,
     QGraphicsScene,
+    QGraphicsTextItem,
     QGraphicsView,
     QWidget,
 )
 
-from shared.constants import PREVIEW_ROTATION_ANGLE
+from shared.constants import (
+    CONTROL_POINT_SIZE_M,
+    PREVIEW_MIN_LINE_LENGTH_FOR_LABEL,
+    PREVIEW_ROTATION_ANGLE,
+    PREVIEW_UPRIGHT_TEXT_ANGLE_LIMIT,
+)
 
 if TYPE_CHECKING:
     from PIL import Image
+
+import math
 
 logger = logging.getLogger(__name__)
 
 
 class OptimizedImageView(QGraphicsView):
     """High-performance image view using QGraphicsView for zoom and pan operations."""
+
+    mouse_moved_on_map = Signal(object, object)  # (x, y) or (None, None)
+    map_right_clicked = Signal(float, float)  # (x, y)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -45,7 +60,7 @@ class OptimizedImageView(QGraphicsView):
         self._original_image: Image.Image | None = None
 
         # Configure view for optimal performance with proper antialiasing for thin lines
-        self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+        self.setDragMode(QGraphicsView.DragMode.NoDrag)
         # Zoom to cursor: anchor transformations under the mouse pointer
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
 
@@ -82,8 +97,12 @@ class OptimizedImageView(QGraphicsView):
         self.setMouseTracking(True)
 
         self._qimage_bytes: bytes | None = None
+        self._cp_cross_items: list[QGraphicsLineItem] = []
+        self._cp_line_item: QGraphicsLineItem | None = None
+        self._cp_label_item: QGraphicsTextItem | None = None
+        self._meters_per_px: float = 0.0
 
-    def set_image(self, pil_image: Image.Image) -> None:
+    def set_image(self, pil_image: Image.Image, meters_per_px: float = 0.0) -> None:
         """
         Set the image to display with fixed rotation to improve thin line visibility.
 
@@ -99,6 +118,7 @@ class OptimizedImageView(QGraphicsView):
         )
 
         self._original_image = pil_image
+        self._meters_per_px = meters_per_px
 
         # Convert PIL image to QPixmap efficiently
         if pil_image.mode != 'RGB':
@@ -155,6 +175,10 @@ class OptimizedImageView(QGraphicsView):
         self._scene.clear()
         self._image_item = None
         self._original_image = None
+        self._cp_cross_items = []
+        self._cp_line_item = None
+        self._cp_label_item = None
+        self._meters_per_px = 0.0
         # Allow GC of previous image bytes when clearing
         if hasattr(self, '_qimage_bytes'):
             self._qimage_bytes = None
@@ -178,6 +202,142 @@ class OptimizedImageView(QGraphicsView):
     def reset_zoom(self) -> None:
         """Reset zoom to fit the entire image."""
         self.fit_to_window()
+
+    def set_control_point_marker(self, x: float, y: float) -> None:
+        """Draw a red cross marker at the specified scene coordinates."""
+        if self._image_item is None or self._meters_per_px <= 0:
+            return
+
+        # Clear existing cross if any
+        self.clear_control_point_markers()
+
+        # Calculate cross size in pixels based on CONTROL_POINT_SIZE_M
+        ppm = 1.0 / self._meters_per_px
+        size_px = max(10, round(CONTROL_POINT_SIZE_M * ppm))
+        half = size_px / 2.0
+
+        # Create pen for the red cross
+        pen = QPen(QColor(255, 0, 0))
+        pen.setWidth(2)
+        pen.setCosmetic(True)  # Line width stays 2px regardless of zoom
+
+        # Create cross lines
+        line1 = self._scene.addLine(x - half, y - half, x + half, y + half, pen)
+        line2 = self._scene.addLine(x - half, y + half, x + half, y - half, pen)
+
+        # Store items to manage their lifecycle
+        self._cp_cross_items = [line1, line2]
+
+    def clear_control_point_markers(self) -> None:
+        """Remove control point markers (cross and line) from the scene."""
+        for item in self._cp_cross_items:
+            with contextlib.suppress(Exception):
+                self._scene.removeItem(item)
+        self._cp_cross_items.clear()
+
+        if self._cp_line_item:
+            with contextlib.suppress(Exception):
+                self._scene.removeItem(self._cp_line_item)
+            self._cp_line_item = None
+
+        if self._cp_label_item:
+            with contextlib.suppress(Exception):
+                self._scene.removeItem(self._cp_label_item)
+            self._cp_label_item = None
+
+    def set_control_point_line(
+        self,
+        x1: float,
+        y1: float,
+        x2: float,
+        y2: float,
+        distance_m: float | None = None,
+        azimuth_deg: float | None = None,
+        name: str | None = None,
+    ) -> None:
+        """Draw a red dashed line between two points with an optional label."""
+        if self._image_item is None:
+            return
+
+        # Clear existing line and label
+        if self._cp_line_item:
+            self._scene.removeItem(self._cp_line_item)
+            self._cp_line_item = None
+        if self._cp_label_item:
+            self._scene.removeItem(self._cp_label_item)
+            self._cp_label_item = None
+
+        # Create pen
+        pen = QPen(QColor(255, 0, 0))
+        pen.setWidth(2)  # Fixed width matching grid cross
+        pen.setStyle(Qt.PenStyle.DashLine)
+        pen.setCosmetic(True)
+
+        # Create line
+        self._cp_line_item = self._scene.addLine(x1, y1, x2, y2, pen)
+
+        # Create combined label if distance is provided
+        if distance_m is not None:
+            # If distance in pixels is too small, don't show label
+            # to avoid "jumping" and overlapping.
+            # We use scene coordinates distance.
+            dist_px = math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
+            if dist_px < PREVIEW_MIN_LINE_LENGTH_FOR_LABEL:
+                # Hide label if line is shorter
+                return
+
+            # Format combined text: "<name>: <azimuth> <distance>"
+            # For example: "КП1: 45° 123 м"
+            name_text = f'{name}: ' if name else ''
+            azimuth_text = f'{round(azimuth_deg)}° ' if azimuth_deg is not None else ''
+            distance_text = f'{round(distance_m)} м'
+            text = f'{name_text}{azimuth_text}{distance_text}'
+
+            self._cp_label_item = QGraphicsTextItem(text)
+            self._cp_label_item.setDefaultTextColor(QColor(255, 0, 0))
+
+            # Make font larger
+            font = self._cp_label_item.font()
+            font.setPointSize(12)  # Increase font size (default is usually 8 or 9)
+            font.setBold(True)
+            self._cp_label_item.setFont(font)
+
+            # Position at the middle of the line
+            mid_x = (x1 + x2) / 2.0
+            mid_y = (y1 + y2) / 2.0
+            self._cp_label_item.setPos(mid_x, mid_y)
+
+            # Calculate angle of the line
+            angle_rad = math.atan2(y2 - y1, x2 - x1)
+            angle_deg = math.degrees(angle_rad)
+
+            # Ensure text is not upside down (readable from left to right)
+            if (
+                angle_deg > PREVIEW_UPRIGHT_TEXT_ANGLE_LIMIT
+                or angle_deg < -PREVIEW_UPRIGHT_TEXT_ANGLE_LIMIT
+            ):
+                angle_deg += 180
+
+            # Make it stay same size on screen regardless of zoom
+            self._cp_label_item.setFlag(
+                QGraphicsTextItem.GraphicsItemFlag.ItemIgnoresTransformations
+            )
+
+            # Center the text horizontally and place it above its position
+            rect = self._cp_label_item.boundingRect()
+
+            # Use QTransform to shift the text so its bottom-center is at (0,0) locally,
+            # then rotate it.
+            transform = QTransform()
+            # Perform translation first to anchor bottom-center at (0,0)
+            transform.translate(-rect.width() / 2.0, -rect.height())
+
+            # Then apply rotation around that anchor point
+            transform.rotate(angle_deg)
+            self._cp_label_item.setTransform(transform)
+
+            self._cp_label_item.setZValue(10)
+            self._scene.addItem(self._cp_label_item)
 
     def _zoom(self, factor: float) -> None:
         """Apply zoom with limits and pixel-perfect alignment."""
@@ -230,6 +390,13 @@ class OptimizedImageView(QGraphicsView):
         """Handle mouse press for panning."""
         if event.button() == Qt.MouseButton.LeftButton:
             self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+        elif (
+            event.button() == Qt.MouseButton.RightButton
+            and self._image_item is not None
+        ):
+            scene_pos = self.mapToScene(event.position().toPoint())
+            if self._image_item.contains(scene_pos):
+                self.map_right_clicked.emit(scene_pos.x(), scene_pos.y())
         super().mousePressEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
@@ -237,6 +404,20 @@ class OptimizedImageView(QGraphicsView):
         if event.button() == Qt.MouseButton.LeftButton:
             self.setDragMode(QGraphicsView.DragMode.NoDrag)
         super().mouseReleaseEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        """Track mouse movement over the map."""
+        super().mouseMoveEvent(event)
+
+        if self._image_item is None:
+            self.mouse_moved_on_map.emit(None, None)
+            return
+
+        scene_pos = self.mapToScene(event.position().toPoint())
+        if self._image_item.contains(scene_pos):
+            self.mouse_moved_on_map.emit(scene_pos.x(), scene_pos.y())
+        else:
+            self.mouse_moved_on_map.emit(None, None)
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         """Handle widget resize to update fit-to-window scale."""

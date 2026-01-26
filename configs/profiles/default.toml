@@ -29,3 +29,4 @@ helmert_ds_ppm = -1.43065
 control_point_enabled = false
 control_point_x = 5415000
 control_point_y = 7440000
+uav_height_reference = "control_point"

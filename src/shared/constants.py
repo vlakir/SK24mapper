@@ -113,6 +113,14 @@ class MapType(str, Enum):
     RADIO_HORIZON = 'RADIO_HORIZON'
 
 
+class UavHeightReference(str, Enum):
+    """Режим отсчёта высоты БпЛА для карты радиогоризонта."""
+
+    CONTROL_POINT = 'control_point'  # От уровня контрольной точки
+    GROUND = 'ground'  # От уровня земной поверхности
+    SEA_LEVEL = 'sea_level'  # От уровня моря
+
+
 # Человекочитаемые названия для GUI
 MAP_TYPE_LABELS_RU: dict[MapType, str] = {
     MapType.SATELLITE: 'Спутник',
@@ -123,6 +131,18 @@ MAP_TYPE_LABELS_RU: dict[MapType, str] = {
     MapType.ELEVATION_CONTOURS: 'Карта высот (контуры)',
     MapType.ELEVATION_HILLSHADE: 'Карта высот (hillshade)',
     MapType.RADIO_HORIZON: 'Радиогоризонт НСУ БпЛА',
+}
+
+UAV_HEIGHT_REFERENCE_LABELS_RU: dict[UavHeightReference, str] = {
+    UavHeightReference.CONTROL_POINT: 'От уровня КТ',
+    UavHeightReference.GROUND: 'От земной поверхности',
+    UavHeightReference.SEA_LEVEL: 'От уровня моря',
+}
+
+UAV_HEIGHT_REFERENCE_ABBR: dict[UavHeightReference, str] = {
+    UavHeightReference.CONTROL_POINT: 'AGL',
+    UavHeightReference.GROUND: 'RA',
+    UavHeightReference.SEA_LEVEL: 'AMSL',
 }
 
 # Резолвер для стилевых карт (этап 1)
@@ -209,6 +229,10 @@ XY_EPSILON = 1e-9
 HTTP_TIMEOUT_DEFAULT = 20.0
 HTTP_RETRIES_DEFAULT = 4
 HTTP_BACKOFF_FACTOR = 1.6
+
+# --- Параметры форматирования координат
+# Количество символов в строке координаты, после которого вставляется пробел-разделитель
+COORDINATE_FORMAT_SPLIT_LENGTH = 5
 
 # --- Terrain-RGB (Этапы 2–4)
 MAPBOX_TERRAIN_RGB_PATH = 'https://api.mapbox.com/v4/mapbox.terrain-rgb'
@@ -322,6 +346,11 @@ MAX_ROTATION_ARCSEC = 3600
 MAX_SCALE_PPM = 1000
 
 # --- Константы для окна предпросмотра
+# Минимальная длина линии в единицах сцены для отображения подписи
+PREVIEW_MIN_LINE_LENGTH_FOR_LABEL = 10.0
+# Порог угла (градусы), при котором текст считается перевернутым и требует коррекции
+PREVIEW_UPRIGHT_TEXT_ANGLE_LIMIT = 90.0
+
 # Фиксированный угол поворота изображения в градусах для улучшения
 # видимости тонких линий
 PREVIEW_ROTATION_ANGLE = 0.0

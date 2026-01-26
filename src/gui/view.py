@@ -17,6 +17,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QApplication,
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
@@ -32,6 +33,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QProgressDialog,
     QPushButton,
+    QRadioButton,
     QScrollArea,
     QSizePolicy,
     QSlider,
@@ -52,10 +54,14 @@ from gui.widgets import (
     OldCoordinateInputWidget,
 )
 from gui.workers import DownloadWorker
+from services.coordinate_transformer import CoordinateTransformer
+from services.map_postprocessing import compute_control_point_image_coords
 from shared.constants import (
+    COORDINATE_FORMAT_SPLIT_LENGTH,
     MAP_TYPE_LABELS_RU,
     MIN_DECIMALS_FOR_SMALL_STEP,
     MapType,
+    UavHeightReference,
 )
 from shared.diagnostics import (
     log_comprehensive_diagnostics,
@@ -72,7 +78,21 @@ from shared.progress import set_progress_callback as _set_prog
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from domain.models import MapSettings
+    from domain.models import MapMetadata, MapSettings
+
+
+import math
+
+from pyproj import Transformer
+
+from geo.coords_sk42 import build_sk42_gk_crs, determine_zone
+from geo.topography import (
+    build_transformers_sk42,
+    crs_sk42_geog,
+    latlng_to_pixel_xy,
+    pixel_xy_to_latlng,
+)
+from shared.constants import CONTROL_POINT_PRECISION_TOLERANCE_M
 
 logger = logging.getLogger(__name__)
 
@@ -507,6 +527,13 @@ class MainWindow(QMainWindow):
         self.status_bar.addWidget(self._progress_label)
         self.status_bar.addWidget(self._progress_bar)
 
+        # Метка для координат СК-42 (в правую часть статус-бара)
+        self._coords_label = QLabel()
+        self._coords_label.setStyleSheet(
+            'font-family: monospace; font-weight: bold; color: red;'
+        )
+        self.status_bar.addPermanentWidget(self._coords_label)
+
         # Блок профилей
         profile_layout = QHBoxLayout()
         profile_layout.addWidget(QLabel('Профиль:'))
@@ -604,7 +631,7 @@ class MainWindow(QMainWindow):
 
         # Максимальная высота полёта (для карты радиогоризонта)
         max_flight_row = QHBoxLayout()
-        self.max_flight_height_label = QLabel('Макс. высота полёта БПЛА (м):')
+        self.max_flight_height_label = QLabel('Практический потолок БпЛА (м):')
         self.max_flight_height_spin = QDoubleSpinBox()
         self.max_flight_height_spin.setRange(10.0, 5000.0)
         self.max_flight_height_spin.setDecimals(0)
@@ -630,9 +657,38 @@ class MainWindow(QMainWindow):
         heights_row.addLayout(antenna_row)
         heights_row.addLayout(max_flight_row)
 
+        # Режим отсчёта высоты БпЛА (для карты радиогоризонта)
+        height_ref_row = QHBoxLayout()
+        self.height_ref_label = QLabel('Отсчёт высоты БпЛА:')
+        self.height_ref_group = QButtonGroup(self)
+
+        self.height_ref_cp_radio = QRadioButton('От уровня КТ (AGL)')
+        self.height_ref_cp_radio.setToolTip(
+            'Высота БпЛА отсчитывается от высоты контрольной точки'
+        )
+        self.height_ref_ground_radio = QRadioButton('От земной поверхности (RA)')
+        self.height_ref_ground_radio.setToolTip(
+            'Высота БпЛА отсчитывается от земли под ним'
+        )
+        self.height_ref_sea_radio = QRadioButton('От уровня моря (AMSL)')
+        self.height_ref_sea_radio.setToolTip('Абсолютная высота БпЛА над уровнем моря')
+
+        self.height_ref_cp_radio.setChecked(True)  # По умолчанию
+
+        self.height_ref_group.addButton(self.height_ref_cp_radio, 0)
+        self.height_ref_group.addButton(self.height_ref_ground_radio, 1)
+        self.height_ref_group.addButton(self.height_ref_sea_radio, 2)
+
+        height_ref_row.addWidget(self.height_ref_label)
+        height_ref_row.addWidget(self.height_ref_cp_radio)
+        height_ref_row.addWidget(self.height_ref_ground_radio)
+        height_ref_row.addWidget(self.height_ref_sea_radio)
+        height_ref_row.addStretch()
+
         control_point_layout.addLayout(name_row)
         control_point_layout.addLayout(coords_row)
         control_point_layout.addLayout(heights_row)
+        control_point_layout.addLayout(height_ref_row)
         control_point_group.setLayout(control_point_layout)
 
         # По умолчанию контролы координат отключены
@@ -644,6 +700,10 @@ class MainWindow(QMainWindow):
         self.antenna_height_spin.setEnabled(False)
         self.max_flight_height_label.setEnabled(False)
         self.max_flight_height_spin.setEnabled(False)
+        self.height_ref_label.setEnabled(False)
+        self.height_ref_cp_radio.setEnabled(False)
+        self.height_ref_ground_radio.setEnabled(False)
+        self.height_ref_sea_radio.setEnabled(False)
 
         coords_layout.addWidget(control_point_group)
         left_container.addWidget(coords_frame)
@@ -665,7 +725,7 @@ class MainWindow(QMainWindow):
         maptype_row = QHBoxLayout()
         maptype_label = QLabel('Тип карты:')
         self.map_type_combo = QComboBox()
-        # Заполняем пункты (исключаем «Карта высот (контуры)», теперь это опция-оверлей)
+
         self._maptype_order = [
             MapType.SATELLITE,
             MapType.HYBRID,
@@ -868,6 +928,10 @@ class MainWindow(QMainWindow):
 
     def _setup_connections(self) -> None:
         """Setup signal connections."""
+        # Preview mouse tracking
+        self._preview_area.mouse_moved_on_map.connect(self._on_mouse_moved_on_map)
+        self._preview_area.map_right_clicked.connect(self._on_map_right_clicked)
+
         # Profile management
         # Подключение сигнала выбора профиля произойдет после первичной инициализации
         self.save_profile_btn.clicked.connect(self._save_current_profile)
@@ -928,6 +992,8 @@ class MainWindow(QMainWindow):
         self.antenna_height_spin.valueChanged.connect(self._on_settings_changed)
         # Max flight height for radio horizon
         self.max_flight_height_spin.valueChanged.connect(self._on_settings_changed)
+        # UAV height reference radios
+        self.height_ref_group.buttonClicked.connect(self._on_settings_changed)
 
         # Grid settings
         self.grid_widget.width_spin.valueChanged.connect(self._on_settings_changed)
@@ -1098,6 +1164,7 @@ class MainWindow(QMainWindow):
             'control_point_name': self.control_point_name_edit.text(),
             'antenna_height_m': round(self.antenna_height_spin.value()),
             'max_flight_height_m': self.max_flight_height_spin.value(),
+            'uav_height_reference': self._get_uav_height_reference(),
         }
 
     @Slot(int)
@@ -1260,9 +1327,131 @@ class MainWindow(QMainWindow):
         # Disable all UI controls during download
         self._set_controls_enabled(enabled=False)
 
+    @Slot(object, object)
+    def _on_mouse_moved_on_map(self, px: float | None, py: float | None) -> None:
+        """Handle mouse movement over preview to show SK-42 coordinates."""
+        coords = self._calculate_sk42_from_scene_pos(px, py)
+        if coords is None:
+            self._coords_label.setText('')
+            return
+
+        x_val, y_val = coords
+
+        def format_coord(val: int) -> str:
+            s = str(abs(val))
+            if len(s) > COORDINATE_FORMAT_SPLIT_LENGTH:
+                return (
+                    f'{s[:-COORDINATE_FORMAT_SPLIT_LENGTH]} '
+                    f'{s[-COORDINATE_FORMAT_SPLIT_LENGTH:]}'
+                )
+            return s
+
+        self._coords_label.setText(
+            f'X: {format_coord(x_val)}  Y: {format_coord(y_val)}'
+        )
+
+    def _calculate_sk42_from_scene_pos(
+        self, px: float | None, py: float | None
+    ) -> tuple[int, int] | None:
+        """Calculate SK-42 GK coordinates from scene pixel coordinates."""
+        if px is None or py is None:
+            return None
+
+        metadata = self._model.state.last_map_metadata
+        if not metadata:
+            return None
+
+        try:
+            # 1. Смещение от центра изображения в пикселях
+            cx_px = metadata.width_px / 2.0
+            cy_px = metadata.height_px / 2.0
+
+            dx_px = px - cx_px
+            dy_px = py - cy_px
+
+            # 2. Учет поворота (обратное преобразование)
+            rotation_rad = math.radians(-metadata.rotation_deg)
+            cos_rot = math.cos(rotation_rad)
+            sin_rot = math.sin(rotation_rad)
+
+            dx = dx_px * cos_rot + dy_px * sin_rot
+            dy = -dx_px * sin_rot + dy_px * cos_rot
+
+            # 3. Переход к "мировым" пикселям Web Mercator
+            cx_world, cy_world = latlng_to_pixel_xy(
+                metadata.center_lat_wgs, metadata.center_lng_wgs, metadata.zoom
+            )
+
+            x_world = dx / metadata.scale + cx_world
+            y_world = dy / metadata.scale + cy_world
+
+            # 4. Обратная проекция: Мировые пиксели -> WGS-84 -> SK-42 Geog -> SK-42 GK
+            lat_wgs, lng_wgs = pixel_xy_to_latlng(x_world, y_world, metadata.zoom)
+
+            t_sk42_to_wgs, t_wgs_to_sk42 = build_transformers_sk42(
+                custom_helmert=metadata.helmert_params
+            )
+            lng_sk42, lat_sk42 = t_wgs_to_sk42.transform(lng_wgs, lat_wgs)
+
+            zone = determine_zone(metadata.center_x_gk)
+            crs_sk42_gk = build_sk42_gk_crs(zone)
+
+            t_sk42gk_from_sk42 = Transformer.from_crs(
+                crs_sk42_geog, crs_sk42_gk, always_xy=True
+            )
+
+            # Получаем (easting, northing) для GK
+            y_val_m, x_val_m = t_sk42gk_from_sk42.transform(lng_sk42, lat_sk42)
+
+            return round(x_val_m), round(y_val_m)
+
+        except Exception:
+            logger.exception('Failed to calculate SK-42 coordinates from pixel')
+            return None
+
+    @Slot(float, float)
+    def _on_map_right_clicked(self, px: float, py: float) -> None:
+        """Transfer coordinates from map right-click to control point settings."""
+        # Only allowed if control point was enabled during map generation
+        metadata = self._model.state.last_map_metadata
+        if not metadata or not metadata.control_point_enabled:
+            return
+
+        coords = self._calculate_sk42_from_scene_pos(px, py)
+        if coords is None:
+            return
+
+        x_val, y_val = coords
+
+        self.control_point_x_widget.set_coordinate(x_val)
+        self.control_point_y_widget.set_coordinate(y_val)
+
+        # Enable control point if it was disabled
+        if not self.control_point_checkbox.isChecked():
+            self.control_point_checkbox.setChecked(True)
+
+        # Sync to model to ensure it's saved/propagated
+        self._sync_ui_to_model_now()
+
+        # Update markers on preview
+        self._update_cp_marker_from_settings(self._model.settings)
+
+        self._status_proxy.show_message(
+            f'Координаты КТ обновлены: X={x_val}, Y={y_val}', 3000
+        )
+
     @Slot(bool, str)
-    def _on_download_finished(self, *, success: bool, error_msg: str) -> None:
+    def _on_download_finished(
+        self,
+        *,
+        success: bool,
+        error_msg: str,
+    ) -> None:
         """Handle download completion."""
+        # Clear coordinate informer on failure
+        if not success:
+            self._coords_label.setText('')
+
         # Hide progress widgets and re-enable controls
         try:
             if self._progress_bar.isVisible():
@@ -1274,7 +1463,11 @@ class MainWindow(QMainWindow):
             logger.debug(f'Failed to hide progress widgets: {e}')
 
         if success:
-            self._status_proxy.show_message('Карта успешно создана', 5000)
+            self._status_proxy.show_message(
+                'Карта успешно создана. Правый клик на превью — '
+                'перенос координат в КТ.',
+                7000,
+            )
         else:
             # Clear preview and related UI on failure as per requirement
             self._clear_preview_ui()
@@ -1331,6 +1524,8 @@ class MainWindow(QMainWindow):
             )
         elif event == ModelEvent.PREVIEW_UPDATED:
             self._show_preview_in_main_window(data.get('image'))
+            # Также обновляем метаданные в модели, но MainWindow просто реагирует
+            # на движение мыши, используя актуальные метаданные из состояния модели.
         elif event == ModelEvent.ERROR_OCCURRED:
             error_msg = data.get('error', 'Неизвестная ошибка')
             # Только статус-бар; модальные диалоги показываются централизованно
@@ -1346,6 +1541,137 @@ class MainWindow(QMainWindow):
             # Только статус-бар; без модальных диалогов, чтобы избежать дублей
             # и вызовов не из GUI-потока
             self._status_proxy.show_message(f'Предупреждение: {warn_msg}', 5000)
+
+    def _get_uav_height_reference(self) -> UavHeightReference:
+        """Get current UAV height reference from radio buttons."""
+        if self.height_ref_ground_radio.isChecked():
+            return UavHeightReference.GROUND
+        if self.height_ref_sea_radio.isChecked():
+            return UavHeightReference.SEA_LEVEL
+        return UavHeightReference.CONTROL_POINT
+
+    def _set_uav_height_reference(self, ref: UavHeightReference) -> None:
+        """Set UAV height reference radio buttons from value."""
+        with QSignalBlocker(self.height_ref_group):
+            if ref == UavHeightReference.GROUND:
+                self.height_ref_ground_radio.setChecked(True)
+            elif ref == UavHeightReference.SEA_LEVEL:
+                self.height_ref_sea_radio.setChecked(True)
+            else:
+                self.height_ref_cp_radio.setChecked(True)
+
+    def _update_cp_marker_from_settings(self, settings: MapSettings) -> None:
+        """Update control point marker and line on preview from settings."""
+        if self._current_image is None:
+            return
+
+        metadata = self._model.state.last_map_metadata
+        if not metadata or not metadata.control_point_enabled:
+            # We don't necessarily clear if disabled, but the triangle
+            # might not be there on the final map.
+            # Requirement says "При каждом обновлении координат КТ проводи... линию"
+            return
+
+        if not settings.control_point_enabled:
+            # If CP is disabled in settings, clear markers from preview
+            if hasattr(self._preview_area, 'clear_control_point_markers'):
+                self._preview_area.clear_control_point_markers()
+            else:
+                # If method doesn't exist, we can at least stop drawing new ones
+                pass
+            return
+
+        try:
+            # 1. Check if CP matches original CP. If so, hide markers and return.
+            # We use a small tolerance for float comparison, though these are
+            # likely ints.
+            orig_x = metadata.original_cp_x_gk or metadata.center_x_gk
+            orig_y = metadata.original_cp_y_gk or metadata.center_y_gk
+            dx_m = settings.control_point_x_sk42_gk - orig_x
+            dy_m = settings.control_point_y_sk42_gk - orig_y
+            distance_m = math.sqrt(dx_m**2 + dy_m**2)
+
+            if distance_m < CONTROL_POINT_PRECISION_TOLERANCE_M:
+                if hasattr(self._preview_area, 'clear_control_point_markers'):
+                    self._preview_area.clear_control_point_markers()
+                return
+
+            # Calculate azimuth (standard geographic azimuth: North=0, East=90)
+            # dx_m is Easting difference, dy_m is Northing difference
+            # atan2(dx, dy) gives angle from North clockwise
+            azimuth_rad = math.atan2(dx_m, dy_m)
+            azimuth_deg = math.degrees(azimuth_rad) % 360.0
+
+            # Convert control point GK to WGS84
+            # We need transformer to convert from GK to WGS84
+
+            transformer = CoordinateTransformer(
+                settings.control_point_x_sk42_gk,
+                settings.control_point_y_sk42_gk,
+                helmert_params=metadata.helmert_params,
+            )
+            lat_wgs, lng_wgs = transformer.get_wgs84_center()
+
+            px, py = compute_control_point_image_coords(
+                lat_wgs,
+                lng_wgs,
+                metadata.center_lat_wgs,
+                metadata.center_lng_wgs,
+                metadata.zoom,
+                metadata.scale,
+                metadata.width_px,
+                metadata.height_px,
+                metadata.rotation_deg,
+                latlng_to_pixel_xy,
+            )
+
+            # Update preview
+            self._preview_area.set_control_point_marker(px, py)
+
+            if (
+                metadata.original_cp_x_gk is not None
+                and metadata.original_cp_y_gk is not None
+            ):
+                # Convert original control point GK to WGS84
+                orig_transformer = CoordinateTransformer(
+                    metadata.original_cp_x_gk,
+                    metadata.original_cp_y_gk,
+                    helmert_params=metadata.helmert_params,
+                )
+                orig_lat_wgs, orig_lng_wgs = orig_transformer.get_wgs84_center()
+
+                # Convert original WGS84 to image pixels
+
+                orig_px, orig_py = compute_control_point_image_coords(
+                    orig_lat_wgs,
+                    orig_lng_wgs,
+                    metadata.center_lat_wgs,
+                    metadata.center_lng_wgs,
+                    metadata.zoom,
+                    metadata.scale,
+                    metadata.width_px,
+                    metadata.height_px,
+                    metadata.rotation_deg,
+                    latlng_to_pixel_xy,
+                )
+                start_x, start_y = orig_px, orig_py
+
+            else:
+                # Fallback to center
+                start_x = metadata.width_px / 2.0
+                start_y = metadata.height_px / 2.0
+
+            self._preview_area.set_control_point_line(
+                start_x,
+                start_y,
+                px,
+                py,
+                distance_m=distance_m,
+                azimuth_deg=azimuth_deg,
+                name=getattr(settings, 'control_point_name', ''),
+            )
+        except Exception:
+            logger.exception('Failed to update control point marker from settings')
 
     def _update_ui_from_settings(self, settings: MapSettings) -> None:
         """Update UI controls from settings object."""
@@ -1450,6 +1776,12 @@ class MainWindow(QMainWindow):
         with QSignalBlocker(self.max_flight_height_spin):
             self.max_flight_height_spin.setValue(max_flight_height)
 
+        # UAV height reference for radio horizon
+        uav_height_ref = getattr(
+            settings, 'uav_height_reference', UavHeightReference.CONTROL_POINT
+        )
+        self._set_uav_height_reference(uav_height_ref)
+
         # Log the values to ensure no truncation occurs during UI update
         try:
             x_text = self.control_point_x_widget.coordinate_edit.text()
@@ -1473,9 +1805,16 @@ class MainWindow(QMainWindow):
         self.control_point_name_edit.setEnabled(control_point_enabled)
         self.antenna_height_spin.setEnabled(control_point_enabled)
         self.max_flight_height_spin.setEnabled(control_point_enabled)
+        self.height_ref_label.setEnabled(control_point_enabled)
+        self.height_ref_cp_radio.setEnabled(control_point_enabled)
+        self.height_ref_ground_radio.setEnabled(control_point_enabled)
+        self.height_ref_sea_radio.setEnabled(control_point_enabled)
 
         # Unblock settings propagation after UI is fully synced
         self._ui_sync_in_progress = False
+
+        # Update markers on preview if image is loaded
+        self._update_cp_marker_from_settings(settings)
 
     def _ensure_busy_dialog(self) -> QProgressDialog:
         """Create BusyDialog lazily to prevent it from showing at startup."""
@@ -1523,19 +1862,40 @@ class MainWindow(QMainWindow):
         if label:
             self._progress_label.setText(label)
 
-    def _show_preview_in_main_window(self, image: Image.Image) -> None:
+    @Slot(object, object)
+    def _show_preview_in_main_window(
+        self,
+        image: Image.Image,
+        metadata: MapMetadata | None = None,
+    ) -> None:
         """Show preview image in the main window's integrated preview area."""
         try:
             if not isinstance(image, Image.Image):
                 logger.warning('Invalid image object for preview')
                 return
 
+            # Update model with metadata for informer
+            self._model.update_preview(None, metadata)
+
             # Set base image (full size)
             self._base_image = image.convert('RGB') if image.mode != 'RGB' else image
 
             # Display image
             self._current_image = self._base_image
-            self._preview_area.set_image(self._current_image)
+            mpp = metadata.meters_per_pixel if metadata else 0.0
+            self._preview_area.set_image(self._current_image, meters_per_px=mpp)
+
+            # Update control point markers from settings (e.g. if loaded from profile)
+            self._update_cp_marker_from_settings(self._model.settings)
+
+            # Set tooltip for coordinate informer and preview area
+            if metadata and metadata.control_point_enabled:
+                tooltip = 'Правая кнопка мыши - установка контрольной точки'
+                self._coords_label.setToolTip(tooltip)
+                self._preview_area.setToolTip(tooltip)
+            else:
+                self._coords_label.setToolTip('Текущие координаты курсора')
+                self._preview_area.setToolTip('')
 
             # Enable save button and menu action
             self.save_map_btn.setEnabled(True)
@@ -1564,6 +1924,10 @@ class MainWindow(QMainWindow):
         """Clear preview image, drop pixmap cache, and disable related controls."""
         try:
             self._preview_area.clear()
+            # Clear coordinates label and its tooltips
+            self._coords_label.setText('')
+            self._coords_label.setToolTip('')
+            self._preview_area.setToolTip('')
             # Reset images
             self._current_image = None
             self._base_image = None

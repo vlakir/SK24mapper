@@ -1,6 +1,32 @@
 from pydantic import BaseModel, field_validator
 
-from shared.constants import ADDITIVE_RATIO, MapType, default_map_type
+from shared.constants import (
+    ADDITIVE_RATIO,
+    MapType,
+    UavHeightReference,
+    default_map_type,
+)
+
+
+class MapMetadata(BaseModel):
+    """Метаданные сгенерированной карты для информера координат."""
+
+    center_x_gk: float
+    center_y_gk: float
+    center_lat_wgs: float
+    center_lng_wgs: float
+    meters_per_pixel: float
+    rotation_deg: float
+    width_px: int
+    height_px: int
+    zoom: int
+    scale: int
+    crop_x: int
+    crop_y: int
+    control_point_enabled: bool = False
+    original_cp_x_gk: float | None = None
+    original_cp_y_gk: float | None = None
+    helmert_params: tuple[float, float, float, float, float, float, float] | None = None
 
 
 class MapSettings(BaseModel):
@@ -76,6 +102,8 @@ class MapSettings(BaseModel):
     # Максимальная высота полёта (для карты радиогоризонта, значения выше
     # отображаются серым)
     max_flight_height_m: float = 500.0
+    # Режим отсчёта высоты БпЛА (для карты радиогоризонта)
+    uav_height_reference: UavHeightReference = UavHeightReference.CONTROL_POINT
 
     # Валидации через Pydantic validators
     @field_validator('mask_opacity')

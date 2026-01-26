@@ -14,7 +14,7 @@ from services.map_download_service import MapDownloadService
 from shared.constants import MAX_ZOOM
 
 if TYPE_CHECKING:
-    from domain.models import MapSettings
+    from domain.models import MapMetadata, MapSettings
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +28,7 @@ async def download_satellite_rectangle(
     output_path: str,
     max_zoom: int = MAX_ZOOM,
     settings: MapSettings | None = None,
-) -> str:
+) -> tuple[str, MapMetadata]:
     """
     Download satellite/map rectangle - backward compatibility wrapper.
 
@@ -45,7 +45,7 @@ async def download_satellite_rectangle(
         settings: Map settings
 
     Returns:
-        Output file path
+        Tuple of (output file path, map metadata)
 
     """
     service = MapDownloadService(api_key)

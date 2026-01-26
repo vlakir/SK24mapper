@@ -6,6 +6,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from domain.models import MapMetadata, MapSettings
 from geo import topography
 
 if TYPE_CHECKING:
@@ -14,7 +15,6 @@ if TYPE_CHECKING:
     import aiohttp
     from PIL import Image
 
-    from domain.models import MapSettings
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +74,9 @@ class MapDownloadContext:
     # Result image
     result: Image.Image | None = None
 
+    # Control point elevation (filled by processors if available)
+    control_point_elevation: float | None = None
+
     # Internal coordinate storage (set by service)
     coord_result: Any | None = None
     crs_sk42_gk: Any | None = None
@@ -87,6 +90,31 @@ class MapDownloadContext:
 
     # Tile size settings
     full_eff_tile_px: int = 512
+
+    def to_metadata(self) -> MapMetadata:
+        """Сборка метаданных для информера координат."""
+        return MapMetadata(
+            center_x_gk=self.center_x_sk42_gk,
+            center_y_gk=self.center_y_sk42_gk,
+            center_lat_wgs=self.center_lat_wgs,
+            center_lng_wgs=self.center_lng_wgs,
+            meters_per_pixel=self.get_meters_per_pixel(),
+            rotation_deg=self.rotation_deg,
+            width_px=self.target_w_px,
+            height_px=self.target_h_px,
+            zoom=self.zoom,
+            scale=self.eff_scale,
+            crop_x=self.crop_rect[0],
+            crop_y=self.crop_rect[1],
+            control_point_enabled=self.settings.control_point_enabled,
+            original_cp_x_gk=self.settings.control_point_x_sk42_gk
+            if self.settings.control_point_enabled
+            else None,
+            original_cp_y_gk=self.settings.control_point_y_sk42_gk
+            if self.settings.control_point_enabled
+            else None,
+            helmert_params=self.settings.custom_helmert,
+        )
 
     def get_meters_per_pixel(self) -> float:
         """Calculate meters per pixel at center latitude."""

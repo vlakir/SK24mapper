@@ -37,7 +37,7 @@ class _CbStore:
     progress: ClassVar[Callable[[int, int, str], None] | None] = None
     spinner_start: ClassVar[Callable[[str], None] | None] = None
     spinner_stop: ClassVar[Callable[[str], None] | None] = None
-    preview_image: ClassVar[Callable[[object], None] | None] = None
+    preview_image: ClassVar[Callable[[object, object], None] | None] = None
 
 
 def get_progress_callback() -> Callable[[int, int, str], None] | None:
@@ -52,7 +52,7 @@ def get_spinner_stop_callback() -> Callable[[str], None] | None:
     return _CbStore.spinner_stop
 
 
-def get_preview_image_callback() -> Callable[[object], None] | None:
+def get_preview_image_callback() -> Callable[[object, object], None] | None:
     return _CbStore.preview_image
 
 
@@ -70,22 +70,23 @@ def set_spinner_callbacks(
     _CbStore.spinner_stop = on_stop
 
 
-def set_preview_image_callback(cb: Callable[[object], None] | None) -> None:
-    """Устанавливает колбэк предпросмотра (получает PIL.Image)."""
+def set_preview_image_callback(cb: Callable[[object, object], None] | None) -> None:
+    """Устанавливает колбэк предпросмотра (получает PIL.Image и MapMetadata)."""
     _CbStore.preview_image = cb
 
 
-def publish_preview_image(img: object) -> bool:
+def publish_preview_image(img: object, metadata: object | None = None) -> bool:
     """
     Публикует изображение предпросмотра в GUI, если колбэк установлен.
 
     Возвращает True, если колбэк был установлен и вызван без исключений.
-    Тип img — PIL.Image.Image (используем object во избежание жёсткой зависимости).
+    Тип img — PIL.Image.Image.
+    Тип metadata — MapMetadata.
     """
     cb = get_preview_image_callback()
     if cb is not None:
         try:
-            cb(img)
+            cb(img, metadata)
         except Exception:
             return False
         else:
