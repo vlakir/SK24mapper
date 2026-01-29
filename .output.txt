@@ -1,290 +1,202 @@
+diff --git a/src/domain/models.py b/src/domain/models.py
+index dad28c6..ae66bda 100644
+--- a/src/domain/models.py
++++ b/src/domain/models.py
+@@ -27,6 +27,8 @@ class MapMetadata(BaseModel):
+     original_cp_x_gk: float | None = None
+     original_cp_y_gk: float | None = None
+     helmert_params: tuple[float, float, float, float, float, float, float] | None = None
++    # Zoom уровень для высотных тайлов (для запроса высоты в информере)
++    elevation_zoom: int | None = None
 
-> pr_comment.html:1926:<p dir="auto"><strong>Elevation processing enhancements<
-/strong>: New elevation contours processor with two-pass DEM processing, DEM ti
-le caching system, and numpy-optimized topography module with vectorized operat
-ions</p>
-  pr_comment.html:1927:</li>
-  pr_comment.html:1928:<li>
-  pr_comment.html:1929:<p dir="auto"><strong>UI improvements</strong>: Added ra
-dio horizon map type support with antenna height and max flight height controls
-, refactored callbacks to use keyword-only arguments, improved control point ha
-ndling</p>
-  pr_comment.html:1930:</li>
-  pr_comment.html:1931:<li>
-  pr_comment.html:1932:<p dir="auto"><strong>Grid and imaging utilities</strong
->: New SK-42 coordinate system grid drawing module with adaptive rendering and
-legend gap handling</p>
-  pr_comment.html:1933:</li>
-  pr_comment.html:1934:<li>
-  pr_comment.html:1935:<p dir="auto"><strong>Constants consolidation</strong>:
-Expanded <code class="notranslate">shared/constants.py</code> with radio horizo
-n parameters, moved Helmert tool and grid constants, updated measurements from
-pixels to meters</p>
-  pr_comment.html:1936:</li>
-  pr_comment.html:1937:<li>
-  pr_comment.html:1938:<p dir="auto"><strong>Code quality improvements</strong>
-: Enhanced type hints, improved logging with %-formatting, better error handlin
-g in async functions, refactored marching squares algorithm modularity</p>
-  pr_comment.html:1939:</li>
-  pr_comment.html:1940:</ul>
-  pr_comment.html:1941:<hr>
-  pr_comment.html:1942:<h3 dir="auto">Diagram Walkthrough</h3>
-  pr_comment.html:1943:<section class="js-render-needs-enrichment render-needs-
-enrichment position-relative" data-identity="00731221-ce38-4627-ac0a-30510854b2
-50" data-host="https://viewscreen.githubusercontent.com" data-src="https://view
-screen.githubusercontent.com/markdown/mermaid?docs_host=https%3A%2F%2Fdocs.gith
-ub.com" data-type="mermaid" aria-label="mermaid rendered output container">
-> pr_comment.html:1944:  <div class="js-render-enrichment-target" data-json="{&
-quot;data&quot;:&quot;flowchart LR\n  A[\&quot;Monolithic service.py\&quot;] --
-&amp;gt;|refactored to wrapper| B[\&quot;MapDownloadService\&quot;]\n  B --&amp
-;gt;|orchestrates| C[\&quot;Processors\&quot;]\n  C --&amp;gt;|includes| D[\&qu
-ot;Radio Horizon\&quot;]\n  C --&amp;gt;|includes| E[\&quot;Elevation Contours\
-&quot;]\n  C --&amp;gt;|includes| F[\&quot;XYZ Tiles\&quot;]\n  B --&amp;gt;|po
-st-processes| G[\&quot;Grid/Legend/Rotation\&quot;]\n  D --&amp;gt;|uses| H[\&q
-uot;Topography Module\&quot;]\n  H --&amp;gt;|optimized with| I[\&quot;NumPy +
-Caching\&quot;]\n  J[\&quot;GUI Controller\&quot;] --&amp;gt;|calls| B\n  K[\&q
-uot;Shared Constants\&quot;] --&amp;gt;|provides config| B\n  L[\&quot;Infrastr
-ucture Layer\&quot;] --&amp;gt;|provides HTTP| B\n&quot;}" data-plain="flowchar
-t LR
-  pr_comment.html:1945:  A[&quot;Monolithic service.py&quot;] --&gt;|refactored
- to wrapper| B[&quot;MapDownloadService&quot;]
-  pr_comment.html:1946:  B --&gt;|orchestrates| C[&quot;Processors&quot;]
-  pr_comment.html:1947:  C --&gt;|includes| D[&quot;Radio Horizon&quot;]
-  pr_comment.html:1948:  C --&gt;|includes| E[&quot;Elevation Contours&quot;]
-  pr_comment.html:1949:  C --&gt;|includes| F[&quot;XYZ Tiles&quot;]
-  pr_comment.html:1950:  B --&gt;|post-processes| G[&quot;Grid/Legend/Rotation&
-quot;]
-  pr_comment.html:1951:  D --&gt;|uses| H[&quot;Topography Module&quot;]
-> pr_comment.html:1952:  H --&gt;|optimized with| I[&quot;NumPy + Caching&quot;
-]
-  pr_comment.html:1953:  J[&quot;GUI Controller&quot;] --&gt;|calls| B
-  pr_comment.html:1954:  K[&quot;Shared Constants&quot;] --&gt;|provides config
-| B
-  pr_comment.html:1955:  L[&quot;Infrastructure Layer&quot;] --&gt;|provides HT
-TP| B
-  pr_comment.html:1956:" dir="auto">
-  pr_comment.html:1957:    <div class="render-plaintext-hidden" dir="auto">
-  pr_comment.html:1958:      <pre lang="mermaid" aria-label="Raw mermaid code"
-class="notranslate">flowchart LR
-  pr_comment.html:1959:  A["Monolithic service.py"] --&gt;|refactored to wrappe
-r| B["MapDownloadService"]
-  pr_comment.html:1960:  B --&gt;|orchestrates| C["Processors"]
-  pr_comment.html:1961:  C --&gt;|includes| D["Radio Horizon"]
-  pr_comment.html:1962:  C --&gt;|includes| E["Elevation Contours"]
-  pr_comment.html:1963:  C --&gt;|includes| F["XYZ Tiles"]
-  pr_comment.html:1964:  B --&gt;|post-processes| G["Grid/Legend/Rotation"]
-  pr_comment.html:1965:  D --&gt;|uses| H["Topography Module"]
-> pr_comment.html:1966:  H --&gt;|optimized with| I["NumPy + Caching"]
-  pr_comment.html:1967:  J["GUI Controller"] --&gt;|calls| B
-  pr_comment.html:1968:  K["Shared Constants"] --&gt;|provides config| B
-  pr_comment.html:1969:  L["Infrastructure Layer"] --&gt;|provides HTTP| B
-  pr_comment.html:1970:</pre>
-  pr_comment.html:1971:    </div>
-  pr_comment.html:1972:  </div>
-  pr_comment.html:1973:  <span class="js-render-enrichment-loader d-flex flex-j
-ustify-center flex-items-center width-full" style="min-height:100px" role="pres
-entation">
-  pr_comment.html:1974:    <span data-view-component="true">
-  pr_comment.html:1975:  <svg style="box-sizing: content-box; color: var(--colo
-r-icon-primary);" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-h
-idden="true" data-view-component="true" class="octospinner mx-auto anim-rotate"
->
-  pr_comment.html:1976:    <circle cx="8" cy="8" r="7" stroke="currentColor" st
-roke-opacity="0.25" stroke-width="2" vector-effect="non-scaling-stroke" fill="n
-one"></circle>
-  pr_comment.html:1977:    <path d="M15 8a7.002 7.002 0 00-7-7" stroke="current
-Color" stroke-width="2" stroke-linecap="round" vector-effect="non-scaling-strok
-e"></path>
-  pr_comment.html:1978:</svg>    <span class="sr-only">Loading</span>
-  pr_comment.html:1979:</span>
-  pr_comment.html:1980:  </span>
-  pr_comment.html:1981:</section>
-  pr_comment.html:1982:
-  pr_comment.html:1983:<details><summary><h3 dir="auto">File Walkthrough</h3></
-summary>
-  pr_comment.html:1984:<markdown-accessiblity-table><table role="table"><thead>
-<tr><th></th><th align="left">Relevant files</th></tr></thead><tbody><tr><td><s
-trong>Refactoring</strong></td><td><details><summary>6 files</summary><table ro
-le="table">
-  pr_comment.html:1985:<tbody><tr>
-  pr_comment.html:1986:  <td>
-  pr_comment.html:1987:    <details>
-  pr_comment.html:1988:      <summary><strong>service.py</strong><dd><code clas
-s="notranslate">Refactor service.py to wrapper around MapDownloadService</code>
-  </dd></summary>
-  pr_comment.html:1989:<hr>
-  pr_comment.html:1990:<p dir="auto">src/service.py</p>
-  pr_comment.html:1991:<ul dir="auto"><li>Refactored from monolithic implementa
-tion to a thin <br>backward-compatibility wrapper<br> </li><li> Removed ~1700 l
-ines of core download logic and delegated to <br><code class="notranslate">MapD
-ownloadService</code><br> </li><li> Simplified function to create service insta
-nce and call its <code class="notranslate">download</code> <br>method<br> </li>
-<li> Updated imports to use new service architecture and shared constants</li><
-/ul>
-  pr_comment.html:1992:</details>
-  pr_comment.html:1993:  </td>
-  pr_comment.html:1994:  <td><a href="https://github.com/vlakir/SK24mapper/pull
-/15/files#diff-552a6400d70e70b3add52c1eae6e2cde3db3b4156f57acf8e23ec469e921fb50
-">+40/-1846</a></td>
-  pr_comment.html:1995:</tr>
-  pr_comment.html:1996:<tr>
-> pr_comment.html:2102:<ul dir="auto"><li>Converted <code class="notranslate">d
-ecode_terrain_rgb_to_elevation_m()</code> to return numpy array <br>instead of
-list for better performance<br> </li><li> Added DEM tile caching system with <c
-ode class="notranslate">get_cached_dem_tile()</code>, <br><code class="notransl
-ate">cache_dem_tile()</code>, and <code class="notranslate">clear_dem_cache()</
-code> functions<br> </li><li> Optimized <code class="notranslate">colorize_dem_
-to_image()</code> with vectorized numpy operations and <br>LUT-based color mapp
-ing<br> </li><li> Refactored <code class="notranslate">assemble_dem()</code> to
- use numpy arrays for memory efficiency <br>and faster operations</li></ul>
-  pr_comment.html:2103:</details>
-  pr_comment.html:2104:  </td>
-  pr_comment.html:2105:  <td><a href="https://github.com/vlakir/SK24mapper/pull
-/15/files#diff-1bdb7fe2939d4a2e06e695aa8978e365ca1634f85276e7b7396fbcb97d0d544e
-">+188/-107</a></td>
-  pr_comment.html:2106:</tr>
-  pr_comment.html:2107:<tr>
-  pr_comment.html:2108:  <td>
-  pr_comment.html:2109:    <details>
-  pr_comment.html:2110:      <summary><strong>stats.py</strong><dd><code class=
-"notranslate">Elevation stats module reorganization and tile caching</code>
-  </dd></summary>
-  pr_comment.html:2111:<hr>
-  pr_comment.html:2112:<p dir="auto">src/elevation/stats.py</p>
-  pr_comment.html:2113:<ul dir="auto"><li>Updated import paths to use new modul
-e structure (<code class="notranslate">geo.topography</code>, <br><code class="
-notranslate">geo.geometry</code>, <code class="notranslate">shared.constants</c
-ode>, <code class="notranslate">contours.helpers</code>)<br> </li><li> Added op
-tional tile caching feature to <code class="notranslate">sample_elevation_perce
-ntiles()</code> <br>with <code class="notranslate">cache_tiles</code> parameter
-<br> </li><li> Enhanced return type to include optional tile cache dictionary f
-or <br>reuse in downstream processing<br> </li><li> Improved type hints with <c
-ode class="notranslate">Semaphore</code> import and better documentation</li></
-ul>
-  pr_comment.html:2114:</details>
-  pr_comment.html:2115:  </td>
-  pr_comment.html:2116:  <td><a href="https://github.com/vlakir/SK24mapper/pull
-/15/files#diff-5f66912312b4b6d9c4c8184de89c5bc018d820e4f9e75cbe8b02801d360a7761
-">+31/-14</a>  </td>
-  pr_comment.html:2117:</tr>
-  pr_comment.html:2118:<tr>
-  pr_comment.html:2119:  <td>
-  pr_comment.html:2120:    <details>
-  pr_comment.html:2121:      <summary><strong>radio_horizon.py</strong><dd><cod
-e class="notranslate">Radio horizon calculation service with terrain analysis</
-code>    </dd></summary>
-  pr_comment.html:2122:<hr>
-  pr_comment.html:2123:<p dir="auto">src/services/radio_horizon.py</p>
-  pr_comment.html:2124:<ul dir="auto"><li>New module implementing radio horizon
- calculation for UAV visibility <br>analysis<br> </li><li> Computes minimum UAV
- height above ground for direct radio <br>line-of-sight with ground station<br>
- </li><li> Accounts for terrain relief and Earth curvature using numpy and Numb
-a <br>JIT optimization<br> </li><li> Includes DEM downsampling, bilinear interp
-olation, ray tracing, and <br>colorization functions</li></ul>
-  pr_comment.html:2125:</details>
-  pr_comment.html:2126:  </td>
-  pr_comment.html:2127:  <td><a href="https://github.com/vlakir/SK24mapper/pull
-/15/files#diff-bf2e3ad21c041476dcf7f619511689a09e3280d37d5628e649fa3b58a105edae
-">+613/-0</a>  </td>
-  pr_comment.html:2128:</tr>
-  pr_comment.html:2129:<tr>
-  pr_comment.html:2130:  <td>
-  pr_comment.html:2131:    <details>
-  pr_comment.html:2132:      <summary><strong>grid.py</strong><dd><code class="
-notranslate">Grid drawing utilities for SK-42 coordinate system</code>
-     </dd></summary>
-> pr_comment.html:3641:<details><summary>Replace manual loop with optimized fun
-ctions</summary>
-  pr_comment.html:3642:<hr>
-> pr_comment.html:3643:<p dir="auto"><strong>Refactor <code class="notranslate"
->compute_and_colorize_radio_horizon</code> to improve performance. Replace the
-<br>slow, manual Python loop for interpolation and colorization with calls to t
-he <br>existing optimized functions <code class="notranslate">compute_radio_hor
-izon</code> and <code class="notranslate">colorize_radio_horizon</code>.</stron
-g></p>
-  pr_comment.html:3644:<p dir="auto"><a href="https://github.com/vlakir/SK24map
-per/pull/15/files#diff-bf2e3ad21c041476dcf7f619511689a09e3280d37d5628e649fa3b58
-a105edaeR440-R545">src/services/radio_horizon.py [440-545]</a></p>
-  pr_comment.html:3645:<div class="highlight highlight-source-diff notranslate
-position-relative overflow-auto" dir="auto" data-snippet-clipboard-copy-content
-=" def compute_and_colorize_radio_horizon(
-  pr_comment.html:3646:-    ...
-  pr_comment.html:3647:+    dem: np.ndarray,
-  pr_comment.html:3648:+    antenna_row: int,
-  pr_comment.html:3649:+    antenna_col: int,
-  pr_comment.html:3650:+    antenna_height_m: float,
-  pr_comment.html:3651:+    pixel_size_m: float,
-  pr_comment.html:3652:+    earth_radius_m: float = EARTH_RADIUS_M,
-  pr_comment.html:3653:+    refraction_k: float = RADIO_HORIZON_REFRACTION_K,
-  pr_comment.html:3654:+    grid_step: int = RADIO_HORIZON_GRID_STEP,
-  pr_comment.html:3655:+    max_height_m: float = RADIO_HORIZON_MAX_HEIGHT_M,
-  pr_comment.html:3656:+    color_ramp: list[tuple[float, tuple[int, int, int]]
-] | None = None,
-  pr_comment.html:3657:+    unreachable_color: tuple[int, int, int] = RADIO_HOR
-IZON_UNREACHABLE_COLOR,
-  pr_comment.html:3658: ) -&gt; Image.Image:
-  pr_comment.html:3659:-    ...
-  pr_comment.html:3660:-    for row in range(h):
-  pr_comment.html:3661:-        gr0 = row // grid_step
-  pr_comment.html:3662:-        gr1 = min(gr0 + 1, grid_h - 1)
-  pr_comment.html:3663:-        dr = (row - gr0 * grid_step) * inv_grid_step
-  pr_comment.html:3664:+    &quot;&quot;&quot;
-  pr_comment.html:3665:+    Оптимизированная функция: вычисляет и раскрашивает
-радиогоризонт.
-  pr_comment.html:3666:
-  pr_comment.html:3667:-        for col in range(w):
-  pr_comment.html:3668:-            gc0 = col // grid_step
-  pr_comment.html:3669:-            gc1 = min(gc0 + 1, grid_w - 1)
-  pr_comment.html:3670:-            dc = (col - gc0 * grid_step) * inv_grid_ste
-p
-  pr_comment.html:3671:+    Numpy версия с оптимизированным использованием памя
-ти.
-  pr_comment.html:3672:+    &quot;&quot;&quot;
-  pr_comment.html:3673:+    if dem.size == 0:
-> pr_comment.html:3781:<p dir="auto">Why: The suggestion correctly identifies a
- significant performance bottleneck due to manual, per-pixel processing in a Py
-thon loop and proposes refactoring to use existing, highly optimized vectorized
- functions, which drastically improves performance and reduces code duplication
-.</p>
-  pr_comment.html:3782:</details></details></td><td align="center">Medium
-  pr_comment.html:3783:</td></tr><tr><td>
-  pr_comment.html:3784:<details><summary>Add map type check for label</summary>
-  pr_comment.html:3785:<hr>
-  pr_comment.html:3786:<p dir="auto"><strong>Add a check for <code class="notra
-nslate">ctx.is_radio_horizon</code> at the beginning of <br><code class="notran
-slate">_draw_control_point_label</code> to ensure it only executes for radio ho
-rizon maps.</strong></p>
-  pr_comment.html:3787:<p dir="auto"><a href="https://github.com/vlakir/SK24map
-per/pull/15/files#diff-25e4e12c4d309f38c5a399360f3e135d59734a1c458e44749b28ce96
-e54f554fR590-R654">src/services/map_download_service.py [590-654]</a></p>
-  pr_comment.html:3788:<div class="highlight highlight-source-diff notranslate
-position-relative overflow-auto" dir="auto" data-snippet-clipboard-copy-content
-=" def _draw_control_point_label(
-  pr_comment.html:3789:     self,
-  pr_comment.html:3790:     ctx: MapDownloadContext,
-  pr_comment.html:3791:     result: Image.Image,
-  pr_comment.html:3792:     cx_img: float,
-  pr_comment.html:3793:     cy_img: float,
-  pr_comment.html:3794:     mpp: float,
-  pr_comment.html:3795: ) -&gt; None:
-  pr_comment.html:3796:     &quot;&quot;&quot;Draw control point label for radi
-o horizon maps.&quot;&quot;&quot;
-  pr_comment.html:3797:+    if not ctx.is_radio_horizon:
-  pr_comment.html:3798:+        return
-  pr_comment.html:3799:+
-  pr_comment.html:3800:     try:
-  pr_comment.html:3801:         ppm = 1.0 / mpp if mpp &gt; 0 else 0.0
-  pr_comment.html:3802:         font_size_px = max(12, round(ctx.settings.grid_
-font_size_m * ppm))
-  pr_comment.html:3803:         label_font = load_grid_font(font_size_px)
-  pr_comment.html:3804:         subscript_font = load_grid_font(max(8, font_siz
-e_px * 2 // 3))
-  pr_comment.html:3805:         bg_padding_px = max(2, round(ctx.settings.grid_
-label_bg_padding_m * ppm))
-  pr_comment.html:3806:
-  pr_comment.html:3807:         draw = ImageDraw.Draw(result)
-  pr_comment.html:3808:         cp_name = getattr(ctx.settings, 'control_point_
-name', None)
-  pr_comment.html:3809:         antenna_h = ctx.settings.antenna_height_m
-  pr_comment.html:3810:
-  pr_comment.html:3811:         # Position below triangle
+
+ class MapSettings(BaseModel):
+diff --git a/src/gui/view.py b/src/gui/view.py
+index afdc7a7..99d4546 100644
+--- a/src/gui/view.py
++++ b/src/gui/view.py
+@@ -92,6 +92,7 @@ from geo.topography import (
+     latlng_to_pixel_xy,
+     pixel_xy_to_latlng,
+ )
++from services.elevation_query import get_elevation_at_wgs84
+ from shared.constants import CONTROL_POINT_PRECISION_TOLERANCE_M
+
+ logger = logging.getLogger(__name__)
+@@ -1329,7 +1330,7 @@ class MainWindow(QMainWindow):
+
+     @Slot(object, object)
+     def _on_mouse_moved_on_map(self, px: float | None, py: float | None) -> None:
+-        """Handle mouse movement over preview to show SK-42 coordinates."""
++        """Handle mouse movement over preview to show SK-42 coordinates and elevation."""
+         coords = self._calculate_sk42_from_scene_pos(px, py)
+         if coords is None:
+             self._coords_label.setText('')
+@@ -1346,9 +1347,14 @@ class MainWindow(QMainWindow):
+                 )
+             return s
+
+-        self._coords_label.setText(
+-            f'X: {format_coord(x_val)}  Y: {format_coord(y_val)}'
+-        )
++        coord_text = f'X: {format_coord(x_val)}  Y: {format_coord(y_val)}'
++
++        # Get elevation at cursor position
++        elevation = self._get_elevation_at_cursor(px, py)
++        if elevation is not None:
++            coord_text += f'  h = {elevation:.0f} м'
++
++        self._coords_label.setText(coord_text)
+
+     def _calculate_sk42_from_scene_pos(
+         self, px: float | None, py: float | None
+@@ -1409,6 +1415,51 @@ class MainWindow(QMainWindow):
+             logger.exception('Failed to calculate SK-42 coordinates from pixel')
+             return None
+
++    def _get_elevation_at_cursor(
++        self, px: float | None, py: float | None
++    ) -> float | None:
++        """Get elevation at cursor position from cached terrain tiles."""
++        if px is None or py is None:
++            return None
++
++        metadata = self._model.state.last_map_metadata
++        if not metadata or metadata.elevation_zoom is None:
++            return None
++
++        try:
++            # Convert scene pixel to WGS-84 coordinates
++            cx_px = metadata.width_px / 2.0
++            cy_px = metadata.height_px / 2.0
++
++            dx_px = px - cx_px
++            dy_px = py - cy_px
++
++            # Account for rotation (inverse transform)
++            rotation_rad = math.radians(-metadata.rotation_deg)
++            cos_rot = math.cos(rotation_rad)
++            sin_rot = math.sin(rotation_rad)
++
++            dx = dx_px * cos_rot + dy_px * sin_rot
++            dy = -dx_px * sin_rot + dy_px * cos_rot
++
++            # Convert to world pixels
++            cx_world, cy_world = latlng_to_pixel_xy(
++                metadata.center_lat_wgs, metadata.center_lng_wgs, metadata.zoom
++            )
++
++            x_world = dx / metadata.scale + cx_world
++            y_world = dy / metadata.scale + cy_world
++
++            # Convert to WGS-84
++            lat_wgs, lng_wgs = pixel_xy_to_latlng(x_world, y_world, metadata.zoom)
++
++            # Query elevation from cache
++            return get_elevation_at_wgs84(lat_wgs, lng_wgs, metadata)
++
++        except Exception:
++            logger.debug('Failed to get elevation at cursor', exc_info=True)
++            return None
++
+     @Slot(float, float)
+     def _on_map_right_clicked(self, px: float, py: float) -> None:
+         """Transfer coordinates from map right-click to control point settings."""
+diff --git a/src/services/map_context.py b/src/services/map_context.py
+index d62a72c..2aef261 100644
+--- a/src/services/map_context.py
++++ b/src/services/map_context.py
+@@ -91,6 +91,9 @@ class MapDownloadContext:
+     # Tile size settings
+     full_eff_tile_px: int = 512
+
++    # Elevation zoom level for informer (set after elevation tiles download)
++    elevation_zoom: int | None = None
++
+     def to_metadata(self) -> MapMetadata:
+         """Сборка метаданных для информера координат."""
+         return MapMetadata(
+@@ -114,6 +117,7 @@ class MapDownloadContext:
+             if self.settings.control_point_enabled
+             else None,
+             helmert_params=self.settings.custom_helmert,
++            elevation_zoom=self.elevation_zoom,
+         )
+
+     def get_meters_per_pixel(self) -> float:
+diff --git a/src/services/map_download_service.py b/src/services/map_download_service.py
+index 3ae48aa..c1a4b9b 100644
+--- a/src/services/map_download_service.py
++++ b/src/services/map_download_service.py
+@@ -49,6 +49,7 @@ from services.map_postprocessing import (
+     draw_center_cross_on_image,
+     draw_control_point_triangle,
+ )
++from elevation.provider import ElevationTileProvider
+ from services.processors.elevation_contours import (
+     apply_contours_to_image,
+ )
+@@ -149,6 +150,9 @@ class MapDownloadService:
+                 # Select and run processor
+                 ctx.result = await self._run_processor(ctx)
+
++                # Download elevation tiles for informer (if not already downloaded)
++                await self._ensure_elevation_tiles(ctx)
++
+                 # Post-processing (may require network for overlay contours)
+                 await self._postprocess(ctx)
+
+@@ -408,6 +412,53 @@ class MapDownloadService:
+         module = importlib.import_module('services.processors.xyz_tiles')
+         return await module.process_xyz_tiles(ctx)
+
++    async def _ensure_elevation_tiles(self, ctx: MapDownloadContext) -> None:
++        """
++        Ensure elevation tiles are downloaded for the informer.
++
++        For maps that already use elevation data (ELEVATION_COLOR, ELEVATION_CONTOURS,
++        RADIO_HORIZON), the tiles are already cached. For other map types (SATELLITE,
++        HYBRID, STREETS, OUTDOORS), we need to download them separately.
++        """
++        # If elevation tiles were already downloaded by processor, just set the zoom
++        if ctx.is_elev_color or ctx.is_elev_contours or ctx.is_radio_horizon:
++            ctx.elevation_zoom = ctx.zoom
++            return
++
++        # For overlay contours, tiles are also already downloaded
++        if ctx.overlay_contours:
++            ctx.elevation_zoom = ctx.zoom
++            return
++
++        # Download elevation tiles for informer
++        logger.info('Загрузка высотных тайлов для информера — старт')
++        sp = LiveSpinner('Загрузка высот для информера')
++        sp.start()
++
++        try:
++            provider = ElevationTileProvider(
++                client=ctx.client,
++                api_key=ctx.api_key,
++                use_retina=ELEVATION_USE_RETINA,
++                cache_root=_resolve_cache_dir(),
++            )
++
++            # Download tiles concurrently
++            async def fetch_tile(tile: tuple[int, int]) -> None:
++                xw, yw = tile
++                await provider.get_tile_image(ctx.zoom, xw, yw)
++
++            tasks = [fetch_tile(tile) for tile in ctx.tiles]
++            await asyncio.gather(*tasks)
++
++            ctx.elevation_zoom = ctx.zoom
++            logger.info('Загрузка высотных тайлов для информера — завершена')
++        except Exception as e:
++            logger.warning('Не удалось загрузить высотные тайлы для информера: %s', e)
++            # Don't fail the whole operation, just leave elevation_zoom as None
++        finally:
++            sp.stop('Загрузка высот завершена')
++
+     async def _postprocess(self, ctx: MapDownloadContext) -> None:
+         """Apply post-processing to the result image."""
+         result = ctx.result
