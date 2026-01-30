@@ -32,7 +32,7 @@ MAX_GK_ZONE = 60
 ASYNC_MAX_CONCURRENCY = 10
 
 # Ограничение на итоговое число пикселей результирующего кадра (без припуска)
-MAX_OUTPUT_PIXELS = 300_000_000
+MAX_OUTPUT_PIXELS = 500_000_000
 
 # Отключить защиту Pillow от «бомб декомпрессии» (используйте с осторожностью)
 PIL_DISABLE_LIMIT = True
