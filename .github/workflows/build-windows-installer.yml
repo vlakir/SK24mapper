@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - 'v*'
+      - '[0-9]*'
   workflow_dispatch: {}
 
 permissions:
@@ -77,20 +78,22 @@ jobs:
         run: choco install innosetup -y
 
       - name: Build installer with Inno Setup
+        shell: cmd
         run: |
-          set VERSION=${{ env.VERSION }}
-          iscc scripts\installer.iss
+          iscc installer.iss
+        env:
+          VERSION: ${{ env.VERSION }}
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: SK42mapper-win64-installer
           path: |
-            scripts/SK42mapper-*-setup.exe
+            SK42mapper-*-setup.exe
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            scripts/SK42mapper-*-setup.exe
+            SK42mapper-*-setup.exe
