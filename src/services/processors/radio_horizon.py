@@ -27,7 +27,6 @@ from services.radio_horizon import (
 from shared.constants import (
     CONTOUR_LOG_MEMORY_EVERY_TILES,
     MAPBOX_STYLE_BY_TYPE,
-    RADIO_HORIZON_TOPO_OVERLAY_ALPHA,
     RADIO_HORIZON_USE_RETINA,
     TILE_SIZE,
     MapType,
@@ -102,6 +101,10 @@ async def process_radio_horizon(ctx: MapDownloadContext) -> Image.Image:
     del dem_tiles_data
     gc.collect()
 
+    # Save raw DEM for cursor elevation display (before downsampling)
+    # This avoids re-downloading DEM in _load_dem_for_cursor
+    ctx.raw_dem_for_cursor = dem_full.copy()
+
     # Check if downsampling needed
     dem_h_orig, dem_w_orig = dem_full.shape
     ds_factor = compute_downsample_factor(dem_h_orig, dem_w_orig)
@@ -160,6 +163,9 @@ async def process_radio_horizon(ctx: MapDownloadContext) -> Image.Image:
     # Get control point elevation from DEM
     cp_elevation = float(dem_full[antenna_row, antenna_col])
     ctx.control_point_elevation = cp_elevation
+
+    # DEM for cursor display will be loaded in _postprocess by _load_dem_for_cursor
+    # with proper rotation and cropping
 
     # Compute radio horizon
     sp = LiveSpinner('Вычисление радиогоризонта')
@@ -241,13 +247,16 @@ async def process_radio_horizon(ctx: MapDownloadContext) -> Image.Image:
         topo_base = topo_base.resize(result.size, Image.Resampling.BILINEAR)
 
     # Blend radio horizon with topo base
+    # В настройках хранится "прозрачность слоя" (1 = чистая топооснова),
+    # а blend принимает "непрозрачность" (1 = только радиогоризонт), поэтому инвертируем
+    blend_alpha = 1.0 - ctx.settings.radio_horizon_overlay_alpha
     logger.info(
-        'Наложение радиогоризонта на топооснову (alpha=%.2f)',
-        RADIO_HORIZON_TOPO_OVERLAY_ALPHA,
+        'Наложение радиогоризонта на топооснову (blend_alpha=%.2f)',
+        blend_alpha,
     )
     topo_base = topo_base.convert('L').convert('RGBA')
     result = result.convert('RGBA')
-    result = Image.blend(topo_base, result, RADIO_HORIZON_TOPO_OVERLAY_ALPHA)
+    result = Image.blend(topo_base, result, blend_alpha)
 
     del topo_base
     gc.collect()

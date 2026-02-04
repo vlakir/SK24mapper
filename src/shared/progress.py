@@ -37,7 +37,7 @@ class _CbStore:
     progress: ClassVar[Callable[[int, int, str], None] | None] = None
     spinner_start: ClassVar[Callable[[str], None] | None] = None
     spinner_stop: ClassVar[Callable[[str], None] | None] = None
-    preview_image: ClassVar[Callable[[object, object], None] | None] = None
+    preview_image: ClassVar[Callable[[object, object, object], None] | None] = None
 
 
 def get_progress_callback() -> Callable[[int, int, str], None] | None:
@@ -52,7 +52,7 @@ def get_spinner_stop_callback() -> Callable[[str], None] | None:
     return _CbStore.spinner_stop
 
 
-def get_preview_image_callback() -> Callable[[object, object], None] | None:
+def get_preview_image_callback() -> Callable[[object, object, object], None] | None:
     return _CbStore.preview_image
 
 
@@ -70,23 +70,28 @@ def set_spinner_callbacks(
     _CbStore.spinner_stop = on_stop
 
 
-def set_preview_image_callback(cb: Callable[[object, object], None] | None) -> None:
-    """Устанавливает колбэк предпросмотра (получает PIL.Image и MapMetadata)."""
+def set_preview_image_callback(
+    cb: Callable[[object, object, object], None] | None,
+) -> None:
+    """Устанавливает колбэк предпросмотра (PIL.Image, MapMetadata, dem_grid)."""
     _CbStore.preview_image = cb
 
 
-def publish_preview_image(img: object, metadata: object | None = None) -> bool:
+def publish_preview_image(
+    img: object, metadata: object | None = None, dem_grid: object | None = None
+) -> bool:
     """
     Публикует изображение предпросмотра в GUI, если колбэк установлен.
 
     Возвращает True, если колбэк был установлен и вызван без исключений.
     Тип img — PIL.Image.Image.
     Тип metadata — MapMetadata.
+    Тип dem_grid — numpy.ndarray | None (DEM для отображения высоты под курсором).
     """
     cb = get_preview_image_callback()
     if cb is not None:
         try:
-            cb(img, metadata)
+            cb(img, metadata, dem_grid)
         except Exception:
             return False
         else:

@@ -71,6 +71,12 @@ class MapDownloadContext:
     elev_min_m: float | None = None
     elev_max_m: float | None = None
 
+    # DEM grid for cursor elevation display (numpy array, same size as result image)
+    dem_grid: Any | None = None
+    # Raw DEM grid from processors (before rotation/crop, size = crop_rect)
+    # Used to avoid re-downloading DEM in _load_dem_for_cursor
+    raw_dem_for_cursor: Any | None = None
+
     # Result image
     result: Image.Image | None = None
 

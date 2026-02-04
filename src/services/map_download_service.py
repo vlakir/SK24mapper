@@ -10,11 +10,15 @@ import logging
 import time
 from pathlib import Path
 
+import cv2
+import numpy as np
 from PIL import Image, ImageDraw
 
 from domain.models import MapMetadata, MapSettings
+from elevation.provider import ElevationTileProvider
 from geo.topography import (
     ELEVATION_COLOR_RAMP,
+    assemble_dem,
     choose_zoom_with_limit,
     effective_scale_for_xyz,
     latlng_to_pixel_xy,
@@ -66,6 +70,7 @@ from shared.constants import (
     PIL_DISABLE_LIMIT,
     RADIO_HORIZON_COLOR_RAMP,
     RADIO_HORIZON_USE_RETINA,
+    ROTATION_EPSILON,
     UAV_HEIGHT_REFERENCE_ABBR,
     XYZ_TILE_SIZE,
     XYZ_USE_RETINA,
@@ -414,6 +419,10 @@ class MapDownloadService:
         if result is None:
             return
 
+        # Load DEM for cursor elevation display if not already loaded
+        if ctx.dem_grid is None:
+            await self._load_dem_for_cursor(ctx)
+
         # Overlay contours if enabled
         if ctx.overlay_contours and not ctx.is_elev_contours:
             result = await self._apply_overlay_contours(ctx, result)
@@ -467,7 +476,135 @@ class MapDownloadService:
         if ctx.settings.control_point_enabled:
             self._draw_control_point(ctx, result)
 
+        # Clear raw DEM reference now that all processing is done
+        ctx.raw_dem_for_cursor = None
+
         ctx.result = result
+
+    async def _load_dem_for_cursor(self, ctx: MapDownloadContext) -> None:
+        """Load or transform DEM for cursor elevation display."""
+        dem_start_time = time.monotonic()
+
+        try:
+            # Check if raw DEM was already loaded by a processor
+            if ctx.raw_dem_for_cursor is not None:
+                logger.info(
+                    'Используется DEM из процессора (размер %dx%d)',
+                    ctx.raw_dem_for_cursor.shape[1],
+                    ctx.raw_dem_for_cursor.shape[0],
+                )
+                dem_full = ctx.raw_dem_for_cursor
+                # Note: Don't clear reference yet - apply_contours_to_image may need it
+            else:
+                # Need to load DEM from scratch (for XYZ maps without elevation)
+                logger.info('Загрузка DEM для информера высоты — старт')
+
+                provider = ElevationTileProvider(
+                    client=ctx.client,
+                    api_key=ctx.api_key,
+                    use_retina=ELEVATION_USE_RETINA,
+                    cache_root=_resolve_cache_dir(),
+                )
+
+                # DEM tiles have fixed size (256 or 512 with retina)
+                dem_tile_px = 256 * (2 if ELEVATION_USE_RETINA else 1)
+
+                # Calculate scale factor between main image tiles and DEM tiles
+                scale_factor = ctx.full_eff_tile_px / dem_tile_px
+
+                # Adjust crop_rect for DEM tile size
+                cx, cy, cw, ch = ctx.crop_rect
+                dem_crop_rect = (
+                    int(cx / scale_factor),
+                    int(cy / scale_factor),
+                    int(cw / scale_factor),
+                    int(ch / scale_factor),
+                )
+
+                # Fetch DEM tiles
+                async def fetch_dem_tile(
+                    idx_xy: tuple[int, tuple[int, int]],
+                ) -> tuple[int, list[list[float]]]:
+                    idx, (tile_x_world, tile_y_world) = idx_xy
+                    async with ctx.semaphore:
+                        dem_tile = await provider.get_tile_dem(
+                            ctx.zoom, tile_x_world, tile_y_world
+                        )
+                        return idx, dem_tile
+
+                tasks = [fetch_dem_tile(pair) for pair in enumerate(ctx.tiles)]
+                results = await asyncio.gather(*tasks)
+                results.sort(key=lambda t: t[0])
+                dem_tiles_data = [dem for _, dem in results]
+
+                # Assemble full DEM with adjusted crop_rect
+                dem_full = assemble_dem(
+                    tiles_data=dem_tiles_data,
+                    tiles_x=ctx.tiles_x,
+                    tiles_y=ctx.tiles_y,
+                    eff_tile_px=dem_tile_px,
+                    crop_rect=dem_crop_rect,
+                )
+                del dem_tiles_data
+                gc.collect()
+
+                # Scale DEM to match main image size (before rotation/crop)
+                if scale_factor != 1.0:
+                    target_h = int(dem_full.shape[0] * scale_factor)
+                    target_w = int(dem_full.shape[1] * scale_factor)
+                    dem_full = cv2.resize(
+                        dem_full,
+                        (target_w, target_h),
+                        interpolation=cv2.INTER_LINEAR,
+                    )
+
+            # Apply rotation (same as rotate_keep_size for main image)
+            if abs(ctx.rotation_deg) > ROTATION_EPSILON:
+                h, w = dem_full.shape
+                center = (w / 2, h / 2)
+                rotation_matrix = cv2.getRotationMatrix2D(center, ctx.rotation_deg, 1.0)
+                dem_full = cv2.warpAffine(
+                    dem_full,
+                    rotation_matrix,
+                    (w, h),
+                    flags=cv2.INTER_LINEAR,
+                    borderMode=cv2.BORDER_CONSTANT,
+                    borderValue=0.0,
+                )
+
+            # Center crop DEM to target size (same as center_crop for main image)
+            h, w = dem_full.shape
+            tw, th = ctx.target_w_px, ctx.target_h_px
+            if w != tw or h != th:
+                left = (w - tw) // 2
+                top = (h - th) // 2
+                # Handle case where DEM might be slightly smaller due to rounding
+                if left < 0 or top < 0:
+                    # Pad DEM if needed
+                    pad_left = max(0, -left)
+                    pad_top = max(0, -top)
+                    pad_right = max(0, tw - w + left)
+                    pad_bottom = max(0, th - h + top)
+                    dem_full = np.pad(
+                        dem_full,
+                        ((pad_top, pad_bottom), (pad_left, pad_right)),
+                        mode='constant',
+                        constant_values=0,
+                    )
+                    left = max(0, left)
+                    top = max(0, top)
+                dem_full = dem_full[top : top + th, left : left + tw]
+
+            ctx.dem_grid = dem_full
+
+            dem_elapsed = time.monotonic() - dem_start_time
+            logger.info(
+                'Загрузка DEM для информера высоты — завершена (%.2fs)', dem_elapsed
+            )
+
+        except Exception as e:
+            logger.warning('Не удалось загрузить DEM для информера: %s', e)
+            ctx.dem_grid = None
 
     async def _apply_overlay_contours(
         self, ctx: MapDownloadContext, result: Image.Image
@@ -720,9 +857,9 @@ class MapDownloadService:
                 metadata.scale,
             )
             if gui_image is not None:
-                did_publish = publish_preview_image(gui_image, metadata)
+                did_publish = publish_preview_image(gui_image, metadata, ctx.dem_grid)
             else:
-                did_publish = publish_preview_image(result, metadata)
+                did_publish = publish_preview_image(result, metadata, ctx.dem_grid)
         except Exception:
             did_publish = False
         preview_elapsed = time.monotonic() - preview_start_time

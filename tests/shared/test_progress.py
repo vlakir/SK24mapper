@@ -78,7 +78,7 @@ class TestCallbackStore:
         set_preview_image_callback(cb)
         img = object()
         result = publish_preview_image(img)
-        cb.assert_called_once_with(img, None)
+        cb.assert_called_once_with(img, None, None)
         assert result is True
         set_preview_image_callback(None)
 

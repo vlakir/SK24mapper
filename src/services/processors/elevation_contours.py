@@ -27,6 +27,7 @@ from shared.constants import (
     CONTOUR_INDEX_WIDTH,
     CONTOUR_LABEL_GAP_ENABLED,
     CONTOUR_LABELS_ENABLED,
+    CONTOUR_MAX_ELEVATION_SAMPLES,
     CONTOUR_SEED_DOWNSAMPLE,
     CONTOUR_WIDTH,
     EARTH_RADIUS_M,
@@ -459,136 +460,195 @@ async def apply_contours_to_image(
         elev_ch,
     )
 
-    provider = ElevationTileProvider(
-        client=ctx.client, api_key=ctx.api_key, use_retina=(overlay_retina_factor > 1)
-    )
-
-    # Pass A: sample elevations and build global low-res DEM seed
-    max_samples = 50000
-    samples_contours: list[float] = []
-
-    rng = random.Random(42)  # noqa: S311
-    tile_progress = ConsoleProgress(
-        total=len(ctx.tiles), label='Загрузка высот для изолиний'
-    )
-
-    # Prepare low-res DEM seed canvas (numpy arrays для быстрого доступа)
     seed_ds = max(2, int(CONTOUR_SEED_DOWNSAMPLE))
     cx, cy, cw, ch = elev_crop_rect
     seed_w = max(1, (cw + seed_ds - 1) // seed_ds)
     seed_h = max(1, (ch + seed_ds - 1) // seed_ds)
-    seed_sum = np.zeros((seed_h, seed_w), dtype=np.float64)
-    seed_cnt = np.zeros((seed_h, seed_w), dtype=np.int32)
 
-    # Список для сбора результатов от всех тайлов (без lock)
-    tile_results: list[tuple[list[float], list[tuple[int, int, float]]]] = []
-    results_lock = asyncio.Lock()
+    # Check if we can use pre-loaded DEM from processor
+    if ctx.raw_dem_for_cursor is not None:
+        logger.info(
+            'Используется предзагруженный DEM для изолиний (размер %dx%d)',
+            ctx.raw_dem_for_cursor.shape[1],
+            ctx.raw_dem_for_cursor.shape[0],
+        )
+        # Build seed_dem directly from pre-loaded DEM
+        raw_dem = ctx.raw_dem_for_cursor
 
-    async def fetch_and_sample(idx_xy: tuple[int, tuple[int, int]]) -> None:
-        idx, (tile_x_world, tile_y_world) = idx_xy
-        tx, ty = tx_ty_from_index(idx, ctx.tiles_x)
-        if tile_overlap_rect_common(tx, ty, elev_crop_rect, elev_tile_px) is None:
-            await tile_progress.step(1)
-            return
+        # Scale raw_dem to elev_crop_rect size if needed
+        if scale_factor != 1.0:
+            target_h = elev_ch
+            target_w = elev_cw
+            raw_dem_scaled = cv2.resize(
+                raw_dem.astype(np.float32),
+                (target_w, target_h),
+                interpolation=cv2.INTER_LINEAR,
+            )
+        else:
+            raw_dem_scaled = raw_dem
+
+        # Downsample to seed resolution
+        seed_dem = np.zeros((seed_h, seed_w), dtype=np.float64)
+        dem_h, dem_w = raw_dem_scaled.shape
+        for sy in range(seed_h):
+            for sx in range(seed_w):
+                y0 = sy * seed_ds
+                x0 = sx * seed_ds
+                y1 = min(y0 + seed_ds, dem_h)
+                x1 = min(x0 + seed_ds, dem_w)
+                if y1 > y0 and x1 > x0:
+                    seed_dem[sy, sx] = np.mean(raw_dem_scaled[y0:y1, x0:x1])
+
+        # Sample elevations for range calculation
+        samples_contours = raw_dem_scaled.flatten()[::100].tolist()
+        if len(samples_contours) > CONTOUR_MAX_ELEVATION_SAMPLES:
+            samples_contours = samples_contours[:CONTOUR_MAX_ELEVATION_SAMPLES]
+
+        logger.info(
+            'Seed DEM построен из предзагруженного DEM: size=%dx%d, '
+            'samples=%d, min=%.1f, max=%.1f, seed_min=%.1f, seed_max=%.1f',
+            seed_w,
+            seed_h,
+            len(samples_contours),
+            min(samples_contours) if samples_contours else 0,
+            max(samples_contours) if samples_contours else 0,
+            float(np.min(seed_dem)),
+            float(np.max(seed_dem)),
+        )
+    else:
+        # Fall back to loading tiles
+        provider = ElevationTileProvider(
+            client=ctx.client,
+            api_key=ctx.api_key,
+            use_retina=(overlay_retina_factor > 1),
+        )
+
+        # Pass A: sample elevations and build global low-res DEM seed
+        max_samples = 50000
+        samples_contours = []
+
+        rng = random.Random(42)  # noqa: S311
+        tile_progress = ConsoleProgress(
+            total=len(ctx.tiles), label='Загрузка высот для изолиний'
+        )
+
+        # Prepare low-res DEM seed canvas (numpy arrays для быстрого доступа)
+        seed_sum = np.zeros((seed_h, seed_w), dtype=np.float64)
+        seed_cnt = np.zeros((seed_h, seed_w), dtype=np.int32)
+
+        # Список для сбора результатов от всех тайлов (без lock)
+        tile_results: list[tuple[list[float], list[tuple[int, int, float]]]] = []
+        results_lock = asyncio.Lock()
+
+        async def fetch_and_sample(idx_xy: tuple[int, tuple[int, int]]) -> None:
+            idx, (tile_x_world, tile_y_world) = idx_xy
+            tx, ty = tx_ty_from_index(idx, ctx.tiles_x)
+            if tile_overlap_rect_common(tx, ty, elev_crop_rect, elev_tile_px) is None:
+                await tile_progress.step(1)
+                return
+
+            try:
+                async with ctx.semaphore:
+                    img = await provider.get_tile_image(
+                        ctx.zoom, tile_x_world, tile_y_world
+                    )
+                    dem_tile = decode_terrain_rgb_to_elevation_m(img)
+                    h = len(dem_tile)
+                    w = len(dem_tile[0]) if h else 0
+
+                    if h and w:
+                        # Reservoir sampling for min/max
+                        step_y = max(1, h // 32)
+                        step_x = max(1, w // 32)
+                        off_y = rng.randrange(0, min(step_y, h)) if step_y > 1 else 0
+                        off_x = rng.randrange(0, min(step_x, w)) if step_x > 1 else 0
+
+                        # Собираем локальные данные для этого тайла
+                        local_samples: list[float] = []
+                        for ry in range(off_y, h, step_y):
+                            local_samples.extend(dem_tile[ry][off_x:w:step_x])
+
+                        # Accumulate into low-res seed (локальные данные)
+                        local_updates: list[tuple[int, int, float]] = []
+                        ov = tile_overlap_rect_common(
+                            tx, ty, elev_crop_rect, elev_tile_px
+                        )
+                        if ov is not None:
+                            x0, y0, x1, y1 = ov
+                            base_x = tx * elev_tile_px
+                            base_y = ty * elev_tile_px
+
+                            for yy in range(y0, y1, seed_ds):
+                                sy = (yy - cy) // seed_ds
+                                if sy < 0 or sy >= seed_h:
+                                    continue
+                                src_y = yy - base_y
+                                row_src = dem_tile[src_y]
+                                for xx in range(x0, x1, seed_ds):
+                                    sx = (xx - cx) // seed_ds
+                                    if sx < 0 or sx >= seed_w:
+                                        continue
+                                    src_x = xx - base_x
+                                    v = row_src[src_x]
+                                    local_updates.append((sy, sx, v))
+
+                        # Сохраняем результаты для batch-обработки в конце
+                        if local_samples or local_updates:
+                            async with results_lock:
+                                tile_results.append((local_samples, local_updates))
+            except Exception as exc:
+                logger.warning(
+                    'Не удалось получить/обработать terrain тайл z/x/y=%d/%d/%d: %s',
+                    ctx.zoom,
+                    tile_x_world,
+                    tile_y_world,
+                    exc,
+                    exc_info=True,
+                )
+            finally:
+                await tile_progress.step(1)
 
         try:
-            async with ctx.semaphore:
-                img = await provider.get_tile_image(
-                    ctx.zoom, tile_x_world, tile_y_world
-                )
-                dem_tile = decode_terrain_rgb_to_elevation_m(img)
-                h = len(dem_tile)
-                w = len(dem_tile[0]) if h else 0
-
-                if h and w:
-                    # Reservoir sampling for min/max
-                    step_y = max(1, h // 32)
-                    step_x = max(1, w // 32)
-                    off_y = rng.randrange(0, min(step_y, h)) if step_y > 1 else 0
-                    off_x = rng.randrange(0, min(step_x, w)) if step_x > 1 else 0
-
-                    # Собираем локальные данные для этого тайла
-                    local_samples: list[float] = []
-                    for ry in range(off_y, h, step_y):
-                        local_samples.extend(dem_tile[ry][off_x:w:step_x])
-
-                    # Accumulate into low-res seed (локальные данные)
-                    local_updates: list[tuple[int, int, float]] = []
-                    ov = tile_overlap_rect_common(tx, ty, elev_crop_rect, elev_tile_px)
-                    if ov is not None:
-                        x0, y0, x1, y1 = ov
-                        base_x = tx * elev_tile_px
-                        base_y = ty * elev_tile_px
-
-                        for yy in range(y0, y1, seed_ds):
-                            sy = (yy - cy) // seed_ds
-                            if sy < 0 or sy >= seed_h:
-                                continue
-                            src_y = yy - base_y
-                            row_src = dem_tile[src_y]
-                            for xx in range(x0, x1, seed_ds):
-                                sx = (xx - cx) // seed_ds
-                                if sx < 0 or sx >= seed_w:
-                                    continue
-                                src_x = xx - base_x
-                                v = row_src[src_x]
-                                local_updates.append((sy, sx, v))
-
-                    # Сохраняем результаты для batch-обработки в конце
-                    if local_samples or local_updates:
-                        async with results_lock:
-                            tile_results.append((local_samples, local_updates))
-        except Exception as exc:
-            logger.warning(
-                'Не удалось получить/обработать terrain тайл z/x/y=%d/%d/%d: %s',
-                ctx.zoom,
-                tile_x_world,
-                tile_y_world,
-                exc,
-                exc_info=True,
-            )
+            async with asyncio.TaskGroup() as tg:
+                for pair in enumerate(ctx.tiles):
+                    tg.create_task(fetch_and_sample(pair))
         finally:
-            await tile_progress.step(1)
+            tile_progress.close()
 
-    try:
-        async with asyncio.TaskGroup() as tg:
-            for pair in enumerate(ctx.tiles):
-                tg.create_task(fetch_and_sample(pair))
-    finally:
-        tile_progress.close()
+        # Batch-обработка всех результатов (без contention)
+        all_samples: list[float] = []
+        for local_samples, local_updates in tile_results:
+            all_samples.extend(local_samples)
+            for sy, sx, v in local_updates:
+                seed_sum[sy, sx] += v
+                seed_cnt[sy, sx] += 1
 
-    # Batch-обработка всех результатов (без contention)
-    all_samples: list[float] = []
-    for local_samples, local_updates in tile_results:
-        all_samples.extend(local_samples)
-        for sy, sx, v in local_updates:
-            seed_sum[sy, sx] += v
-            seed_cnt[sy, sx] += 1
+        # Reservoir sampling из собранных samples
+        if len(all_samples) > max_samples:
+            rng.shuffle(all_samples)
+            samples_contours = all_samples[:max_samples]
+        else:
+            samples_contours = all_samples
 
-    # Reservoir sampling из собранных samples
-    if len(all_samples) > max_samples:
-        rng.shuffle(all_samples)
-        samples_contours = all_samples[:max_samples]
-    else:
-        samples_contours = all_samples
+        # Finalize low-res DEM seed (векторизованно через numpy)
+        seed_dem = np.zeros((seed_h, seed_w), dtype=np.float64)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            seed_dem[:] = np.where(seed_cnt > 0, seed_sum / seed_cnt, 0.0)
+        filled_count = int(np.sum(seed_cnt > 0))
 
-    # Finalize low-res DEM seed (векторизованно через numpy)
-    with np.errstate(divide='ignore', invalid='ignore'):
-        seed_dem = np.where(seed_cnt > 0, seed_sum / seed_cnt, 0.0)
-    filled_count = int(np.sum(seed_cnt > 0))
-
-    logger.info(
-        'Overlay seed_dem: size=%dx%d, filled=%d/%d (%.1f%%), crop_rect=(%d,%d,%d,%d)',
-        seed_w,
-        seed_h,
-        filled_count,
-        seed_w * seed_h,
-        100.0 * filled_count / max(1, seed_w * seed_h),
-        cx,
-        cy,
-        cw,
-        ch,
-    )
+        logger.info(
+            'Overlay seed_dem: size=%dx%d, filled=%d/%d (%.1f%%), '
+            'crop_rect=(%d,%d,%d,%d)',
+            seed_w,
+            seed_h,
+            filled_count,
+            seed_w * seed_h,
+            100.0 * filled_count / max(1, seed_w * seed_h),
+            cx,
+            cy,
+            cw,
+            ch,
+        )
 
     if not samples_contours:
         logger.warning('Нет данных высот для изолиний')
@@ -623,6 +683,15 @@ async def apply_contours_to_image(
     sp = LiveSpinner('Построение изолиний')
     sp.start()
     try:
+        logger.info(
+            'Overlay: перед build_seed_polylines: seed_dem shape=%s, '
+            'levels=%d (%.1f..%.1f), interval=%.1f',
+            seed_dem.shape,
+            len(levels),
+            levels[0] if levels else 0,
+            levels[-1] if levels else 0,
+            interval,
+        )
         # Build global polylines from seed_dem
         seed_polylines = build_seed_polylines(seed_dem, levels, seed_h, seed_w)
 

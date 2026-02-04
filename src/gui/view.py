@@ -449,6 +449,8 @@ class MainWindow(QMainWindow):
 
         # Image state
         self._base_image: Image.Image | None = None
+        # DEM grid for cursor elevation display
+        self._dem_grid: Any = None
 
         # Guard flag to prevent model updates while UI is being populated
         # programmatically
@@ -687,8 +689,6 @@ class MainWindow(QMainWindow):
 
         control_point_layout.addLayout(name_row)
         control_point_layout.addLayout(coords_row)
-        control_point_layout.addLayout(heights_row)
-        control_point_layout.addLayout(height_ref_row)
         control_point_group.setLayout(control_point_layout)
 
         # По умолчанию контролы координат отключены
@@ -696,14 +696,6 @@ class MainWindow(QMainWindow):
         self.control_point_y_widget.setEnabled(False)
         self.control_point_name_label.setEnabled(False)
         self.control_point_name_edit.setEnabled(False)
-        self.antenna_height_label.setEnabled(False)
-        self.antenna_height_spin.setEnabled(False)
-        self.max_flight_height_label.setEnabled(False)
-        self.max_flight_height_spin.setEnabled(False)
-        self.height_ref_label.setEnabled(False)
-        self.height_ref_cp_radio.setEnabled(False)
-        self.height_ref_ground_radio.setEnabled(False)
-        self.height_ref_sea_radio.setEnabled(False)
 
         coords_layout.addWidget(control_point_group)
         left_container.addWidget(coords_frame)
@@ -714,14 +706,7 @@ class MainWindow(QMainWindow):
         settings_main_layout = QVBoxLayout()
         settings_main_layout.addWidget(QLabel('Настройки'))
 
-        # Создаём вкладки
-        settings_tabs = QTabWidget()
-
-        # === Вкладка "Основные" ===
-        main_tab = QWidget()
-        main_tab_layout = QVBoxLayout()
-
-        # Тип карты и чекбокс изолиний
+        # Тип карты и чекбокс изолиний (над вкладками, всегда видны)
         maptype_row = QHBoxLayout()
         maptype_label = QLabel('Тип карты:')
         self.map_type_combo = QComboBox()
@@ -755,7 +740,14 @@ class MainWindow(QMainWindow):
         maptype_row.addWidget(self.map_type_combo, 1)
         maptype_row.addSpacing(8)
         maptype_row.addWidget(self.contours_checkbox)
-        main_tab_layout.addLayout(maptype_row)
+        settings_main_layout.addLayout(maptype_row)
+
+        # Создаём вкладки
+        settings_tabs = QTabWidget()
+
+        # === Вкладка "Основные" ===
+        main_tab = QWidget()
+        main_tab_layout = QVBoxLayout()
 
         settings_horizontal_layout = QHBoxLayout()
 
@@ -786,6 +778,36 @@ class MainWindow(QMainWindow):
         options_tab = QWidget()
         options_tab_layout = QVBoxLayout()
 
+        # Настройки радиогоризонта
+        radio_horizon_group = QGroupBox('Радиогоризонт')
+        radio_horizon_layout = QVBoxLayout()
+
+        # Высота антенны и практический потолок
+        radio_horizon_layout.addLayout(heights_row)
+
+        # Режим отсчёта высоты БпЛА
+        radio_horizon_layout.addLayout(height_ref_row)
+
+        # Прозрачность слоя
+        alpha_row = QHBoxLayout()
+        alpha_row.addWidget(QLabel('Прозрачность слоя радиогоризонта:'))
+        self.radio_horizon_alpha_spin = QDoubleSpinBox()
+        self.radio_horizon_alpha_spin.setRange(0.0, 1.0)
+        self.radio_horizon_alpha_spin.setSingleStep(0.05)
+        self.radio_horizon_alpha_spin.setDecimals(2)
+        self.radio_horizon_alpha_spin.setValue(0.3)
+        self.radio_horizon_alpha_spin.setToolTip(
+            '0 = топооснова не видна, 1 = чистая топооснова'
+        )
+        self.radio_horizon_alpha_spin.valueChanged.connect(self._on_settings_changed)
+        alpha_row.addWidget(self.radio_horizon_alpha_spin)
+        alpha_row.addStretch()
+        radio_horizon_layout.addLayout(alpha_row)
+
+        radio_horizon_group.setLayout(radio_horizon_layout)
+        options_tab_layout.addWidget(radio_horizon_group)
+
+        # Датум-трансформация
         self.helmert_group = QGroupBox('Датум-трансформация СК-42 → WGS84 (Helmert)')
         helmert_group_layout = QVBoxLayout()
         self.helmert_widget = HelmertSettingsWidget()
@@ -1065,10 +1087,6 @@ class MainWindow(QMainWindow):
         self.control_point_y_widget.setEnabled(enabled)
         self.control_point_name_label.setEnabled(enabled)
         self.control_point_name_edit.setEnabled(enabled)
-        self.antenna_height_label.setEnabled(enabled)
-        self.antenna_height_spin.setEnabled(enabled)
-        self.max_flight_height_label.setEnabled(enabled)
-        self.max_flight_height_spin.setEnabled(enabled)
 
     @Slot()
     def _on_map_type_changed(self) -> None:
@@ -1091,15 +1109,11 @@ class MainWindow(QMainWindow):
             # и блокируем возможность отключения
             self.control_point_checkbox.setChecked(True)
             self.control_point_checkbox.setEnabled(False)
-            # Включаем поля ввода координат, названия и высоты антенны/полёта
+            # Включаем поля ввода координат и названия
             self.control_point_x_widget.setEnabled(True)
             self.control_point_y_widget.setEnabled(True)
             self.control_point_name_label.setEnabled(True)
             self.control_point_name_edit.setEnabled(True)
-            self.antenna_height_label.setEnabled(True)
-            self.antenna_height_spin.setEnabled(True)
-            self.max_flight_height_label.setEnabled(True)
-            self.max_flight_height_spin.setEnabled(True)
         else:
             # Разблокируем чекбокс для других типов карт
             self.control_point_checkbox.setEnabled(True)
@@ -1136,6 +1150,7 @@ class MainWindow(QMainWindow):
         payload.update(helmert_settings)
         payload['map_type'] = map_type_value
         payload['overlay_contours'] = overlay_checked
+        payload['radio_horizon_overlay_alpha'] = self.radio_horizon_alpha_spin.value()
         self._controller.update_settings_bulk(**payload)
 
     def _get_current_coordinates(self) -> dict[str, int | bool | float | str]:
@@ -1329,7 +1344,7 @@ class MainWindow(QMainWindow):
 
     @Slot(object, object)
     def _on_mouse_moved_on_map(self, px: float | None, py: float | None) -> None:
-        """Handle mouse movement over preview to show SK-42 coordinates."""
+        """Handle mouse movement over preview to show SK-42 coords and elevation."""
         coords = self._calculate_sk42_from_scene_pos(px, py)
         if coords is None:
             self._coords_label.setText('')
@@ -1346,8 +1361,21 @@ class MainWindow(QMainWindow):
                 )
             return s
 
+        # Get elevation from DEM if available
+        elevation_str = ''
+        if self._dem_grid is not None and px is not None and py is not None:
+            try:
+                row = int(py)
+                col = int(px)
+                dem_h, dem_w = self._dem_grid.shape
+                if 0 <= row < dem_h and 0 <= col < dem_w:
+                    elevation = self._dem_grid[row, col]
+                    elevation_str = f'  H: {int(elevation)} м'
+            except Exception:
+                logger.debug('Elevation lookup failed at px=%s, py=%s', px, py)
+
         self._coords_label.setText(
-            f'X: {format_coord(x_val)}  Y: {format_coord(y_val)}'
+            f'X: {format_coord(x_val)}  Y: {format_coord(y_val)}{elevation_str}'
         )
 
     def _calculate_sk42_from_scene_pos(
@@ -1737,6 +1765,11 @@ class MainWindow(QMainWindow):
             getattr(settings, 'helmert_ds_ppm', None),
         )
 
+        # Update radio horizon overlay alpha
+        rh_alpha = float(getattr(settings, 'radio_horizon_overlay_alpha', 0.7))
+        with QSignalBlocker(self.radio_horizon_alpha_spin):
+            self.radio_horizon_alpha_spin.setValue(rh_alpha)
+
         # Update control point settings
         control_point_enabled = getattr(settings, 'control_point_enabled', False)
 
@@ -1803,12 +1836,6 @@ class MainWindow(QMainWindow):
         self.control_point_x_widget.setEnabled(control_point_enabled)
         self.control_point_y_widget.setEnabled(control_point_enabled)
         self.control_point_name_edit.setEnabled(control_point_enabled)
-        self.antenna_height_spin.setEnabled(control_point_enabled)
-        self.max_flight_height_spin.setEnabled(control_point_enabled)
-        self.height_ref_label.setEnabled(control_point_enabled)
-        self.height_ref_cp_radio.setEnabled(control_point_enabled)
-        self.height_ref_ground_radio.setEnabled(control_point_enabled)
-        self.height_ref_sea_radio.setEnabled(control_point_enabled)
 
         # Unblock settings propagation after UI is fully synced
         self._ui_sync_in_progress = False
@@ -1862,17 +1889,21 @@ class MainWindow(QMainWindow):
         if label:
             self._progress_label.setText(label)
 
-    @Slot(object, object)
+    @Slot(object, object, object)
     def _show_preview_in_main_window(
         self,
         image: Image.Image,
         metadata: MapMetadata | None = None,
+        dem_grid: object = None,
     ) -> None:
         """Show preview image in the main window's integrated preview area."""
         try:
             if not isinstance(image, Image.Image):
                 logger.warning('Invalid image object for preview')
                 return
+
+            # Save DEM grid for cursor elevation display
+            self._dem_grid = dem_grid
 
             # Update model with metadata for informer
             self._model.update_preview(None, metadata)
@@ -2140,14 +2171,10 @@ class MainWindow(QMainWindow):
             self.control_point_x_widget.setEnabled(cp_enabled)
             self.control_point_y_widget.setEnabled(cp_enabled)
             self.control_point_name_edit.setEnabled(cp_enabled)
-            self.antenna_height_spin.setEnabled(cp_enabled)
-            self.max_flight_height_spin.setEnabled(cp_enabled)
         else:
             self.control_point_x_widget.setEnabled(False)
             self.control_point_y_widget.setEnabled(False)
             self.control_point_name_edit.setEnabled(False)
-            self.antenna_height_spin.setEnabled(False)
-            self.max_flight_height_spin.setEnabled(False)
 
         # Map type and contours
         self.map_type_combo.setEnabled(enabled)

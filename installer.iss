@@ -45,6 +45,11 @@ Name: "{localappdata}\\SK42mapper"
 Name: "{localappdata}\\SK42mapper\\log"
 Name: "{localappdata}\\SK42mapper\\.cache\\tiles"
 
+[InstallDelete]
+; Удаляем старые пользовательские профили при обновлении
+; (избегаем проблем совместимости со старыми версиями)
+Type: files; Name: "{userappdata}\SK42mapper\configs\profiles\*.toml"
+
 [UninstallDelete]
 ; Удаляем директории при деинсталляции, если пустые
 Type: dirifempty; Name: "{userappdata}\\SK42mapper\\configs\\profiles"

@@ -104,14 +104,17 @@ class MapSettings(BaseModel):
     max_flight_height_m: float = 500.0
     # Режим отсчёта высоты БпЛА (для карты радиогоризонта)
     uav_height_reference: UavHeightReference = UavHeightReference.CONTROL_POINT
+    # Прозрачность слоя радиогоризонта (насколько видна топооснова)
+    # 0.0 = топооснова не видна, 1.0 = чистая топооснова
+    radio_horizon_overlay_alpha: float = 0.3
 
     # Валидации через Pydantic validators
-    @field_validator('mask_opacity')
+    @field_validator('mask_opacity', 'radio_horizon_overlay_alpha')
     @classmethod
-    def validate_mask_opacity(cls, v: float | str) -> float:
+    def validate_opacity_fields(cls, v: float | str) -> float:
         v = float(v)
         if not (0.0 <= v <= 1.0):
-            msg = 'mask_opacity должен быть в диапазоне [0.0, 1.0]'
+            msg = 'Значение должно быть в диапазоне [0.0, 1.0]'
             raise ValueError(msg)
         return v
 

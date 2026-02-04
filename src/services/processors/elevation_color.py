@@ -20,6 +20,8 @@ from geo.topography import (
     ELEV_PCTL_HI,
     ELEV_PCTL_LO,
     ELEVATION_COLOR_RAMP,
+    assemble_dem,
+    decode_terrain_rgb_to_elevation_m,
 )
 from infrastructure.http.client import resolve_cache_dir
 from services.color_utils import ColorMapper
@@ -87,6 +89,42 @@ async def process_elevation_color(ctx: MapDownloadContext) -> Image.Image:
         tile_progress.close()
 
     logger.info('DEM sampling reservoir: kept=%s seen~=%s', len(samples), seen_count)
+
+    # Build raw DEM for cursor elevation display from cached tiles
+    if tile_cache:
+        try:
+            logger.info(
+                'Building raw DEM for cursor: tile_cache size=%d, tiles=%d',
+                len(tile_cache),
+                len(ctx.tiles),
+            )
+            dem_tiles_data = []
+            for _idx, (tile_x_world, tile_y_world) in enumerate(ctx.tiles):
+                if (tile_x_world, tile_y_world) in tile_cache:
+                    img = tile_cache[(tile_x_world, tile_y_world)]
+                    dem_tile = decode_terrain_rgb_to_elevation_m(img)
+                    dem_tiles_data.append(dem_tile)
+                else:
+                    # Should not happen if cache_tiles=True, but handle gracefully
+                    dem_tiles_data.append(
+                        np.zeros((full_eff_tile_px, full_eff_tile_px), dtype=np.float32)
+                    )
+            ctx.raw_dem_for_cursor = assemble_dem(
+                tiles_data=dem_tiles_data,
+                tiles_x=ctx.tiles_x,
+                tiles_y=ctx.tiles_y,
+                eff_tile_px=full_eff_tile_px,
+                crop_rect=ctx.crop_rect,
+            )
+            logger.info(
+                'Raw DEM for cursor built: shape=%s, min=%.1f, max=%.1f',
+                ctx.raw_dem_for_cursor.shape,
+                float(np.min(ctx.raw_dem_for_cursor)),
+                float(np.max(ctx.raw_dem_for_cursor)),
+            )
+            del dem_tiles_data
+        except Exception as e:
+            logger.warning('Failed to build raw DEM for cursor: %s', e, exc_info=True)
 
     lo, hi = compute_elevation_range(
         samples,
