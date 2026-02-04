@@ -21,13 +21,14 @@ from geo.topography import (
     ELEV_PCTL_LO,
     ELEVATION_COLOR_RAMP,
 )
-from infrastructure.http.client import resolve_cache_dir
+from imaging.streaming import StreamingImage
 from services.color_utils import ColorMapper
 from shared.constants import (
     CONTOUR_LOG_MEMORY_EVERY_TILES,
     CONTOUR_PASS2_QUEUE_MAXSIZE,
     ELEVATION_LEGEND_STEP_M,
     ELEVATION_USE_RETINA,
+    STREAMING_TEMP_DIR,
 )
 from shared.diagnostics import log_memory_usage
 from shared.progress import ConsoleProgress
@@ -38,7 +39,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-async def process_elevation_color(ctx: MapDownloadContext) -> Image.Image:
+async def process_elevation_color(ctx: MapDownloadContext) -> StreamingImage:
     """
     Process elevation color map using DEM tiles.
 
@@ -50,16 +51,15 @@ async def process_elevation_color(ctx: MapDownloadContext) -> Image.Image:
         ctx: Map download context with all necessary parameters.
 
     Returns:
-        Colorized elevation image.
+        StreamingImage with colorized elevation data.
 
     """
     color_mapper = ColorMapper(ELEVATION_COLOR_RAMP, lut_size=2048)
 
     provider = ElevationTileProvider(
         client=ctx.client,
-        api_key=ctx.api_key,
+        tile_fetcher=ctx.tile_fetcher,
         use_retina=ELEVATION_USE_RETINA,
-        cache_root=resolve_cache_dir(),
     )
 
     full_eff_tile_px = 256 * (2 if ELEVATION_USE_RETINA else 1)
@@ -106,15 +106,17 @@ async def process_elevation_color(ctx: MapDownloadContext) -> Image.Image:
     ctx.elev_min_m = lo_rounded
     ctx.elev_max_m = hi_rounded
 
-    # Pass B: Colorize tiles
-    result = Image.new('RGB', (ctx.crop_rect[2], ctx.crop_rect[3]))
+    # Pass B: Colorize tiles into StreamingImage
+    temp_dir = getattr(ctx, 'temp_dir', STREAMING_TEMP_DIR)
+    result = StreamingImage(ctx.crop_rect[2], ctx.crop_rect[3], temp_dir=temp_dir)
+
     tile_progress = ConsoleProgress(total=len(ctx.tiles), label='Окрашивание DEM')
     tile_count = 0
 
     queue: asyncio.Queue[tuple[int, int, int, int, int, int, Image.Image] | None] = (
         asyncio.Queue(maxsize=CONTOUR_PASS2_QUEUE_MAXSIZE)
     )
-    paste_lock = asyncio.Lock()
+    write_lock = asyncio.Lock()
 
     async def producer(idx_xy: tuple[int, tuple[int, int]]) -> None:
         nonlocal tile_count
@@ -176,9 +178,9 @@ async def process_elevation_color(ctx: MapDownloadContext) -> Image.Image:
                     np.uint8
                 )
 
-                patch = Image.fromarray(rgb)
-                async with paste_lock:
-                    result.paste(patch, (dx0, dy0))
+                # Write to StreamingImage
+                async with write_lock:
+                    result.paste_tile(rgb, dx0, dy0)
 
                 await tile_progress.step(1)
                 tile_count += 1
@@ -216,5 +218,8 @@ async def process_elevation_color(ctx: MapDownloadContext) -> Image.Image:
                 with contextlib.suppress(Exception):
                     img.close()
             tile_cache.clear()
+
+    # Flush mmap to disk once after all tiles are written
+    result.flush()
 
     return result

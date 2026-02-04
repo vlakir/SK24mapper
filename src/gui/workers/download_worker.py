@@ -13,6 +13,7 @@ from shared.progress import set_preview_image_callback, set_spinner_callbacks
 
 if TYPE_CHECKING:
     from gui.controller import MilMapperController
+    from imaging.pyramid import ImagePyramid
 
 from shared.progress import set_progress_callback
 
@@ -24,7 +25,7 @@ class DownloadWorker(QThread):
 
     finished = Signal(bool, str)  # success, error_message
     progress_update = Signal(int, int, str)  # done, total, label
-    preview_ready = Signal(Image.Image, object)  # PIL Image object, MapMetadata
+    preview_ready = Signal(object, object)  # PIL Image or ImagePyramid, MapMetadata
 
     def __init__(self, controller: MilMapperController) -> None:
         super().__init__()
@@ -38,16 +39,19 @@ class DownloadWorker(QThread):
 
         try:
             # Setup thread-safe callbacks that emit signals instead of direct UI updates
-            def preview_callback(img_obj: Image.Image, metadata: object | None) -> bool:
-                """Handle preview image from map generation."""
+            def preview_callback(img_obj: object, metadata: object | None) -> bool:
+                """Handle preview image from map generation (PIL.Image or ImagePyramid)."""
                 try:
-                    if isinstance(img_obj, Image.Image):
+                    # Import here to avoid circular imports
+                    from imaging.pyramid import ImagePyramid
+
+                    if isinstance(img_obj, (Image.Image, ImagePyramid)):
                         self.preview_ready.emit(img_obj, metadata)
                         return True
+                    logger.warning('Invalid preview object type: %s', type(img_obj))
+                    return False
                 except Exception:
                     logger.warning('Failed to process preview image')
-                    return False
-                else:
                     return False
 
             # Setup progress system with thread-safe callbacks

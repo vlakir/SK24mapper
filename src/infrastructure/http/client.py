@@ -1,33 +1,36 @@
+"""HTTP client utilities for Mapbox API access.
+
+Note: Tile caching is now handled by tiles.cache.TileCache.
+This module only provides basic HTTP session creation and API validation.
+"""
+
 from __future__ import annotations
 
 import contextlib
 import os
-import sqlite3
 import ssl
-import time
-from datetime import timedelta
 from pathlib import Path
 
 import aiohttp
 import certifi
-from aiohttp_client_cache import CachedSession, SQLiteBackend
 
 from shared.constants import (
-    HTTP_CACHE_DIR,
-    HTTP_CACHE_ENABLED,
-    HTTP_CACHE_EXPIRE_HOURS,
-    HTTP_CACHE_RESPECT_HEADERS,
-    HTTP_CACHE_STALE_IF_ERROR_HOURS,
     HTTP_FORBIDDEN,
     HTTP_OK,
     HTTP_UNAUTHORIZED,
     MAPBOX_STATIC_BASE,
     MAPBOX_TERRAIN_RGB_PATH,
+    TILE_CACHE_DIR,
 )
 
 
-def resolve_cache_dir() -> Path | None:
-    raw_dir = Path(HTTP_CACHE_DIR)
+def resolve_cache_dir() -> Path:
+    """Resolve tile cache directory path.
+
+    Returns:
+        Path to the tile cache directory.
+    """
+    raw_dir = Path(TILE_CACHE_DIR)
     if raw_dir.is_absolute():
         return raw_dir
 
@@ -39,49 +42,40 @@ def resolve_cache_dir() -> Path | None:
 
 
 def cleanup_sqlite_cache(cache_dir: Path) -> None:
-    """Force cleanup of SQLite cache connections."""
-    cache_file = cache_dir / 'http_cache.sqlite'
-    if cache_file.exists():
-        # Close any remaining SQLite connections
-        conn = sqlite3.connect(cache_file)
-        conn.execute('PRAGMA wal_checkpoint(TRUNCATE);')
-        conn.close()
+    """No-op for backward compatibility.
 
-        time.sleep(0.1)
+    Tile cache cleanup is now handled by TileCache.cleanup_lru().
+    """
+    pass
 
 
-def make_http_session(cache_dir: Path | None) -> aiohttp.ClientSession:
-    # Создать SSL-контекст с сертификатами из certifi
+def make_http_session(cache_dir: Path | None = None) -> aiohttp.ClientSession:
+    """Create aiohttp session for API requests.
+
+    Note: HTTP response caching is no longer used. Tile caching is handled
+    by TileCache at the tile level, which is more efficient.
+
+    Args:
+        cache_dir: Ignored (kept for backward compatibility).
+
+    Returns:
+        aiohttp.ClientSession configured with SSL.
+    """
     ssl_context = ssl.create_default_context(cafile=certifi.where())
     connector = aiohttp.TCPConnector(ssl=ssl_context)
-
-    use_cache = HTTP_CACHE_ENABLED
-    if use_cache and cache_dir is not None:
-        cache_dir.mkdir(parents=True, exist_ok=True)
-    if use_cache and cache_dir is not None:
-        cache_path = cache_dir / 'http_cache.sqlite'
-        with contextlib.suppress(Exception):
-            if not cache_path.exists():
-                cache_path.parent.mkdir(parents=True, exist_ok=True)
-                with sqlite3.connect(cache_path) as _conn:
-                    _conn.execute('PRAGMA journal_mode=WAL;')
-        expire_td = timedelta(hours=max(0, int(HTTP_CACHE_EXPIRE_HOURS)))
-        stale_hours = int(HTTP_CACHE_STALE_IF_ERROR_HOURS)
-        stale_param: bool | timedelta
-        stale_param = timedelta(hours=stale_hours) if stale_hours > 0 else False
-        backend = SQLiteBackend(str(cache_path), expire_after=expire_td)
-        return CachedSession(
-            cache=backend,
-            connector=connector,
-            expire_after=expire_td,
-            cache_control=bool(HTTP_CACHE_RESPECT_HEADERS),
-            stale_if_error=stale_param,
-        )
     return aiohttp.ClientSession(connector=connector)
 
 
 async def validate_style_api(api_key: str, style_id: str) -> None:
-    """Проверяет доступность стилей Mapbox (Styles API tiles endpoint)."""
+    """Validate Mapbox Styles API access.
+
+    Args:
+        api_key: Mapbox API access token.
+        style_id: Style ID to validate (e.g., 'mapbox/satellite-v9').
+
+    Raises:
+        RuntimeError: If API is not accessible or credentials are invalid.
+    """
     ssl_context = ssl.create_default_context(cafile=certifi.where())
     connector = aiohttp.TCPConnector(ssl=ssl_context)
 
@@ -115,7 +109,14 @@ async def validate_style_api(api_key: str, style_id: str) -> None:
 
 
 async def validate_terrain_api(api_key: str) -> None:
-    """Быстрая проверка доступности Terrain-RGB источника."""
+    """Validate Mapbox Terrain-RGB API access.
+
+    Args:
+        api_key: Mapbox API access token.
+
+    Raises:
+        RuntimeError: If API is not accessible or credentials are invalid.
+    """
     ssl_context = ssl.create_default_context(cafile=certifi.where())
     connector = aiohttp.TCPConnector(ssl=ssl_context)
 

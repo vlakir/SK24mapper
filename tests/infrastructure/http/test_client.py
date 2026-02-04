@@ -22,14 +22,14 @@ class TestResolveCacheDir:
     def test_returns_path(self):
         """Should return a Path object."""
         result = resolve_cache_dir()
-        assert result is None or isinstance(result, Path)
+        assert isinstance(result, Path)
 
     def test_with_localappdata_env(self):
-        """Should use LOCALAPPDATA when available."""
-        with patch.dict('os.environ', {'LOCALAPPDATA': 'C:\\Users\\Test\\AppData\\Local'}):
-            result = resolve_cache_dir()
-            assert result is not None
-            assert 'SK42mapper' in str(result)
+        """Should return absolute path from TILE_CACHE_DIR."""
+        result = resolve_cache_dir()
+        assert result is not None
+        # TILE_CACHE_DIR is now absolute path in home directory
+        assert '.sk24mapper' in str(result) or 'tiles' in str(result)
 
     def test_fallback_to_home(self):
         """Should fallback to home directory when LOCALAPPDATA not set."""
@@ -40,17 +40,21 @@ class TestResolveCacheDir:
 
 
 class TestCleanupSqliteCache:
-    """Tests for cleanup_sqlite_cache function."""
+    """Tests for cleanup_sqlite_cache function.
+
+    Note: cleanup_sqlite_cache is now a no-op for backward compatibility.
+    Tile cache cleanup is handled by TileCache.cleanup_lru().
+    """
 
     def test_cleanup_nonexistent_cache(self):
-        """Should handle non-existent cache directory gracefully."""
+        """Should handle non-existent cache directory gracefully (no-op)."""
         with tempfile.TemporaryDirectory() as tmpdir:
             cache_dir = Path(tmpdir) / 'nonexistent'
-            # Should not raise
+            # Should not raise (no-op function)
             cleanup_sqlite_cache(cache_dir)
 
     def test_cleanup_existing_cache(self):
-        """Should cleanup existing cache file."""
+        """Should be a no-op even when cache file exists."""
         import sqlite3
         with tempfile.TemporaryDirectory() as tmpdir:
             cache_dir = Path(tmpdir)
@@ -59,8 +63,9 @@ class TestCleanupSqliteCache:
             conn = sqlite3.connect(cache_file)
             conn.execute('CREATE TABLE test (id INTEGER)')
             conn.close()
-            # Should not raise
+            # Should not raise (no-op function)
             cleanup_sqlite_cache(cache_dir)
+            # File should still exist (function is no-op)
             assert cache_file.exists()
 
 
@@ -76,21 +81,17 @@ class TestMakeHttpSession:
 
     @pytest.mark.asyncio
     async def test_creates_session_with_cache_dir(self):
-        """Should create cached session when cache_dir provided."""
-        mock_backend = MagicMock()
-        mock_backend.close = AsyncMock()
-        mock_cached_session = MagicMock()
-        mock_cached_session.close = AsyncMock()
-        mock_conn = MagicMock()
+        """Should create session when cache_dir provided (cache_dir is ignored).
 
-        with patch('infrastructure.http.client.SQLiteBackend', return_value=mock_backend), \
-             patch('infrastructure.http.client.CachedSession', return_value=mock_cached_session), \
-             patch('infrastructure.http.client.sqlite3.connect', return_value=mock_conn):
-            tmpdir = tempfile.mkdtemp()
-            cache_dir = Path(tmpdir) / 'cache'
-            session = make_http_session(cache_dir)
-            assert session is not None
-            await session.close()
+        Note: HTTP response caching has been removed in favor of tile-level
+        caching via TileCache. The cache_dir parameter is kept for backward
+        compatibility but is now ignored.
+        """
+        tmpdir = tempfile.mkdtemp()
+        cache_dir = Path(tmpdir) / 'cache'
+        session = make_http_session(cache_dir)
+        assert session is not None
+        await session.close()
 
 
 class TestValidateStyleApi:

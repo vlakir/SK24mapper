@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSlider,
+    QSpinBox,
     QSplitter,
     QStatusBar,
     QTabWidget,
@@ -79,6 +80,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from domain.models import MapMetadata, MapSettings
+    from imaging.pyramid import ImagePyramid
 
 
 import math
@@ -449,6 +451,8 @@ class MainWindow(QMainWindow):
 
         # Image state
         self._base_image: Image.Image | None = None
+        # Path to the saved full-resolution map file
+        self._saved_map_path: str | None = None
 
         # Guard flag to prevent model updates while UI is being populated
         # programmatically
@@ -793,6 +797,71 @@ class MainWindow(QMainWindow):
         self.helmert_group.setLayout(helmert_group_layout)
         options_tab_layout.addWidget(self.helmert_group)
 
+        # === Группа "Кэш и загрузка" ===
+        cache_group = QGroupBox('Кэш и загрузка')
+        cache_group_layout = QVBoxLayout()
+
+        # Офлайн режим
+        offline_row = QHBoxLayout()
+        self.offline_checkbox = QCheckBox('Офлайн режим')
+        self.offline_checkbox.setToolTip(
+            'Работать только с закэшированными тайлами без сетевых запросов.\n'
+            'Недостающие тайлы будут заменены серыми заглушками.'
+        )
+        offline_row.addWidget(self.offline_checkbox)
+        offline_row.addStretch()
+        cache_group_layout.addLayout(offline_row)
+
+        # Выбор уровня зума
+        zoom_row = QHBoxLayout()
+        zoom_label = QLabel('Уровень зума:')
+        self.zoom_spinbox = QSpinBox()
+        self.zoom_spinbox.setRange(10, 20)
+        self.zoom_spinbox.setValue(18)
+        self.zoom_spinbox.setToolTip(
+            'Уровень детализации карты (10-20).\n'
+            'Больше = детальнее, но больше тайлов для загрузки.\n'
+            'Авто = автоматический выбор на основе ограничений.'
+        )
+        self.zoom_auto_checkbox = QCheckBox('Авто')
+        self.zoom_auto_checkbox.setChecked(True)
+        self.zoom_auto_checkbox.setToolTip(
+            'Автоматически выбирать оптимальный уровень зума'
+        )
+        self.zoom_auto_checkbox.stateChanged.connect(self._on_zoom_auto_changed)
+        self.zoom_spinbox.setEnabled(False)  # Disabled when auto is checked
+        zoom_row.addWidget(zoom_label)
+        zoom_row.addWidget(self.zoom_spinbox)
+        zoom_row.addWidget(self.zoom_auto_checkbox)
+        zoom_row.addStretch()
+        cache_group_layout.addLayout(zoom_row)
+
+        # Информация о кэше и кнопки управления
+        cache_info_row = QHBoxLayout()
+        self.cache_info_label = QLabel('Кэш: загрузка...')
+        self.cache_info_label.setStyleSheet('font-size: 11px;')
+        cache_info_row.addWidget(self.cache_info_label, 1)
+
+        self.cache_refresh_btn = QPushButton('Обновить')
+        self.cache_refresh_btn.setFixedWidth(80)
+        self.cache_refresh_btn.setToolTip('Обновить информацию о размере кэша')
+        self.cache_refresh_btn.clicked.connect(self._refresh_cache_info)
+        cache_info_row.addWidget(self.cache_refresh_btn)
+
+        self.cache_clear_btn = QPushButton('Очистить')
+        self.cache_clear_btn.setFixedWidth(80)
+        self.cache_clear_btn.setToolTip('Удалить все закэшированные тайлы')
+        self.cache_clear_btn.clicked.connect(self._clear_cache)
+        cache_info_row.addWidget(self.cache_clear_btn)
+
+        cache_group_layout.addLayout(cache_info_row)
+
+        cache_group.setLayout(cache_group_layout)
+        options_tab_layout.addWidget(cache_group)
+
+        # Обновить информацию о кэше при создании
+        self._refresh_cache_info()
+
         options_tab_layout.addStretch()
         options_tab.setLayout(options_tab_layout)
         settings_tabs.addTab(options_tab, 'Опции')
@@ -1109,6 +1178,95 @@ class MainWindow(QMainWindow):
         # Delegate to the common settings handler to store the new map type in the model
         self._on_settings_changed()
 
+    @Slot(int)
+    def _on_zoom_auto_changed(self, state: int) -> None:
+        """Handle zoom auto checkbox state change."""
+        auto_enabled = state == Qt.CheckState.Checked.value
+        self.zoom_spinbox.setEnabled(not auto_enabled)
+        self._on_settings_changed()
+
+    @Slot()
+    def _refresh_cache_info(self) -> None:
+        """Refresh cache size information display."""
+        try:
+            from tiles.cache import TileCache
+            from shared.constants import TILE_CACHE_DIR
+            from pathlib import Path
+
+            cache_path = Path(TILE_CACHE_DIR)
+            if not cache_path.exists():
+                self.cache_info_label.setText('Кэш: пуст (0 тайлов, 0 MB)')
+                self.cache_info_label.setStyleSheet('color: gray; font-size: 11px;')
+                return
+
+            cache = TileCache(cache_path)
+            try:
+                stats = cache.get_stats()
+                size_mb = stats.total_size_bytes / (1024 * 1024)
+                zoom_info = ', '.join(
+                    f'z{z}: {n}' for z, n in sorted(stats.tiles_by_zoom.items())
+                )
+                self.cache_info_label.setText(
+                    f'Кэш: {stats.total_tiles} тайлов, {size_mb:.1f} MB ({zoom_info})'
+                )
+                if size_mb > 1000:
+                    self.cache_info_label.setStyleSheet(
+                        'color: orange; font-size: 11px;'
+                    )
+                else:
+                    self.cache_info_label.setStyleSheet(
+                        'color: green; font-size: 11px;'
+                    )
+            finally:
+                cache.close()
+        except Exception as e:
+            logger.exception('Failed to refresh cache info')
+            self.cache_info_label.setText(f'Кэш: ошибка ({e})')
+            self.cache_info_label.setStyleSheet('color: red; font-size: 11px;')
+
+    @Slot()
+    def _clear_cache(self) -> None:
+        """Clear all cached tiles after confirmation."""
+        from PySide6.QtWidgets import QMessageBox
+        from shared.constants import TILE_CACHE_DIR
+        from pathlib import Path
+        import shutil
+
+        reply = QMessageBox.question(
+            self,
+            'Очистка кэша',
+            'Удалить все закэшированные тайлы?\n\n'
+            'Это освободит место на диске, но следующая загрузка карты '
+            'потребует повторного скачивания всех тайлов.',
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            cache_path = Path(TILE_CACHE_DIR)
+            if cache_path.exists():
+                # Remove all .db files
+                for db_file in cache_path.glob('zoom_*.db'):
+                    db_file.unlink()
+                    logger.info('Deleted cache file: %s', db_file)
+
+            self._refresh_cache_info()
+            QMessageBox.information(
+                self,
+                'Кэш очищен',
+                'Все закэшированные тайлы удалены.',
+            )
+        except Exception as e:
+            logger.exception('Failed to clear cache')
+            QMessageBox.critical(
+                self,
+                'Ошибка',
+                f'Не удалось очистить кэш: {e}',
+            )
+
     def _sync_ui_to_model_now(self) -> None:
         """
         Force-collect current UI settings and push them to the model without guards.
@@ -1136,6 +1294,14 @@ class MainWindow(QMainWindow):
         payload.update(helmert_settings)
         payload['map_type'] = map_type_value
         payload['overlay_contours'] = overlay_checked
+
+        # Cache and download settings
+        payload['offline_mode'] = self.offline_checkbox.isChecked()
+        if self.zoom_auto_checkbox.isChecked():
+            payload['desired_zoom'] = None  # Auto zoom
+        else:
+            payload['desired_zoom'] = self.zoom_spinbox.value()
+
         self._controller.update_settings_bulk(**payload)
 
     def _get_current_coordinates(self) -> dict[str, int | bool | float | str]:
@@ -1468,6 +1634,11 @@ class MainWindow(QMainWindow):
                 'перенос координат в КТ.',
                 7000,
             )
+            # Обновить информацию о кэше после успешной загрузки
+            try:
+                self._refresh_cache_info()
+            except Exception as e:
+                logger.debug(f'Failed to refresh cache info: {e}')
         else:
             # Clear preview and related UI on failure as per requirement
             self._clear_preview_ui()
@@ -1810,6 +1981,23 @@ class MainWindow(QMainWindow):
         self.height_ref_ground_radio.setEnabled(control_point_enabled)
         self.height_ref_sea_radio.setEnabled(control_point_enabled)
 
+        # Update cache and download settings
+        offline_mode = bool(getattr(settings, 'offline_mode', False))
+        with QSignalBlocker(self.offline_checkbox):
+            self.offline_checkbox.setChecked(offline_mode)
+
+        desired_zoom = getattr(settings, 'desired_zoom', None)
+        if desired_zoom is None:
+            with QSignalBlocker(self.zoom_auto_checkbox):
+                self.zoom_auto_checkbox.setChecked(True)
+            self.zoom_spinbox.setEnabled(False)
+        else:
+            with QSignalBlocker(self.zoom_auto_checkbox):
+                self.zoom_auto_checkbox.setChecked(False)
+            with QSignalBlocker(self.zoom_spinbox):
+                self.zoom_spinbox.setValue(int(desired_zoom))
+            self.zoom_spinbox.setEnabled(True)
+
         # Unblock settings propagation after UI is fully synced
         self._ui_sync_in_progress = False
 
@@ -1865,25 +2053,62 @@ class MainWindow(QMainWindow):
     @Slot(object, object)
     def _show_preview_in_main_window(
         self,
-        image: Image.Image,
+        image: Image.Image | ImagePyramid,
         metadata: MapMetadata | None = None,
     ) -> None:
         """Show preview image in the main window's integrated preview area."""
         try:
-            if not isinstance(image, Image.Image):
-                logger.warning('Invalid image object for preview')
-                return
+            # Import here to avoid circular imports
+            from imaging.pyramid import ImagePyramid
 
-            # Update model with metadata for informer
-            self._model.update_preview(None, metadata)
-
-            # Set base image (full size)
-            self._base_image = image.convert('RGB') if image.mode != 'RGB' else image
-
-            # Display image
-            self._current_image = self._base_image
             mpp = metadata.meters_per_pixel if metadata else 0.0
-            self._preview_area.set_image(self._current_image, meters_per_px=mpp)
+
+            # Store path to saved full-resolution file from metadata
+            if metadata and metadata.output_path:
+                self._saved_map_path = metadata.output_path
+
+            # Check if we received a pyramid or a regular image
+            if isinstance(image, ImagePyramid):
+                # Use pyramid for large images
+                if image.base_level is None:
+                    logger.warning('Invalid pyramid object for preview (no base level)')
+                    return
+
+                # Update model with metadata for informer
+                self._model.update_preview(None, metadata)
+
+                # Store base level as current image for preview display
+                self._base_image = image.base_level
+                self._current_image = self._base_image
+
+                # Display using pyramid method
+                self._preview_area.set_pyramid(image, meters_per_px=mpp)
+
+                logger.info(
+                    'Pyramid preview displayed: original %dx%d, base %dx%d',
+                    image.original_size[0],
+                    image.original_size[1],
+                    image.base_level.width,
+                    image.base_level.height,
+                )
+
+            elif isinstance(image, Image.Image):
+                # Regular PIL image
+                # Update model with metadata for informer
+                self._model.update_preview(None, metadata)
+
+                # Set base image (full size)
+                self._base_image = image.convert('RGB') if image.mode != 'RGB' else image
+
+                # Display image
+                self._current_image = self._base_image
+                self._preview_area.set_image(self._current_image, meters_per_px=mpp)
+
+                logger.info('Preview displayed in main window')
+
+            else:
+                logger.warning('Invalid image object for preview: %s', type(image))
+                return
 
             # Update control point markers from settings (e.g. if loaded from profile)
             self._update_cp_marker_from_settings(self._model.settings)
@@ -1913,8 +2138,6 @@ class MainWindow(QMainWindow):
             except Exception as _e:
                 logger.debug(f'Failed to hide progress widgets on preview: {_e}')
 
-            logger.info('Preview displayed in main window')
-
         except Exception as e:
             error_msg = f'Ошибка при отображении предпросмотра: {e}'
             logger.exception(error_msg)
@@ -1928,9 +2151,10 @@ class MainWindow(QMainWindow):
             self._coords_label.setText('')
             self._coords_label.setToolTip('')
             self._preview_area.setToolTip('')
-            # Reset images
+            # Reset images and saved path
             self._current_image = None
             self._base_image = None
+            self._saved_map_path = None
             # Disable save controls
             self.save_map_btn.setEnabled(False)
             self.save_map_action.setEnabled(False)
@@ -1943,24 +2167,47 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _save_map(self) -> None:
-        """Save the current map image to file."""
-        if self._current_image is None:
-            QMessageBox.warning(
-                self,
-                'Предупреждение',
-                'Нет изображения для сохранения',
+        """Save the current map image to file by copying the full-resolution file."""
+        import shutil
+
+        # Check if we have a saved full-resolution file to copy
+        if not self._saved_map_path or not Path(self._saved_map_path).exists():
+            # Fallback: check if we have an image to save directly
+            if self._current_image is None:
+                QMessageBox.warning(
+                    self,
+                    'Предупреждение',
+                    'Нет изображения для сохранения',
+                )
+                return
+            # If no saved file but have image, warn about reduced quality
+            logger.warning(
+                'No saved full-resolution file found, saving preview image instead'
             )
-            return
 
         # Get file path from user
         maps_dir = Path(__file__).resolve().parent.parent.parent / 'maps'
         maps_dir.mkdir(exist_ok=True)  # Ensure maps directory exists
-        default_path = str(maps_dir / 'map.jpg')
+        
+        # Determine default extension based on source file
+        if self._saved_map_path:
+            source_ext = Path(self._saved_map_path).suffix.lower()
+            if source_ext in ('.tif', '.tiff'):
+                default_name = 'map.tif'
+                file_filter = 'TIFF files (*.tif *.tiff);;JPEG files (*.jpg);;All files (*)'
+            else:
+                default_name = 'map.jpg'
+                file_filter = 'JPEG files (*.jpg);;TIFF files (*.tif *.tiff);;All files (*)'
+        else:
+            default_name = 'map.jpg'
+            file_filter = 'JPEG files (*.jpg);;All files (*)'
+        
+        default_path = str(maps_dir / default_name)
         file_path, _ = QFileDialog.getSaveFileName(
             self,
             'Сохранить карту',
             default_path,
-            'JPEG files (*.jpg);;All files (*)',
+            file_filter,
             options=QFileDialog.Option.DontUseCustomDirectoryIcons
             | QFileDialog.Option.DontUseNativeDialog,
         )
@@ -1978,48 +2225,70 @@ class MainWindow(QMainWindow):
 
             # Create worker for saving in background thread
             class _SaveWorker(QObject):
-                finished = Signal(bool, str)  # success, error_message
+                finished = Signal(bool, str, str)  # success, error_message, actual_path
 
                 def __init__(
                     self,
-                    image: Image.Image,
-                    path: Path,
+                    source_path: str | None,
+                    dest_path: Path,
+                    fallback_image: Image.Image | None,
                     quality: int,
                 ) -> None:
                     super().__init__()
-                    self.image = image
-                    self.path = path
+                    self.source_path = source_path
+                    self.dest_path = dest_path
+                    self.fallback_image = fallback_image
                     self.quality = quality
 
                 def run(self) -> None:
-                    """Save the image in background thread."""
+                    """Copy the full-resolution file or save fallback image."""
                     try:
-                        img = self.image
-                        if img.mode != 'RGB':
-                            img = img.convert('RGB')
+                        if self.source_path and Path(self.source_path).exists():
+                            # Copy the full-resolution file
+                            source = Path(self.source_path)
+                            dest = self.dest_path
 
-                        img.save(
-                            str(self.path),
-                            'JPEG',
-                            quality=self.quality,
-                            optimize=True,
-                            subsampling=0,
-                        )
-                        success = True
-                        self.finished.emit(success, '')
+                            # If extensions match, just copy
+                            if source.suffix.lower() == dest.suffix.lower():
+                                shutil.copy2(source, dest)
+                            else:
+                                # Different extensions - use source extension
+                                # (conversion would require loading full image into RAM)
+                                actual_dest = dest.with_suffix(source.suffix)
+                                shutil.copy2(source, actual_dest)
+                                # Update dest_path for the completion message
+                                self.dest_path = actual_dest
+                                logger.warning(
+                                    'Requested %s but source is %s - saved as %s',
+                                    dest.suffix, source.suffix, actual_dest.name
+                                )
+                        elif self.fallback_image is not None:
+                            # Fallback: save the preview image (reduced quality)
+                            img = self.fallback_image
+                            if img.mode != 'RGB':
+                                img = img.convert('RGB')
+                            img.save(
+                                str(self.dest_path),
+                                'JPEG',
+                                quality=self.quality,
+                                optimize=True,
+                                subsampling=0,
+                            )
+                        else:
+                            raise ValueError('No source file or image to save')
+
+                        self.finished.emit(True, '', str(self.dest_path))
                     except Exception as e:
-                        success = False
-                        self.finished.emit(success, str(e))
+                        self.finished.emit(False, str(e), str(self.dest_path))
 
-            # Read quality directly from slider at save time
+            # Read quality directly from slider at save time (for fallback)
             quality = self.output_widget.quality_slider.value()
             logger.info(f'Saving map with JPEG quality: {quality}%')
 
             # Create and setup worker thread
             th = QThread()
-            # Use base image to ensure full resolution
-            base_for_save = self._base_image or self._current_image
-            worker = _SaveWorker(base_for_save, out_path, quality)
+            fallback_image = self._base_image or self._current_image
+            worker = _SaveWorker(self._saved_map_path, out_path, fallback_image, quality)
             worker.moveToThread(th)
 
             # Store references for cleanup
@@ -2029,7 +2298,7 @@ class MainWindow(QMainWindow):
             # Setup connections
             th.started.connect(worker.run)
 
-            def _on_save_complete(*, success: bool, err: str) -> None:
+            def _on_save_complete(*, success: bool, err: str, actual_path: str) -> None:
                 """Handle save completion."""
                 logger.info(f'[SAVE_DEBUG] _on_save_complete called: success={success}')
 
@@ -2038,9 +2307,20 @@ class MainWindow(QMainWindow):
                 self.save_map_action.setEnabled(True)
 
                 if success:
-                    logger.info(f'Image saved to: {out_path}')
+                    saved_path = Path(actual_path)
+                    logger.info(f'Image saved to: {saved_path}')
+
+                    # Check if extension was changed
+                    if saved_path.suffix.lower() != out_path.suffix.lower():
+                        QMessageBox.information(
+                            self,
+                            'Формат изменён',
+                            f'Изображение слишком большое для формата JPEG.\n'
+                            f'Сохранено как: {saved_path.name}',
+                        )
+
                     self._status_proxy.show_message(
-                        f'Карта сохранена: {out_path.name}',
+                        f'Карта сохранена: {saved_path.name}',
                         5000,
                     )
                     # Preview remains visible, save button remains enabled
@@ -2062,7 +2342,9 @@ class MainWindow(QMainWindow):
                 self._cleanup_save_resources()
 
             worker.finished.connect(
-                lambda success, err: _on_save_complete(success=success, err=err),
+                lambda success, err, path: _on_save_complete(
+                    success=success, err=err, actual_path=path
+                ),
                 Qt.ConnectionType.QueuedConnection,
             )
             # Ensure the worker thread quits immediately after finishing to

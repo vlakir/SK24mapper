@@ -6,7 +6,11 @@ from dataclasses import dataclass
 from typing import Any
 
 from geo.topography import compute_xyz_coverage, estimate_crop_size_px
-from shared.constants import ROTATION_PAD_MIN_PX, ROTATION_PAD_RATIO
+from shared.constants import (
+    ROTATE_GRID_INSTEAD_THRESHOLD,
+    ROTATION_PAD_MIN_PX,
+    ROTATION_PAD_RATIO,
+)
 
 
 @dataclass
@@ -30,6 +34,7 @@ def compute_tile_coverage(
     height_m: float,
     zoom: int,
     eff_scale: int,
+    rotation_deg: float | None = None,
 ) -> TileCoverage:
     """
     Compute tile coverage for given map parameters.
@@ -41,6 +46,8 @@ def compute_tile_coverage(
         height_m: Map height in meters
         zoom: Zoom level
         eff_scale: Effective scale factor (1 or 2 for retina)
+        rotation_deg: Pre-computed rotation angle. If abs(rotation_deg) < threshold,
+            padding is skipped to avoid unnecessary cropping.
 
     Returns:
         TileCoverage with all computed values
@@ -55,9 +62,16 @@ def compute_tile_coverage(
         eff_scale,
     )
 
-    # Calculate padding for rotation
-    base_pad = round(min(target_w_px, target_h_px) * ROTATION_PAD_RATIO)
-    pad_px = max(base_pad, ROTATION_PAD_MIN_PX)
+    # Calculate padding for rotation only if rotation will actually be applied
+    needs_rotation = (
+        rotation_deg is None
+        or abs(rotation_deg) >= ROTATE_GRID_INSTEAD_THRESHOLD
+    )
+    if needs_rotation:
+        base_pad = round(min(target_w_px, target_h_px) * ROTATION_PAD_RATIO)
+        pad_px = max(base_pad, ROTATION_PAD_MIN_PX)
+    else:
+        pad_px = 0
 
     # Compute XYZ tile coverage
     tiles, (tiles_x, tiles_y), crop_rect, map_params = compute_xyz_coverage(

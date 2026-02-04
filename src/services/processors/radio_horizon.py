@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import gc
 import logging
 from typing import TYPE_CHECKING
 
+import numpy as np
 from PIL import Image
 
 from elevation.provider import ElevationTileProvider
@@ -17,8 +17,7 @@ from geo.topography import (
     latlng_to_pixel_xy,
     meters_per_pixel,
 )
-from imaging import assemble_and_crop
-from infrastructure.http.client import resolve_cache_dir
+from imaging.streaming import StreamingImage, assemble_tiles_streaming
 from services.radio_horizon import (
     compute_and_colorize_radio_horizon,
     compute_downsample_factor,
@@ -29,6 +28,8 @@ from shared.constants import (
     MAPBOX_STYLE_BY_TYPE,
     RADIO_HORIZON_TOPO_OVERLAY_ALPHA,
     RADIO_HORIZON_USE_RETINA,
+    STREAMING_STRIP_HEIGHT,
+    STREAMING_TEMP_DIR,
     TILE_SIZE,
     MapType,
 )
@@ -36,14 +37,12 @@ from shared.diagnostics import log_memory_usage
 from shared.progress import ConsoleProgress, LiveSpinner
 
 if TYPE_CHECKING:
-    import numpy as np
-
     from services.map_context import MapDownloadContext
 
 logger = logging.getLogger(__name__)
 
 
-async def process_radio_horizon(ctx: MapDownloadContext) -> Image.Image:
+async def process_radio_horizon(ctx: MapDownloadContext) -> StreamingImage:
     """
     Process radio horizon map.
 
@@ -54,14 +53,13 @@ async def process_radio_horizon(ctx: MapDownloadContext) -> Image.Image:
         ctx: Map download context with all necessary parameters.
 
     Returns:
-        Radio horizon visualization image.
+        StreamingImage with radio horizon visualization.
 
     """
     provider = ElevationTileProvider(
         client=ctx.client,
-        api_key=ctx.api_key,
+        tile_fetcher=ctx.tile_fetcher,
         use_retina=RADIO_HORIZON_USE_RETINA,
-        cache_root=resolve_cache_dir(),
     )
 
     full_eff_tile_px = 256 * (2 if RADIO_HORIZON_USE_RETINA else 1)
@@ -165,7 +163,7 @@ async def process_radio_horizon(ctx: MapDownloadContext) -> Image.Image:
     sp = LiveSpinner('Вычисление радиогоризонта')
     sp.start()
 
-    result = compute_and_colorize_radio_horizon(
+    result_pil = compute_and_colorize_radio_horizon(
         dem=dem_full,
         antenna_row=antenna_row,
         antenna_col=antenna_col,
@@ -182,14 +180,15 @@ async def process_radio_horizon(ctx: MapDownloadContext) -> Image.Image:
     gc.collect()
 
     # Resize if downsampled
+    target_w, target_h = ctx.crop_rect[2], ctx.crop_rect[3]
     if ds_factor > 1:
-        target_size = (ctx.crop_rect[2], ctx.crop_rect[3])
         logger.info(
-            'Радиогоризонт: масштабирование результата %s -> %s',
-            result.size,
-            target_size,
+            'Радиогоризонт: масштабирование результата %s -> (%d, %d)',
+            result_pil.size,
+            target_w,
+            target_h,
         )
-        result = result.resize(target_size, Image.Resampling.BILINEAR)
+        result_pil = result_pil.resize((target_w, target_h), Image.Resampling.BILINEAR)
 
     # Load topographic base
     logger.info('Загрузка топографической основы для радиогоризонта')
@@ -202,7 +201,7 @@ async def process_radio_horizon(ctx: MapDownloadContext) -> Image.Image:
 
     async def fetch_topo_tile(
         idx_xy: tuple[int, tuple[int, int]],
-    ) -> tuple[int, Image.Image]:
+    ) -> tuple[int, np.ndarray]:
         idx, (tx, ty) = idx_xy
         async with ctx.semaphore:
             img = await async_fetch_xyz_tile(
@@ -215,41 +214,86 @@ async def process_radio_horizon(ctx: MapDownloadContext) -> Image.Image:
                 y=ty,
                 use_retina=topo_use_retina,
             )
-            return idx, img
+            # Convert to numpy array immediately
+            arr = np.array(img)
+            img.close()
+            return idx, arr
 
     topo_tasks = [fetch_topo_tile(pair) for pair in enumerate(ctx.tiles)]
     topo_results = await asyncio.gather(*topo_tasks)
     topo_results.sort(key=lambda t: t[0])
-    topo_images = [img for _, img in topo_results]
+    topo_arrays = [arr for _, arr in topo_results]
 
     eff_tile_px_topo = topo_tile_size * (2 if topo_use_retina else 1)
-    topo_base = assemble_and_crop(
-        images=topo_images,
+    temp_dir = getattr(ctx, 'temp_dir', STREAMING_TEMP_DIR)
+
+    topo_base = assemble_tiles_streaming(
+        tile_data_list=topo_arrays,
         tiles_x=ctx.tiles_x,
         tiles_y=ctx.tiles_y,
         eff_tile_px=eff_tile_px_topo,
         crop_rect=ctx.crop_rect,
+        temp_dir=temp_dir,
     )
 
-    with contextlib.suppress(Exception):
-        topo_images.clear()
+    # Free topo arrays
+    for arr in topo_arrays:
+        del arr
+    topo_arrays.clear()
+    del topo_results
 
     sp_topo.stop('Топографическая основа загружена')
 
-    # Resize topo base if needed
-    if topo_base.size != result.size:
-        topo_base = topo_base.resize(result.size, Image.Resampling.BILINEAR)
-
-    # Blend radio horizon with topo base
+    # Blend radio horizon with topo base using streaming approach
     logger.info(
         'Наложение радиогоризонта на топооснову (alpha=%.2f)',
         RADIO_HORIZON_TOPO_OVERLAY_ALPHA,
     )
-    topo_base = topo_base.convert('L').convert('RGBA')
-    result = result.convert('RGBA')
-    result = Image.blend(topo_base, result, RADIO_HORIZON_TOPO_OVERLAY_ALPHA)
 
-    del topo_base
+    # Convert result_pil to numpy for blending
+    result_arr = np.array(result_pil.convert('RGBA'))
+    result_pil.close()
+
+    # Create output StreamingImage
+    result = StreamingImage(target_w, target_h, temp_dir=temp_dir)
+
+    # Blend strip by strip
+    strip_h = STREAMING_STRIP_HEIGHT
+    alpha = RADIO_HORIZON_TOPO_OVERLAY_ALPHA
+
+    for y in range(0, target_h, strip_h):
+        y_end = min(y + strip_h, target_h)
+        strip_height = y_end - y
+
+        # Get topo strip and convert to grayscale then RGBA
+        topo_strip = topo_base.get_strip(y, strip_height)
+        # Convert to grayscale
+        topo_gray = np.dot(topo_strip[..., :3], [0.299, 0.587, 0.114]).astype(np.uint8)
+        # Expand to RGBA
+        topo_rgba = np.stack([topo_gray, topo_gray, topo_gray,
+                              np.full_like(topo_gray, 255)], axis=-1)
+
+        # Get radio horizon strip
+        rh_strip = result_arr[y:y_end]
+
+        # Blend: result = topo * (1 - alpha) + rh * alpha
+        blended = (
+            topo_rgba.astype(np.float32) * (1 - alpha) +
+            rh_strip.astype(np.float32) * alpha
+        ).astype(np.uint8)
+
+        # Convert back to RGB
+        blended_rgb = blended[..., :3]
+
+        result.set_strip(y, blended_rgb)
+
+        del topo_strip, topo_gray, topo_rgba, rh_strip, blended, blended_rgb
+
+    result.flush()
+
+    # Cleanup
+    topo_base.close()
+    del result_arr
     gc.collect()
 
     logger.info('Карта радиогоризонта построена')

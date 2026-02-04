@@ -253,7 +253,7 @@ class MilMapperController:
             except Exception:
                 logger.debug('Failed to log detailed settings before save-as')
 
-            data = s.model_dump()
+            data = s.model_dump(exclude_none=True)
             text = tomlkit.dumps(data)
             final_path.write_text(text, encoding='utf-8')
 

@@ -5,6 +5,7 @@ from PIL import Image
 import numpy as np
 from services.map_context import MapDownloadContext
 from services.processors.elevation_contours import process_elevation_contours
+from imaging.streaming import StreamingImage
 
 @pytest.mark.asyncio
 async def test_process_elevation_contours_basic():
@@ -62,7 +63,8 @@ async def test_process_elevation_contours_basic():
         )
         
         result = await process_elevation_contours(ctx)
-        assert isinstance(result, Image.Image)
+        assert isinstance(result, StreamingImage)
+        result.close()
 
 
 @pytest.mark.asyncio
@@ -90,7 +92,8 @@ async def test_process_elevation_contours_no_tiles():
          patch('services.processors.elevation_contours.ConsoleProgress'), \
          patch('services.processors.elevation_contours.LiveSpinner'):
         result = await process_elevation_contours(ctx)
-        assert isinstance(result, Image.Image)
+        assert isinstance(result, StreamingImage)
+        result.close()
 
 
 @patch('services.processors.elevation_contours.draw_contour_labels')

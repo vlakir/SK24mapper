@@ -5,6 +5,7 @@ from PIL import Image
 import numpy as np
 from services.map_context import MapDownloadContext
 from services.processors.elevation_color import process_elevation_color
+from imaging.streaming import StreamingImage
 
 @pytest.mark.asyncio
 async def test_process_elevation_color_basic():
@@ -39,10 +40,11 @@ async def test_process_elevation_color_basic():
             
             result = await process_elevation_color(ctx)
             
-            assert isinstance(result, Image.Image)
+            assert isinstance(result, StreamingImage)
             assert result.size == (256, 256)
             assert ctx.elev_min_m is not None
             assert ctx.elev_max_m is not None
+            result.close()
 
 @pytest.mark.asyncio
 async def test_process_elevation_color_error_handling():

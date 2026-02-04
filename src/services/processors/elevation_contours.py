@@ -18,7 +18,8 @@ from contours.helpers import tx_ty_from_index
 from elevation.provider import ElevationTileProvider
 from geo.geometry import tile_overlap_rect_common
 from geo.topography import decode_terrain_rgb_to_elevation_m
-from infrastructure.http.client import resolve_cache_dir
+from imaging.grid_streaming import draw_polylines_streaming, draw_rotated_labels_streaming
+from imaging.streaming import StreamingImage
 from render.contours_builder import build_seed_polylines
 from shared.constants import (
     CONTOUR_COLOR,
@@ -32,6 +33,8 @@ from shared.constants import (
     EARTH_RADIUS_M,
     ELEVATION_USE_RETINA,
     MIN_POINTS_FOR_SEGMENT,
+    STREAMING_STRIP_HEIGHT,
+    STREAMING_TEMP_DIR,
     TILE_SIZE,
 )
 from shared.progress import ConsoleProgress, LiveSpinner
@@ -42,7 +45,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-async def process_elevation_contours(ctx: MapDownloadContext) -> Image.Image:
+async def process_elevation_contours(ctx: MapDownloadContext) -> StreamingImage:
     """
     Process elevation contours map.
 
@@ -61,9 +64,8 @@ async def process_elevation_contours(ctx: MapDownloadContext) -> Image.Image:
 
     provider = ElevationTileProvider(
         client=ctx.client,
-        api_key=ctx.api_key,
+        tile_fetcher=ctx.tile_fetcher,
         use_retina=ELEVATION_USE_RETINA,
-        cache_root=resolve_cache_dir(),
     )
 
     # Pass A: sample min/max elevations and build global low-res DEM seed
@@ -280,7 +282,24 @@ async def process_elevation_contours(ctx: MapDownloadContext) -> Image.Image:
     finally:
         sp.stop('Построение изолиний завершено')
 
-    return result
+    # Convert PIL.Image to StreamingImage
+    temp_dir = getattr(ctx, 'temp_dir', STREAMING_TEMP_DIR)
+    streaming_result = StreamingImage(
+        result.width, result.height, temp_dir=temp_dir
+    )
+
+    # Copy data strip by strip
+    result_arr = np.array(result)
+    strip_h = STREAMING_STRIP_HEIGHT
+    for y in range(0, result.height, strip_h):
+        y_end = min(y + strip_h, result.height)
+        streaming_result.set_strip(y, result_arr[y:y_end])
+
+    streaming_result.flush()
+    result.close()
+    del result_arr
+
+    return streaming_result
 
 
 def _add_contour_labels(
@@ -409,20 +428,320 @@ def _add_contour_labels(
 
 async def apply_contours_to_image(
     ctx: MapDownloadContext,
-    base_image: Image.Image,
-) -> Image.Image:
+    base_image: StreamingImage,
+) -> StreamingImage:
     """
-    Apply contour lines overlay to an existing image.
+    Apply contour lines overlay to an existing image using streaming approach.
 
     This function fetches elevation data and draws contour lines
     on top of the provided base image (e.g., satellite or streets map).
+    Uses streaming to avoid loading entire image into memory.
 
     Args:
         ctx: Map download context with all necessary parameters.
-        base_image: The base image to overlay contours on.
+        base_image: The base StreamingImage to overlay contours on.
 
     Returns:
-        Image with contour lines overlaid.
+        StreamingImage with contour lines overlaid (same object, modified in-place).
+
+    """
+    # Call the streaming implementation
+    await _apply_contours_streaming(ctx, base_image)
+    return base_image
+
+
+async def _apply_contours_streaming(
+    ctx: MapDownloadContext,
+    base_image: StreamingImage,
+) -> None:
+    """
+    Internal streaming implementation of contour overlay.
+
+    Draws contours directly on StreamingImage without loading full image into memory.
+    """
+    # Terrain-RGB тайлы поддерживают только 256px или 512px (@2x)
+    overlay_retina_factor = max(1, round(ctx.full_eff_tile_px / 256))
+    overlay_retina_factor = min(overlay_retina_factor, 2)
+    elev_tile_px = 256 * overlay_retina_factor
+
+    # ctx.crop_rect и ctx.full_eff_tile_px рассчитаны для XYZ тайлов,
+    # которые могут иметь другой размер. Нужно пересчитать crop_rect
+    # для Elevation тайлов.
+    scale_factor = elev_tile_px / ctx.full_eff_tile_px
+    orig_cx, orig_cy, orig_cw, orig_ch = ctx.crop_rect
+
+    # Пересчитываем crop_rect для elevation тайлов
+    elev_cx = int(orig_cx * scale_factor)
+    elev_cy = int(orig_cy * scale_factor)
+    elev_cw = int(orig_cw * scale_factor)
+    elev_ch = int(orig_ch * scale_factor)
+    elev_crop_rect = (elev_cx, elev_cy, elev_cw, elev_ch)
+
+    logger.info(
+        'Overlay streaming: base tile_px=%d, Elev tile_px=%d, scale=%.3f',
+        ctx.full_eff_tile_px,
+        elev_tile_px,
+        scale_factor,
+    )
+
+    provider = ElevationTileProvider(
+        client=ctx.client,
+        tile_fetcher=ctx.tile_fetcher,
+        use_retina=(overlay_retina_factor > 1),
+    )
+
+    # Pass A: sample elevations and build global low-res DEM seed
+    max_samples = 50000
+    samples_contours: list[float] = []
+
+    rng = random.Random(42)  # noqa: S311
+    tile_progress = ConsoleProgress(
+        total=len(ctx.tiles), label='Загрузка высот для изолиний'
+    )
+
+    # Prepare low-res DEM seed canvas
+    seed_ds = max(2, int(CONTOUR_SEED_DOWNSAMPLE))
+    cx, cy, cw, ch = elev_crop_rect
+    seed_w = max(1, (cw + seed_ds - 1) // seed_ds)
+    seed_h = max(1, (ch + seed_ds - 1) // seed_ds)
+    seed_sum = np.zeros((seed_h, seed_w), dtype=np.float64)
+    seed_cnt = np.zeros((seed_h, seed_w), dtype=np.int32)
+
+    tile_results: list[tuple[list[float], list[tuple[int, int, float]]]] = []
+    results_lock = asyncio.Lock()
+
+    async def fetch_and_sample(idx_xy: tuple[int, tuple[int, int]]) -> None:
+        idx, (tile_x_world, tile_y_world) = idx_xy
+        tx, ty = tx_ty_from_index(idx, ctx.tiles_x)
+        if tile_overlap_rect_common(tx, ty, elev_crop_rect, elev_tile_px) is None:
+            await tile_progress.step(1)
+            return
+
+        try:
+            async with ctx.semaphore:
+                img = await provider.get_tile_image(
+                    ctx.zoom, tile_x_world, tile_y_world
+                )
+                dem_tile = decode_terrain_rgb_to_elevation_m(img)
+                h = len(dem_tile)
+                w = len(dem_tile[0]) if h else 0
+
+                if h and w:
+                    step_y = max(1, h // 32)
+                    step_x = max(1, w // 32)
+                    off_y = rng.randrange(0, min(step_y, h)) if step_y > 1 else 0
+                    off_x = rng.randrange(0, min(step_x, w)) if step_x > 1 else 0
+
+                    local_samples: list[float] = []
+                    for ry in range(off_y, h, step_y):
+                        local_samples.extend(dem_tile[ry][off_x:w:step_x])
+
+                    local_updates: list[tuple[int, int, float]] = []
+                    ov = tile_overlap_rect_common(tx, ty, elev_crop_rect, elev_tile_px)
+                    if ov is not None:
+                        x0, y0, x1, y1 = ov
+                        base_x = tx * elev_tile_px
+                        base_y = ty * elev_tile_px
+
+                        for yy in range(y0, y1, seed_ds):
+                            sy = (yy - cy) // seed_ds
+                            if sy < 0 or sy >= seed_h:
+                                continue
+                            src_y = yy - base_y
+                            row_src = dem_tile[src_y]
+                            for xx in range(x0, x1, seed_ds):
+                                sx = (xx - cx) // seed_ds
+                                if sx < 0 or sx >= seed_w:
+                                    continue
+                                src_x = xx - base_x
+                                v = row_src[src_x]
+                                local_updates.append((sy, sx, v))
+
+                    if local_samples or local_updates:
+                        async with results_lock:
+                            tile_results.append((local_samples, local_updates))
+        except Exception as exc:
+            logger.warning(
+                'Не удалось получить terrain тайл z/x/y=%d/%d/%d: %s',
+                ctx.zoom,
+                tile_x_world,
+                tile_y_world,
+                exc,
+            )
+        finally:
+            await tile_progress.step(1)
+
+    try:
+        async with asyncio.TaskGroup() as tg:
+            for pair in enumerate(ctx.tiles):
+                tg.create_task(fetch_and_sample(pair))
+    finally:
+        tile_progress.close()
+
+    # Batch-обработка результатов
+    all_samples: list[float] = []
+    for local_samples, local_updates in tile_results:
+        all_samples.extend(local_samples)
+        for sy, sx, v in local_updates:
+            seed_sum[sy, sx] += v
+            seed_cnt[sy, sx] += 1
+
+    if len(all_samples) > max_samples:
+        rng.shuffle(all_samples)
+        samples_contours = all_samples[:max_samples]
+    else:
+        samples_contours = all_samples
+
+    # Finalize low-res DEM seed
+    with np.errstate(divide='ignore', invalid='ignore'):
+        seed_dem = np.where(seed_cnt > 0, seed_sum / seed_cnt, 0.0)
+
+    if not samples_contours:
+        logger.warning('Нет данных высот для изолиний')
+        return
+
+    mn = min(samples_contours)
+    mx = max(samples_contours)
+    logger.info('Диапазон высот для изолиний: %.1f – %.1f м', mn, mx)
+
+    map_size_m = max(float(ctx.width_m), float(ctx.height_m))
+    adaptive_params = compute_contour_adaptive_params(map_size_m)
+
+    # Build contour levels
+    interval = adaptive_params.interval_m
+    start = math.floor(mn / interval) * interval
+    end = math.ceil(mx / interval) * interval
+    levels: list[float] = []
+    k = 0
+    v = start
+    while v <= end:
+        levels.append(v)
+        k += 1
+        v = start + k * interval
+
+    # Pass B: draw contours using streaming
+    sp = LiveSpinner('Построение изолиний (потоково)')
+    sp.start()
+    try:
+        seed_polylines = build_seed_polylines(seed_dem, levels, seed_h, seed_w)
+
+        total_polys = sum(len(polys) for polys in seed_polylines.values())
+        logger.info(
+            'Overlay streaming: levels=%d, total_polylines=%d, image=%dx%d',
+            len(levels),
+            total_polys,
+            base_image.width,
+            base_image.height,
+        )
+
+        img_w, img_h = base_image.width, base_image.height
+        coord_scale = seed_ds / scale_factor
+
+        # Compute mpp for label sizing
+        lat_rad = math.radians(ctx.center_lat_wgs)
+        mpp = (math.cos(lat_rad) * 2 * math.pi * EARTH_RADIUS_M) / (
+            TILE_SIZE * overlay_retina_factor * (2**ctx.zoom)
+        )
+
+        # Collect all polylines for streaming drawing, grouped by color/width
+        regular_polylines: list[list[tuple[float, float]]] = []
+        index_polylines: list[list[tuple[float, float]]] = []
+
+        regular_width = max(1, round(CONTOUR_WIDTH / max(1e-9, mpp)))
+        index_width = max(1, round(CONTOUR_INDEX_WIDTH / max(1e-9, mpp)))
+
+        for li, _level in enumerate(levels):
+            is_index = (li % max(1, int(CONTOUR_INDEX_EVERY))) == 0
+            target_list = index_polylines if is_index else regular_polylines
+
+            for poly in seed_polylines.get(li, []):
+                # Scale coordinates to base_image
+                pts = [(px * coord_scale, py * coord_scale) for px, py in poly]
+
+                # Check if polyline is in bounds
+                xs = [p[0] for p in pts]
+                ys = [p[1] for p in pts]
+                if max(xs) < 0 or min(xs) > img_w or max(ys) < 0 or min(ys) > img_h:
+                    continue
+
+                if len(pts) >= MIN_POINTS_FOR_SEGMENT:
+                    target_list.append(pts)
+
+        # Draw regular contours
+        if regular_polylines:
+            logger.info('Рисование %d обычных изолиний', len(regular_polylines))
+            draw_polylines_streaming(
+                img=base_image,
+                polylines=regular_polylines,
+                color=CONTOUR_COLOR,
+                width=regular_width,
+            )
+
+        # Draw index contours (thicker)
+        if index_polylines:
+            logger.info('Рисование %d индексных изолиний', len(index_polylines))
+            draw_polylines_streaming(
+                img=base_image,
+                polylines=index_polylines,
+                color=CONTOUR_INDEX_COLOR,
+                width=index_width,
+            )
+
+        # Draw contour labels using streaming with rotation support
+        if CONTOUR_LABELS_ENABLED:
+            from contours.labels import compute_contour_label_positions
+
+            effective_seed_ds = round(coord_scale)
+            label_positions = compute_contour_label_positions(
+                seed_polylines=seed_polylines,
+                levels=levels,
+                img_width=img_w,
+                img_height=img_h,
+                seed_ds=effective_seed_ds,
+                mpp=mpp,
+                label_spacing_m=adaptive_params.label_spacing_m,
+                label_min_seg_len_m=adaptive_params.label_min_seg_len_m,
+                label_edge_margin_m=adaptive_params.label_edge_margin_m,
+                label_font_m=adaptive_params.label_font_m,
+            )
+
+            if label_positions:
+                # Convert LabelPosition objects to dicts for draw_rotated_labels_streaming
+                labels_data = [
+                    {
+                        'text': pos.text,
+                        'x': pos.x,
+                        'y': pos.y,
+                        'angle_rad': pos.angle_rad,
+                        'font_size': pos.font_size_px,
+                        'color': (80, 60, 40),  # Brown color for contour labels
+                        'outline_color': (255, 255, 255),
+                        'outline_width': 1,
+                        'bg_color': (255, 255, 255, 200),  # Semi-transparent white
+                        'bg_padding': 2,
+                    }
+                    for pos in label_positions
+                ]
+                logger.info('Рисование %d подписей изолиний', len(labels_data))
+                draw_rotated_labels_streaming(base_image, labels_data)
+
+    finally:
+        sp.stop('Построение изолиний завершено')
+
+
+async def _apply_contours_to_image_pil(
+    ctx: MapDownloadContext,
+    base_image: Image.Image,
+) -> Image.Image:
+    """
+    Internal PIL-based implementation of contour overlay.
+
+    Args:
+        ctx: Map download context with all necessary parameters.
+        base_image: The base PIL Image to overlay contours on.
+
+    Returns:
+        PIL Image with contour lines overlaid.
 
     """
     # Terrain-RGB тайлы поддерживают только 256px или 512px (@2x)
@@ -460,7 +779,9 @@ async def apply_contours_to_image(
     )
 
     provider = ElevationTileProvider(
-        client=ctx.client, api_key=ctx.api_key, use_retina=(overlay_retina_factor > 1)
+        client=ctx.client,
+        tile_fetcher=ctx.tile_fetcher,
+        use_retina=(overlay_retina_factor > 1),
     )
 
     # Pass A: sample elevations and build global low-res DEM seed

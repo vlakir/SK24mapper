@@ -59,25 +59,11 @@ class TestDiagnostics:
             pass
         assert "test_op" in caplog.text
 
-    @pytest.mark.asyncio
-    async def test_run_deep_verification_mock(self):
-        with patch('shared.diagnostics._make_cached_session_for_diag') as mock_session_factory:
-            mock_session = AsyncMock()
-            # Context manager for the session
-            mock_session_factory.return_value.__aenter__.return_value = mock_session
-            
-            # Mock responses for style and terrain
-            mock_resp = AsyncMock()
-            mock_resp.status = 200
-            mock_resp.read = AsyncMock(return_value=b"fake data")
-            mock_session.get.return_value.__aenter__.return_value = mock_resp
-            
-            settings = MagicMock()
-            settings.style_id = "test_style"
-            
-            # If run_deep_verification is sync and uses asyncio.run(), it's hard to test here.
-            # But we've already covered a lot.
-            pass
+    def test_run_deep_verification_signature(self):
+        """run_deep_verification should be callable."""
+        # Just verify the function exists and is callable
+        # Full testing would require a real API key
+        assert callable(run_deep_verification)
 
     def test_ensure_writable_dir(self, tmp_path):
         from shared.diagnostics import _ensure_writable_dir

@@ -5,6 +5,7 @@ from PIL import Image
 import numpy as np
 from services.map_context import MapDownloadContext
 from services.processors.radio_horizon import process_radio_horizon
+from imaging.streaming import StreamingImage
 
 @pytest.mark.asyncio
 async def test_process_radio_horizon_basic():
@@ -85,5 +86,6 @@ async def test_process_radio_horizon_basic():
             
             result = await process_radio_horizon(ctx)
             
-            assert isinstance(result, Image.Image)
+            assert isinstance(result, StreamingImage)
             assert result.size == (256, 256)
+            result.close()

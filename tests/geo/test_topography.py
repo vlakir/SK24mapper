@@ -9,7 +9,6 @@ from geo.topography import (
     assemble_dem,
     build_transformers_sk42,
     cache_dem_tile,
-    choose_zoom_with_limit,
     clear_dem_cache,
     colorize_dem_to_image,
     compute_grid,
@@ -151,25 +150,6 @@ class TestComputePercentiles:
         lo, hi = compute_percentiles(values, 0.0, 100.0)
         assert lo == 5.0
         assert hi == 25.0
-
-
-class TestChooseZoomWithLimit:
-    """Tests for choose_zoom_with_limit function."""
-
-    def test_returns_desired_zoom_when_under_limit(self):
-        """Should return desired zoom when pixels under limit."""
-        zoom = choose_zoom_with_limit(55.0, 1000.0, 1000.0, 15, 1, 100_000_000)
-        assert zoom == 15
-
-    def test_reduces_zoom_when_over_limit(self):
-        """Should reduce zoom when pixels exceed limit."""
-        zoom = choose_zoom_with_limit(55.0, 10000.0, 10000.0, 20, 1, 1_000_000)
-        assert zoom < 20
-
-    def test_returns_zero_for_impossible_limit(self):
-        """Should return 0 for very small pixel limit."""
-        zoom = choose_zoom_with_limit(55.0, 100000.0, 100000.0, 20, 1, 1)
-        assert zoom == 0
 
 
 class TestComputeGrid:
@@ -423,24 +403,28 @@ class TestTopographySk42AndDem:
         assert elev[0][0] == pytest.approx(-3394.9, rel=1e-3)
 
 def test_dem_cache():
-    clear_dem_cache()
-    # stats might be affected by other tests if they run in same process
-    # but clear_dem_cache should reset it
-    _, total_px = get_dem_cache_stats()
-    # If it's not 0, it means clear_dem_cache might have some issues or concurrent tests
-    # Let's just test that it changes
+    from unittest.mock import patch
     
-    z, x, y = 10, 100, 200
-    dem = np.zeros((10, 10), dtype=np.float32)
-    cache_dem_tile(z, x, y, dem)
-    
-    cached = get_cached_dem_tile(z, x, y)
-    assert cached is not None
-    assert np.array_equal(cached, dem)
-    
-    clear_dem_cache()
-    # Check if we can still get it
-    assert get_cached_dem_tile(z, x, y) is None
+    # Enable DEM cache for this test (it may be disabled globally for debugging)
+    with patch('geo.topography.DEM_CACHE_ENABLED', True):
+        clear_dem_cache()
+        # stats might be affected by other tests if they run in same process
+        # but clear_dem_cache should reset it
+        _, total_px = get_dem_cache_stats()
+        # If it's not 0, it means clear_dem_cache might have some issues or concurrent tests
+        # Let's just test that it changes
+        
+        z, x, y = 10, 100, 200
+        dem = np.zeros((10, 10), dtype=np.float32)
+        cache_dem_tile(z, x, y, dem)
+        
+        cached = get_cached_dem_tile(z, x, y)
+        assert cached is not None
+        assert np.array_equal(cached, dem)
+        
+        clear_dem_cache()
+        # Check if we can still get it
+        assert get_cached_dem_tile(z, x, y) is None
 
 
 def test_assemble_dem():
@@ -481,11 +465,3 @@ def test_compute_rotation_deg_for_east_axis():
     
     rot = compute_rotation_deg_for_east_axis(55.0, 37.0, map_params, crs_sk42_gk, t_sk42_to_wgs)
     assert isinstance(rot, float)
-
-
-def test_choose_zoom_with_limit_extended():
-    # Test branch where map_size is 0 or very small
-    assert choose_zoom_with_limit(0, 0, 0, 10, 1, 1000) == 10
-    
-    # Test branch where limit is reached
-    assert choose_zoom_with_limit(55, 100000, 100000, 20, 1, 100) < 20

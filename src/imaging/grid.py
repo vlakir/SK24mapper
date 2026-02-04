@@ -1,7 +1,10 @@
 """Grid drawing utilities - kilometer grid for SK-42 coordinate system."""
 
+from __future__ import annotations
+
 import logging
 import math
+from dataclasses import dataclass, field
 
 from PIL import Image, ImageDraw
 from pyproj import CRS, Transformer
@@ -19,12 +22,269 @@ from shared.constants import (
     GRID_LABEL_MOD,
     GRID_LABEL_THOUSAND_DIV,
     GRID_STEP_M,
+    GRID_TEXT_COLOR,
+    GRID_TEXT_OUTLINE_COLOR,
+    GRID_TEXT_OUTLINE_WIDTH,
     MIN_POINTS_FOR_LINE,
     STATIC_SCALE,
 )
 from shared.progress import ConsoleProgress
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class GridElements:
+    """Computed grid elements for streaming drawing."""
+
+    polylines: list[list[tuple[float, float]]] = field(default_factory=list)
+    """List of polylines (each polyline is a list of (x, y) points)."""
+
+    crosses: list[tuple[float, float]] = field(default_factory=list)
+    """List of cross positions (x, y) for display_grid=False mode."""
+
+    labels: list[dict] = field(default_factory=list)
+    """List of label dicts for draw_labels_streaming."""
+
+    line_width: int = 1
+    """Width of grid lines in pixels."""
+
+    line_color: tuple[int, int, int] = GRID_COLOR
+    """Color of grid lines."""
+
+    cross_length: int = 10
+    """Length of crosses in pixels (for display_grid=False)."""
+
+
+def compute_km_grid_elements(
+    img_width: int,
+    img_height: int,
+    center_lat_sk42: float,
+    center_lng_sk42: float,
+    center_lat_wgs: float,
+    center_lng_wgs: float,
+    zoom: int,
+    crs_sk42_gk: CRS,
+    t_sk42_to_wgs: Transformer,
+    step_m: int = GRID_STEP_M,
+    color: tuple[int, int, int] = GRID_COLOR,
+    width_m: float = 5.0,
+    scale: int = STATIC_SCALE,
+    grid_font_size_m: float = 100.0,
+    grid_text_margin_m: float = 50.0,
+    grid_label_bg_padding_m: float = 10.0,
+    *,
+    display_grid: bool = True,
+    rotation_deg: float = 0.0,
+) -> GridElements:
+    """
+    Вычисляет элементы километровой сетки для потокового рисования.
+
+    Возвращает GridElements с линиями, крестиками и подписями,
+    которые можно нарисовать через draw_polylines_streaming и draw_labels_streaming.
+
+    Args:
+        img_width: Ширина изображения в пикселях.
+        img_height: Высота изображения в пикселях.
+        center_lat_sk42: Широта центра карты в СК‑42 (градусы).
+        center_lng_sk42: Долгота центра карты в СК‑42 (градусы).
+        center_lat_wgs: Широта центра карты в WGS‑84 (градусы).
+        center_lng_wgs: Долгота центра карты в WGS‑84 (градусы).
+        zoom: Уровень масштабирования карты.
+        crs_sk42_gk: Объект CRS для СК‑42 в зоне Гаусса–Крюгера.
+        t_sk42_to_wgs: Трансформер СК‑42 → WGS‑84.
+        step_m: Шаг сетки в метрах.
+        color: Цвет линий/крестиков.
+        width_m: Толщина линий в метрах.
+        scale: Масштабный коэффициент.
+        grid_font_size_m: Размер шрифта для подписей в метрах.
+        grid_text_margin_m: Отступ подписей от краёв в метрах.
+        grid_label_bg_padding_m: Внутренний отступ подложки под подписью в метрах.
+        display_grid: Полная сетка (True) или только крестики (False).
+        rotation_deg: Угол поворота изображения в градусах.
+
+    Returns:
+        GridElements с вычисленными линиями, крестиками и подписями.
+
+    """
+    result = GridElements(line_color=color)
+    w, h = img_width, img_height
+
+    mpp = meters_per_pixel(center_lat_wgs, zoom, scale=scale)
+    ppm = 1.0 / mpp  # pixels per meter
+
+    # Конвертация параметров из метров в пиксели
+    result.line_width = max(1, round(width_m * ppm))
+    grid_font_size = max(10, round(grid_font_size_m * ppm))
+    grid_text_margin = max(0, round(grid_text_margin_m * ppm))
+    grid_label_bg_padding = max(0, round(grid_label_bg_padding_m * ppm))
+    result.cross_length = max(1, round(GRID_CROSS_LENGTH_M * ppm))
+
+    # Вычисляем адаптивный размер шрифта
+    adaptive_font_size = calculate_adaptive_grid_font_size(mpp)
+    final_font_size = max(adaptive_font_size, grid_font_size)
+
+    cx, cy = w / 2.0, h / 2.0
+
+    # Предвычисляем sin/cos для поворота
+    rotation_rad = math.radians(-rotation_deg)
+    cos_rot = math.cos(rotation_rad)
+    sin_rot = math.sin(rotation_rad)
+
+    # Трансформеры координат
+    t_sk42gk_from_sk42 = Transformer.from_crs(
+        crs_sk42_geog,
+        crs_sk42_gk,
+        always_xy=True,
+    )
+    t_sk42gk_to_sk42 = Transformer.from_crs(
+        crs_sk42_gk,
+        crs_sk42_geog,
+        always_xy=True,
+    )
+    x0_gk, y0_gk = t_sk42gk_from_sk42.transform(center_lng_sk42, center_lat_sk42)
+
+    cx_world, cy_world = latlng_to_pixel_xy(center_lat_wgs, center_lng_wgs, zoom)
+
+    def gk_to_pixel(x_gk: float, y_gk: float) -> tuple[float, float]:
+        """Преобразует координаты СК-42 ГК (метры) в пиксели изображения."""
+        lng_sk42, lat_sk42 = t_sk42gk_to_sk42.transform(x_gk, y_gk)
+        lng_wgs, lat_wgs = t_sk42_to_wgs.transform(lng_sk42, lat_sk42)
+        x_world, y_world = latlng_to_pixel_xy(lat_wgs, lng_wgs, zoom)
+        x_pre = cx + (x_world - cx_world) * scale
+        y_pre = cy + (y_world - cy_world) * scale
+        dx = x_pre - cx
+        dy = y_pre - cy
+        x_px = cx + dx * cos_rot - dy * sin_rot
+        y_px = cy + dx * sin_rot + dy * cos_rot
+        return x_px, y_px
+
+    def floor_to_step(v: float, step: float) -> int:
+        return int(math.floor(v / step) * step)
+
+    half_w_m = (w / 2.0) / ppm
+    half_h_m = (h / 2.0) / ppm
+
+    gx_left_m = floor_to_step(x0_gk - half_w_m, step_m)
+    gx_right_m = floor_to_step(x0_gk + half_w_m, step_m) + step_m
+    gy_down_m = floor_to_step(y0_gk - half_h_m, step_m)
+    gy_up_m = floor_to_step(y0_gk + half_h_m, step_m) + step_m
+
+    # Количество сегментов для ломаных линий
+    grid_line_segments = max(10, int((gy_up_m - gy_down_m) / step_m) + 1)
+    grid_line_segments_h = max(10, int((gx_right_m - gx_left_m) / step_m) + 1)
+
+    if display_grid:
+        # Вертикальные линии и подписи X
+        x_m = gx_left_m
+        while x_m <= gx_right_m:
+            # Строим ломаную линию
+            line_points: list[tuple[float, float]] = []
+            for i in range(grid_line_segments + 1):
+                y_seg = gy_down_m + (gy_up_m - gy_down_m) * i / grid_line_segments
+                px, py = gk_to_pixel(x_m, y_seg)
+                line_points.append((px, py))
+
+            if len(line_points) >= MIN_POINTS_FOR_LINE:
+                result.polylines.append(line_points)
+
+            # Подписи
+            x_label_m = x_m + step_m / 2.0
+            x_digits = math.floor(x_label_m / GRID_LABEL_THOUSAND_DIV) % GRID_LABEL_MOD
+            x_label = f'{x_digits:02d}'
+
+            # Верхняя подпись
+            label_x_top, _ = gk_to_pixel(x_label_m, gy_up_m)
+            result.labels.append({
+                'text': x_label,
+                'x': label_x_top,
+                'y': grid_text_margin,
+                'font_size': final_font_size,
+                'color': GRID_TEXT_COLOR,
+                'outline_color': GRID_TEXT_OUTLINE_COLOR,
+                'outline_width': GRID_TEXT_OUTLINE_WIDTH,
+                'bg_color': GRID_LABEL_BG_COLOR + (255,),  # RGBA
+                'bg_padding': grid_label_bg_padding,
+                'anchor': 'mt',
+            })
+
+            # Нижняя подпись
+            label_x_bot, _ = gk_to_pixel(x_label_m, gy_down_m)
+            result.labels.append({
+                'text': x_label,
+                'x': label_x_bot,
+                'y': h - grid_text_margin,
+                'font_size': final_font_size,
+                'color': GRID_TEXT_COLOR,
+                'outline_color': GRID_TEXT_OUTLINE_COLOR,
+                'outline_width': GRID_TEXT_OUTLINE_WIDTH,
+                'bg_color': GRID_LABEL_BG_COLOR + (255,),
+                'bg_padding': grid_label_bg_padding,
+                'anchor': 'mb',
+            })
+
+            x_m += step_m
+
+        # Горизонтальные линии и подписи Y
+        y_m = gy_down_m
+        while y_m <= gy_up_m:
+            line_points_h: list[tuple[float, float]] = []
+            for i in range(grid_line_segments_h + 1):
+                x_seg = gx_left_m + (gx_right_m - gx_left_m) * i / grid_line_segments_h
+                px, py = gk_to_pixel(x_seg, y_m)
+                line_points_h.append((px, py))
+
+            if len(line_points_h) >= MIN_POINTS_FOR_LINE:
+                result.polylines.append(line_points_h)
+
+            # Подписи
+            y_label_m = y_m + step_m / 2.0
+            y_digits = math.floor(y_label_m / GRID_LABEL_THOUSAND_DIV) % GRID_LABEL_MOD
+            y_label = f'{y_digits:02d}'
+
+            # Левая подпись
+            _, label_y_left = gk_to_pixel(gx_left_m, y_label_m)
+            result.labels.append({
+                'text': y_label,
+                'x': grid_text_margin,
+                'y': label_y_left,
+                'font_size': final_font_size,
+                'color': GRID_TEXT_COLOR,
+                'outline_color': GRID_TEXT_OUTLINE_COLOR,
+                'outline_width': GRID_TEXT_OUTLINE_WIDTH,
+                'bg_color': GRID_LABEL_BG_COLOR + (255,),
+                'bg_padding': grid_label_bg_padding,
+                'anchor': 'lm',
+            })
+
+            # Правая подпись
+            _, label_y_right = gk_to_pixel(gx_right_m, y_label_m)
+            result.labels.append({
+                'text': y_label,
+                'x': w - grid_text_margin,
+                'y': label_y_right,
+                'font_size': final_font_size,
+                'color': GRID_TEXT_COLOR,
+                'outline_color': GRID_TEXT_OUTLINE_COLOR,
+                'outline_width': GRID_TEXT_OUTLINE_WIDTH,
+                'bg_color': GRID_LABEL_BG_COLOR + (255,),
+                'bg_padding': grid_label_bg_padding,
+                'anchor': 'rm',
+            })
+
+            y_m += step_m
+    else:
+        # Режим крестиков на пересечениях
+        x_m = gx_left_m
+        while x_m <= gx_right_m:
+            y_m = gy_down_m
+            while y_m <= gy_up_m:
+                x_px, y_px = gk_to_pixel(x_m, y_m)
+                result.crosses.append((x_px, y_px))
+                y_m += step_m
+            x_m += step_m
+
+    return result
 
 
 def draw_axis_aligned_km_grid(

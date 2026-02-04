@@ -15,6 +15,8 @@ if TYPE_CHECKING:
     import aiohttp
     from PIL import Image
 
+    from tiles.fetcher import TileFetcher
+
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +69,9 @@ class MapDownloadContext:
     client: aiohttp.ClientSession | None = None
     semaphore: asyncio.Semaphore | None = None
 
+    # Tile fetcher with caching (set during execution)
+    tile_fetcher: TileFetcher | None = None
+
     # Elevation data (for legend)
     elev_min_m: float | None = None
     elev_max_m: float | None = None
@@ -114,6 +119,7 @@ class MapDownloadContext:
             if self.settings.control_point_enabled
             else None,
             helmert_params=self.settings.custom_helmert,
+            output_path=self.output_path,
         )
 
     def get_meters_per_pixel(self) -> float:

@@ -2,6 +2,7 @@
 
 from shared.constants import (
     ADDITIVE_RATIO,
+    DEM_CACHE_ENABLED,
     DESIRED_ZOOM,
     DOWNLOAD_CONCURRENCY,
     EARTH_RADIUS_M,
@@ -9,7 +10,6 @@ from shared.constants import (
     GK_FALSE_EASTING,
     GK_ZONE_WIDTH_DEG,
     GRID_STEP_M,
-    HTTP_CACHE_ENABLED,
     HTTP_TIMEOUT_DEFAULT,
     MAP_TYPE_LABELS_RU,
     MAPBOX_STYLE_BY_TYPE,
@@ -146,9 +146,9 @@ class TestNumericConstants:
         """HTTP timeout should be reasonable."""
         assert 5 <= HTTP_TIMEOUT_DEFAULT <= 60
 
-    def test_http_cache_enabled(self):
-        """HTTP cache should be boolean."""
-        assert isinstance(HTTP_CACHE_ENABLED, bool)
+    def test_dem_cache_enabled(self):
+        """DEM cache enabled should be boolean."""
+        assert isinstance(DEM_CACHE_ENABLED, bool)
 
 
 class TestGKConstants:

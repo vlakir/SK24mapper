@@ -428,6 +428,162 @@ def place_labels_for_levels(
     return placed
 
 
+@dataclass
+class LabelPosition:
+    """Computed label position for streaming rendering."""
+
+    x: float
+    y: float
+    angle_rad: float
+    text: str
+    font_size_px: int
+
+
+def compute_contour_label_positions(
+    seed_polylines: SeedPolylines,
+    levels: list[float],
+    img_width: int,
+    img_height: int,
+    seed_ds: int,
+    mpp: float,
+    *,
+    label_spacing_m: float | None = None,
+    label_min_seg_len_m: float | None = None,
+    label_edge_margin_m: float | None = None,
+    label_font_m: float | None = None,
+) -> list[LabelPosition]:
+    """
+    Compute contour label positions without drawing.
+
+    Returns list of LabelPosition with coordinates, angle, and text
+    for each label. Can be used for streaming rendering.
+
+    Args:
+        seed_polylines: Dict mapping level index to list of polylines.
+        levels: List of contour level values.
+        img_width: Image width in pixels.
+        img_height: Image height in pixels.
+        seed_ds: Seed downsample factor for coordinate scaling.
+        mpp: Meters per pixel.
+        label_spacing_m: Spacing between labels in meters.
+        label_min_seg_len_m: Minimum segment length for labels.
+        label_edge_margin_m: Edge margin in meters.
+        label_font_m: Font size in meters.
+
+    Returns:
+        List of LabelPosition objects.
+
+    """
+    if not CONTOUR_LABELS_ENABLED:
+        return []
+
+    (
+        label_spacing_m,
+        label_min_seg_len_m,
+        label_edge_margin_m,
+        label_font_m,
+    ) = resolve_label_settings(
+        label_spacing_m,
+        label_min_seg_len_m,
+        label_edge_margin_m,
+        label_font_m,
+    )
+
+    spacing_px = max(1, round(label_spacing_m / max(1e-9, mpp)))
+    min_seg_px = max(1, round(label_min_seg_len_m / max(1e-9, mpp)))
+    edge_margin_px = max(1, round(label_edge_margin_m / max(1e-9, mpp)))
+    font_size_px = max(
+        int(CONTOUR_LABEL_FONT_MIN_PX),
+        min(
+            int(CONTOUR_LABEL_FONT_MAX_PX),
+            round(label_font_m / max(1e-9, mpp)),
+        ),
+    )
+
+    positions: list[LabelPosition] = []
+    placed_boxes: list[BBox] = []
+
+    # Estimate label box size for collision detection
+    # Approximate width based on font size and typical label length (e.g., "1234")
+    approx_label_width = font_size_px * 3
+    approx_label_height = font_size_px + 4
+
+    for li, level in enumerate(levels):
+        if CONTOUR_LABEL_INDEX_ONLY and (li % max(1, int(CONTOUR_INDEX_EVERY)) != 0):
+            continue
+
+        text = CONTOUR_LABEL_FORMAT.format(level)
+
+        for poly in seed_polylines.get(li, []):
+            pts = [(x * seed_ds, y * seed_ds) for (x, y) in poly]
+            if len(pts) < MIN_POLYLINE_POINTS:
+                continue
+
+            seg_l_list, total_len = segment_lengths(pts)
+            if total_len < max(min_seg_px, spacing_px * 0.8):
+                continue
+
+            target = spacing_px
+            while target < total_len:
+                segment = find_segment_for_target(seg_l_list, target)
+                if segment is None:
+                    break
+                idx, acc = segment
+                t = (target - acc) / max(1e-9, seg_l_list[idx])
+                x0p, y0p = pts[idx]
+                x1p, y1p = pts[idx + 1]
+                px = x0p + (x1p - x0p) * t
+                py = y0p + (y1p - y0p) * t
+
+                # Check edge margin
+                if not (
+                    edge_margin_px <= px <= img_width - edge_margin_px
+                    and edge_margin_px <= py <= img_height - edge_margin_px
+                ):
+                    target += spacing_px
+                    continue
+
+                # Compute angle
+                ang_rad = normalize_angle(math.atan2(-(y1p - y0p), x1p - x0p))
+
+                # Approximate bbox for collision detection
+                # Account for rotation - use diagonal as worst case
+                diag = math.hypot(approx_label_width, approx_label_height)
+                half_diag = diag / 2
+                bbox = (
+                    int(px - half_diag),
+                    int(py - half_diag),
+                    int(px + half_diag),
+                    int(py + half_diag),
+                )
+
+                # Check bounds
+                if bbox[0] < 0 or bbox[1] < 0 or bbox[2] > img_width or bbox[3] > img_height:
+                    target += spacing_px
+                    continue
+
+                # Check collision
+                if any(intersects(bbox, bb) for bb in placed_boxes):
+                    target += spacing_px
+                    continue
+
+                # Add position
+                positions.append(
+                    LabelPosition(
+                        x=px,
+                        y=py,
+                        angle_rad=ang_rad,
+                        text=text,
+                        font_size_px=font_size_px,
+                    )
+                )
+                placed_boxes.append(bbox)
+                target += spacing_px
+
+    logger.info('Вычислено %d позиций подписей изолиний', len(positions))
+    return positions
+
+
 def draw_contour_labels(
     img: PILImage,
     seed_polylines: SeedPolylines,

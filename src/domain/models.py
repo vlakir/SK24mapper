@@ -27,6 +27,8 @@ class MapMetadata(BaseModel):
     original_cp_x_gk: float | None = None
     original_cp_y_gk: float | None = None
     helmert_params: tuple[float, float, float, float, float, float, float] | None = None
+    # Путь к сохранённому полноразмерному файлу карты
+    output_path: str | None = None
 
 
 class MapSettings(BaseModel):
@@ -104,6 +106,10 @@ class MapSettings(BaseModel):
     max_flight_height_m: float = 500.0
     # Режим отсчёта высоты БпЛА (для карты радиогоризонта)
     uav_height_reference: UavHeightReference = UavHeightReference.CONTROL_POINT
+
+    # Настройки кэша и офлайн режима
+    offline_mode: bool = False  # Работать только из кэша, без сетевых запросов
+    desired_zoom: int | None = None  # Желаемый zoom (None = автовыбор)
 
     # Валидации через Pydantic validators
     @field_validator('mask_opacity')

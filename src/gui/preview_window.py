@@ -37,6 +37,8 @@ from shared.constants import (
 if TYPE_CHECKING:
     from PIL import Image
 
+    from imaging.pyramid import ImagePyramid
+
 import math
 
 logger = logging.getLogger(__name__)
@@ -101,6 +103,49 @@ class OptimizedImageView(QGraphicsView):
         self._cp_line_item: QGraphicsLineItem | None = None
         self._cp_label_item: QGraphicsTextItem | None = None
         self._meters_per_px: float = 0.0
+
+        # Pyramid support for large images
+        self._pyramid: ImagePyramid | None = None
+        self._pyramid_scale_to_original: float = 1.0
+
+    def set_pyramid(self, pyramid: ImagePyramid, meters_per_px: float = 0.0) -> None:
+        """
+        Set an image pyramid for efficient display of large images.
+
+        Uses the base level of the pyramid for display, which is already
+        scaled down to a manageable size.
+
+        Args:
+            pyramid: ImagePyramid with multiple detail levels
+            meters_per_px: Meters per pixel at original resolution
+
+        """
+        if pyramid is None or pyramid.base_level is None:
+            logger.warning('Invalid pyramid for preview')
+            return
+
+        # Store pyramid reference
+        self._pyramid = pyramid
+        self._pyramid_scale_to_original = pyramid.scale_to_original
+
+        # Use base level for display
+        base_image = pyramid.base_level
+
+        # Adjust meters_per_px for the scaled image
+        # Since base level is scaled down, each pixel represents more meters
+        adjusted_mpp = meters_per_px / pyramid.scale_to_original if pyramid.scale_to_original > 0 else meters_per_px
+
+        # Display using existing set_image method
+        self.set_image(base_image, meters_per_px=adjusted_mpp)
+
+        logger.info(
+            'Pyramid set: original %dx%d, base level %dx%d, scale %.4f',
+            pyramid.original_size[0],
+            pyramid.original_size[1],
+            base_image.width,
+            base_image.height,
+            pyramid.scale_to_original,
+        )
 
     def set_image(self, pil_image: Image.Image, meters_per_px: float = 0.0) -> None:
         """
@@ -182,6 +227,12 @@ class OptimizedImageView(QGraphicsView):
         # Allow GC of previous image bytes when clearing
         if hasattr(self, '_qimage_bytes'):
             self._qimage_bytes = None
+        # Clear pyramid reference
+        if hasattr(self, '_pyramid') and self._pyramid is not None:
+            with contextlib.suppress(Exception):
+                self._pyramid.close()
+            self._pyramid = None
+        self._pyramid_scale_to_original = 1.0
 
     def fit_to_window(self) -> None:
         """Fit image to the view window."""

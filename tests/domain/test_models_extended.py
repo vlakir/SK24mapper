@@ -329,3 +329,48 @@ class TestMapSettingsMaskOpacity:
         """mask_opacity one should work."""
         settings = create_settings(mask_opacity=1.0)
         assert settings.mask_opacity == 1.0
+
+
+class TestMapSettingsOfflineAndZoom:
+    """Tests for offline_mode and desired_zoom fields."""
+
+    def test_default_offline_mode_is_false(self):
+        """offline_mode should default to False."""
+        settings = create_settings()
+        assert settings.offline_mode is False
+
+    def test_default_desired_zoom_is_none(self):
+        """desired_zoom should default to None (auto)."""
+        settings = create_settings()
+        assert settings.desired_zoom is None
+
+    def test_offline_mode_can_be_set_true(self):
+        """offline_mode can be set to True."""
+        settings = create_settings(offline_mode=True)
+        assert settings.offline_mode is True
+
+    def test_desired_zoom_can_be_set(self):
+        """desired_zoom can be set to a specific value."""
+        settings = create_settings(desired_zoom=16)
+        assert settings.desired_zoom == 16
+
+    def test_settings_serialization_with_new_fields(self):
+        """New fields should serialize/deserialize correctly."""
+        settings = create_settings(
+            offline_mode=True,
+            desired_zoom=18,
+        )
+
+        # Serialize
+        data = settings.model_dump()
+
+        # Check new fields are in dump
+        assert 'offline_mode' in data
+        assert 'desired_zoom' in data
+        assert data['offline_mode'] is True
+        assert data['desired_zoom'] == 18
+
+        # Deserialize
+        restored = MapSettings(**data)
+        assert restored.offline_mode is True
+        assert restored.desired_zoom == 18

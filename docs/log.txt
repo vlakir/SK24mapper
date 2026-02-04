@@ -1,0 +1,211 @@
+C:\programming\SK24mapper\.venv\Scripts\python.exe C:\programming\SK24mapper\src\main.py 
+2026-02-04 11:55:21,965 - __main__ - INFO - Starting Mil Mapper 2.0
+2026-02-04 11:55:21,966 - shared.diagnostics - INFO - === DIAGNOSTIC INFO: APPLICATION_STARTUP ===
+2026-02-04 11:55:21,966 - shared.diagnostics - INFO - Memory - RSS: 144.8MB, VMS: 1066.45MB, System Available: 4922.51MB (65.3% used)
+2026-02-04 11:55:21,971 - shared.diagnostics - INFO - Threads - Active: 1, System: 38, Main alive: True
+2026-02-04 11:55:22,048 - shared.diagnostics - INFO - Resources - Open files: 3, Network connections: 0
+2026-02-04 11:55:22,149 - shared.diagnostics - INFO - System - CPU: 0.0%, Load avg: N/A
+2026-02-04 11:55:22,150 - shared.diagnostics - INFO - SQLite - Cache files: 4
+2026-02-04 11:55:22,156 - shared.diagnostics - INFO - Active threads: MainThread
+2026-02-04 11:55:22,156 - shared.diagnostics - INFO - === END DIAGNOSTIC INFO: APPLICATION_STARTUP ===
+2026-02-04 11:55:22,159 - shared.diagnostics - INFO - Memory usage (before creating application): RSS=145.55MB, Available=4919.97MB
+2026-02-04 11:55:22,197 - gui.model - INFO - MilMapperModel initialized
+2026-02-04 11:55:22,198 - gui.controller - INFO - API-ключ успешно загружен
+2026-02-04 11:55:22,198 - gui.controller - INFO - MilMapperController initialized
+2026-02-04 11:55:22,701 - tiles.cache - INFO - TileCache initialized at C:\Users\vlaki\.sk24mapper\cache\tiles
+2026-02-04 11:55:23,803 - tiles.cache - INFO - TileCache closed
+2026-02-04 11:55:23,820 - domain.profiles - INFO - Profile TOML data: control_point_enabled=False
+2026-02-04 11:55:23,822 - domain.profiles - INFO - Profile MapSettings created: control_point_enabled=False
+2026-02-04 11:55:23,824 - gui.view - INFO - UI control point set: enabled=False, x_src=5415000 -> edit='5415000', y_src=7440000 -> edit='7440000', antenna_h=10
+2026-02-04 11:55:23,824 - gui.model - INFO - Profile loaded: default
+2026-02-04 11:55:23,824 - gui.controller - INFO - Профиль загружен: default
+2026-02-04 11:55:23,824 - gui.view - INFO - MainWindow initialized
+2026-02-04 11:55:23,825 - shared.diagnostics - INFO - Memory usage (after creating application): RSS=213.82MB, Available=4851.88MB
+2026-02-04 11:55:23,891 - __main__ - INFO - Application started successfully
+2026-02-04 11:55:23,892 - shared.diagnostics - INFO - === DIAGNOSTIC INFO: APPLICATION_READY ===
+2026-02-04 11:55:23,892 - shared.diagnostics - INFO - Memory - RSS: 219.93MB, VMS: 1096.48MB, System Available: 4852.14MB (65.8% used)
+2026-02-04 11:55:23,899 - shared.diagnostics - INFO - Threads - Active: 1, System: 38, Main alive: True
+2026-02-04 11:55:24,205 - shared.diagnostics - INFO - Resources - Open files: 411, Network connections: 0
+2026-02-04 11:55:24,306 - shared.diagnostics - INFO - System - CPU: 38.5%, Load avg: N/A
+2026-02-04 11:55:24,307 - shared.diagnostics - INFO - SQLite - Cache files: 4
+2026-02-04 11:55:24,310 - shared.diagnostics - INFO - Active threads: MainThread
+2026-02-04 11:55:24,310 - shared.diagnostics - INFO - === END DIAGNOSTIC INFO: APPLICATION_READY ===
+2026-02-04 11:55:26,484 - gui.view - INFO - UI control point set: enabled=False, x_src=5415000 -> edit='5415000', y_src=7440000 -> edit='7440000', antenna_h=10
+2026-02-04 11:55:26,494 - gui.workers.download_worker - INFO - DownloadWorker thread started
+2026-02-04 11:55:26,498 - shared.diagnostics - INFO - Thread status (worker thread start): Active=2, System=47
+2026-02-04 11:55:26,499 - shared.diagnostics - INFO - Memory usage (worker thread start): RSS=230.82MB, Available=4892.89MB
+2026-02-04 11:55:26,806 - shared.diagnostics - INFO - === DIAGNOSTIC INFO: MAP_DOWNLOAD - START ===
+2026-02-04 11:55:26,806 - shared.diagnostics - INFO - Memory - RSS: 231.22MB, VMS: 1106.37MB, System Available: 4768.64MB (66.4% used)
+2026-02-04 11:55:26,812 - shared.diagnostics - INFO - Threads - Active: 2, System: 48, Main alive: True
+2026-02-04 11:55:27,129 - shared.diagnostics - INFO - Resources - Open files: 411, Network connections: 2
+2026-02-04 11:55:27,230 - shared.diagnostics - INFO - System - CPU: 19.0%, Load avg: N/A
+2026-02-04 11:55:27,230 - shared.diagnostics - INFO - SQLite - Cache files: 4
+2026-02-04 11:55:27,237 - shared.diagnostics - INFO - Active threads: MainThread, Dummy-1
+2026-02-04 11:55:27,237 - shared.diagnostics - INFO - === END DIAGNOSTIC INFO: MAP_DOWNLOAD - START ===
+2026-02-04 11:55:27,239 - shared.diagnostics - INFO - Глубокая проверка: стилевой режим MapType.SATELLITE, style_id=mapbox/satellite-v9
+2026-02-04 11:55:28,520 - shared.diagnostics - INFO - Глубокая проверка успешно пройдена
+2026-02-04 11:55:28,521 - gui.model - INFO - Download started
+2026-02-04 11:55:28,521 - gui.controller - INFO - Starting download: center=(7442000.0, 5417000.0), size=(14600.0x10600.0)
+2026-02-04 11:55:28,521 - gui.controller - INFO - Starting download with control point (СК-42 ГК): enabled=False, X(север)=5415000.000, Y(восток)=7440000.000; raw Xn=7440000, raw Ye=5415000
+2026-02-04 11:55:28,521 - shared.diagnostics - INFO - Memory usage (before download start): RSS=233.85MB, Available=4777.29MB
+2026-02-04 11:55:28,521 - services.map_download_service - INFO - === ОБЩИЙ ТАЙМЕР: старт MapDownloadService.download ===
+2026-02-04 11:55:28,521 - services.map_download_service - INFO - Тип карты: MapType.SATELLITE; style_id=mapbox/satellite-v9; tile_size=512; retina=True
+2026-02-04 11:55:29,154 - services.coordinate_transformer - INFO - Используются пользовательские параметры Helmert: dx=-50.957, dy=-39.724, dz=-76.877, rx=2.33295", ry=2.13987", rz=-2.03005", ds=-1.43065ppm
+2026-02-04 11:55:29,250 - services.map_download_service - INFO - Zoom понижен с 20 до 17 из-за ограничения 10000M пикселей (файл был бы слишком большим)
+2026-02-04 11:55:29,353 - services.map_download_service - INFO - Создание HTTP сессии...
+2026-02-04 11:55:29,600 - services.map_download_service - INFO - HTTP сессия создана
+2026-02-04 11:55:29,600 - shared.diagnostics - INFO - Memory usage (before tile download): RSS=235.34MB, Available=4760.95MB
+2026-02-04 11:55:29,606 - shared.diagnostics - INFO - Thread status (before tile download): Active=3, System=49
+2026-02-04 11:55:29,607 - services.map_download_service - INFO - Вход в контекст HTTP сессии...
+2026-02-04 11:55:29,607 - services.map_download_service - INFO - HTTP сессия активна, запуск процессора...
+2026-02-04 11:55:29,607 - tiles.cache - INFO - TileCache initialized at C:\Users\vlaki\.sk24mapper\cache\tiles
+2026-02-04 11:55:29,608 - tiles.writer - INFO - CacheWriter started
+2026-02-04 11:55:29,608 - services.map_download_service - INFO - Tile cache initialized: C:\Users\vlaki\.sk24mapper\cache\tiles (offline=False)
+2026-02-04 11:55:29,608 - services.map_download_service - INFO - Запуск процессора для изображения 74358x53986 (4014.3M пикселей)
+2026-02-04 11:55:29,608 - services.processors.xyz_tiles - INFO - XYZ processor: создание StreamingImage 74358x53986 (4014.3M пикселей, ~12.0 GB)...
+2026-02-04 11:55:46,425 - services.processors.xyz_tiles - INFO - StreamingImage создан успешно
+2026-02-04 11:55:46,425 - services.processors.xyz_tiles - INFO - Processing 3996 tiles (74x54) into 74358x53986 image, eff_tile_px=1024
+2026-02-04 11:55:47,250 - shared.diagnostics - INFO - Memory usage (after 50 tiles): RSS=312.1MB, Available=4421.88MB
+2026-02-04 11:55:48,190 - shared.diagnostics - INFO - Memory usage (after 100 tiles): RSS=424.44MB, Available=4375.93MB
+2026-02-04 11:55:49,275 - shared.diagnostics - INFO - Memory usage (after 150 tiles): RSS=578.02MB, Available=4236.0MB
+2026-02-04 11:55:50,216 - shared.diagnostics - INFO - Memory usage (after 200 tiles): RSS=735.91MB, Available=4172.82MB
+2026-02-04 11:55:51,436 - shared.diagnostics - INFO - Memory usage (after 250 tiles): RSS=888.62MB, Available=3977.28MB
+2026-02-04 11:55:52,522 - shared.diagnostics - INFO - Memory usage (after 300 tiles): RSS=1042.67MB, Available=3825.59MB
+2026-02-04 11:55:53,508 - shared.diagnostics - INFO - Memory usage (after 350 tiles): RSS=1201.08MB, Available=3688.06MB
+2026-02-04 11:55:54,659 - shared.diagnostics - INFO - Memory usage (after 400 tiles): RSS=1354.09MB, Available=3635.97MB
+2026-02-04 11:55:55,740 - shared.diagnostics - INFO - Memory usage (after 450 tiles): RSS=1507.77MB, Available=3337.19MB
+2026-02-04 11:55:56,705 - shared.diagnostics - INFO - Memory usage (after 500 tiles): RSS=1649.82MB, Available=3395.96MB
+2026-02-04 11:55:57,893 - shared.diagnostics - INFO - Memory usage (after 550 tiles): RSS=1795.52MB, Available=3110.95MB
+2026-02-04 11:55:59,024 - shared.diagnostics - INFO - Memory usage (after 600 tiles): RSS=1941.43MB, Available=3073.15MB
+2026-02-04 11:55:59,980 - shared.diagnostics - INFO - Memory usage (after 650 tiles): RSS=2091.41MB, Available=2836.21MB
+2026-02-04 11:56:01,058 - shared.diagnostics - INFO - Memory usage (after 700 tiles): RSS=2229.77MB, Available=2723.21MB
+2026-02-04 11:56:02,160 - shared.diagnostics - INFO - Memory usage (after 750 tiles): RSS=2375.64MB, Available=2684.77MB
+2026-02-04 11:56:03,122 - shared.diagnostics - INFO - Memory usage (after 800 tiles): RSS=2525.66MB, Available=2433.24MB
+2026-02-04 11:56:04,203 - shared.diagnostics - INFO - Memory usage (after 850 tiles): RSS=2665.53MB, Available=2415.18MB
+2026-02-04 11:56:05,223 - shared.diagnostics - INFO - Memory usage (after 900 tiles): RSS=2811.43MB, Available=2378.53MB
+2026-02-04 11:56:06,204 - shared.diagnostics - INFO - Memory usage (after 950 tiles): RSS=2961.41MB, Available=2073.12MB
+2026-02-04 11:56:07,287 - shared.diagnostics - INFO - Memory usage (after 1000 tiles): RSS=3107.25MB, Available=2081.75MB
+2026-02-04 11:56:08,295 - shared.diagnostics - INFO - Memory usage (after 1050 tiles): RSS=3253.11MB, Available=1948.38MB
+2026-02-04 11:56:09,379 - shared.diagnostics - INFO - Memory usage (after 1100 tiles): RSS=3397.36MB, Available=1797.36MB
+2026-02-04 11:56:10,337 - shared.diagnostics - INFO - Memory usage (after 1150 tiles): RSS=3543.14MB, Available=1481.82MB
+2026-02-04 11:56:11,502 - shared.diagnostics - INFO - Memory usage (after 1200 tiles): RSS=3689.05MB, Available=1399.45MB
+2026-02-04 11:56:12,632 - shared.diagnostics - INFO - Memory usage (after 1250 tiles): RSS=3833.98MB, Available=1573.73MB
+2026-02-04 11:56:13,748 - shared.diagnostics - INFO - Memory usage (after 1300 tiles): RSS=3979.82MB, Available=1741.23MB
+2026-02-04 11:56:14,833 - shared.diagnostics - INFO - Memory usage (after 1350 tiles): RSS=4125.68MB, Available=1646.84MB
+2026-02-04 11:56:15,898 - shared.diagnostics - INFO - Memory usage (after 1400 tiles): RSS=4275.7MB, Available=1501.94MB
+2026-02-04 11:56:16,992 - shared.diagnostics - INFO - Memory usage (after 1450 tiles): RSS=4418.86MB, Available=1440.93MB
+2026-02-04 11:56:17,914 - shared.diagnostics - INFO - Memory usage (after 1500 tiles): RSS=4564.76MB, Available=1301.64MB
+2026-02-04 11:56:18,994 - shared.diagnostics - INFO - Memory usage (after 1550 tiles): RSS=4714.74MB, Available=1000.43MB
+2026-02-04 11:56:20,096 - shared.diagnostics - INFO - Memory usage (after 1600 tiles): RSS=4856.55MB, Available=1083.41MB
+2026-02-04 11:56:21,160 - shared.diagnostics - INFO - Memory usage (after 1650 tiles): RSS=5002.41MB, Available=942.02MB
+2026-02-04 11:56:22,050 - shared.diagnostics - INFO - Memory usage (after 1700 tiles): RSS=5152.27MB, Available=785.01MB
+2026-02-04 11:56:23,218 - shared.diagnostics - INFO - Memory usage (after 1750 tiles): RSS=5287.44MB, Available=748.45MB
+2026-02-04 11:56:24,380 - shared.diagnostics - INFO - Memory usage (after 1800 tiles): RSS=5433.34MB, Available=806.68MB
+2026-02-04 11:56:25,380 - shared.diagnostics - INFO - Memory usage (after 1850 tiles): RSS=5577.14MB, Available=869.31MB
+2026-02-04 11:56:26,543 - shared.diagnostics - INFO - Memory usage (after 1900 tiles): RSS=5729.12MB, Available=706.01MB
+2026-02-04 11:56:27,751 - shared.diagnostics - INFO - Memory usage (after 1950 tiles): RSS=5875.07MB, Available=810.74MB
+2026-02-04 11:56:28,797 - shared.diagnostics - INFO - Memory usage (after 2000 tiles): RSS=6020.91MB, Available=770.78MB
+2026-02-04 11:56:29,906 - shared.diagnostics - INFO - Memory usage (after 2050 tiles): RSS=6170.88MB, Available=464.43MB
+2026-02-04 11:56:31,233 - shared.diagnostics - INFO - Memory usage (after 2100 tiles): RSS=4456.79MB, Available=553.64MB
+2026-02-04 11:56:32,370 - shared.diagnostics - INFO - Memory usage (after 2150 tiles): RSS=4602.61MB, Available=537.2MB
+2026-02-04 11:56:33,522 - shared.diagnostics - INFO - Memory usage (after 2200 tiles): RSS=3814.83MB, Available=562.97MB
+2026-02-04 11:56:34,814 - shared.diagnostics - INFO - Memory usage (after 2250 tiles): RSS=3960.69MB, Available=748.13MB
+2026-02-04 11:56:36,121 - shared.diagnostics - INFO - Memory usage (after 2300 tiles): RSS=4106.52MB, Available=1164.52MB
+2026-02-04 11:56:37,074 - shared.diagnostics - INFO - Memory usage (after 2350 tiles): RSS=4256.5MB, Available=1027.06MB
+2026-02-04 11:56:38,154 - shared.diagnostics - INFO - Memory usage (after 2400 tiles): RSS=4402.4MB, Available=696.64MB
+2026-02-04 11:56:39,305 - shared.diagnostics - INFO - Memory usage (after 2450 tiles): RSS=4409.27MB, Available=768.84MB
+2026-02-04 11:56:40,403 - shared.diagnostics - INFO - Memory usage (after 2500 tiles): RSS=4559.3MB, Available=769.37MB
+2026-02-04 11:56:41,495 - shared.diagnostics - INFO - Memory usage (after 2550 tiles): RSS=4705.16MB, Available=693.92MB
+2026-02-04 11:56:42,633 - shared.diagnostics - INFO - Memory usage (after 2600 tiles): RSS=4819.12MB, Available=761.46MB
+2026-02-04 11:56:43,672 - shared.diagnostics - INFO - Memory usage (after 2650 tiles): RSS=4969.21MB, Available=742.87MB
+2026-02-04 11:56:45,845 - shared.diagnostics - INFO - Memory usage (after 2700 tiles): RSS=3812.83MB, Available=528.3MB
+2026-02-04 11:56:47,330 - shared.diagnostics - INFO - Memory usage (after 2750 tiles): RSS=3260.92MB, Available=641.54MB
+2026-02-04 11:56:49,138 - shared.diagnostics - INFO - Memory usage (after 2800 tiles): RSS=3411.03MB, Available=974.56MB
+2026-02-04 11:56:50,733 - shared.diagnostics - INFO - Memory usage (after 2850 tiles): RSS=3556.99MB, Available=1717.74MB
+2026-02-04 11:56:52,587 - shared.diagnostics - INFO - Memory usage (after 2900 tiles): RSS=3574.92MB, Available=2144.86MB
+2026-02-04 11:56:53,972 - shared.diagnostics - INFO - Memory usage (after 2950 tiles): RSS=3724.98MB, Available=2308.02MB
+2026-02-04 11:56:55,794 - shared.diagnostics - INFO - Memory usage (after 3000 tiles): RSS=3870.97MB, Available=2757.44MB
+2026-02-04 11:56:57,381 - shared.diagnostics - INFO - Memory usage (after 3050 tiles): RSS=4016.88MB, Available=3168.76MB
+2026-02-04 11:56:58,829 - shared.diagnostics - INFO - Memory usage (after 3100 tiles): RSS=4038.98MB, Available=3287.77MB
+2026-02-04 11:57:00,167 - shared.diagnostics - INFO - Memory usage (after 3150 tiles): RSS=4184.93MB, Available=3455.84MB
+2026-02-04 11:57:01,758 - shared.diagnostics - INFO - Memory usage (after 3200 tiles): RSS=4330.84MB, Available=3870.43MB
+2026-02-04 11:57:03,178 - shared.diagnostics - INFO - Memory usage (after 3250 tiles): RSS=4480.91MB, Available=3888.04MB
+2026-02-04 11:57:04,709 - shared.diagnostics - INFO - Memory usage (after 3300 tiles): RSS=4626.91MB, Available=4301.09MB
+2026-02-04 11:57:05,824 - shared.diagnostics - INFO - Memory usage (after 3350 tiles): RSS=4772.78MB, Available=4052.94MB
+2026-02-04 11:57:07,056 - shared.diagnostics - INFO - Memory usage (after 3400 tiles): RSS=4922.88MB, Available=4015.89MB
+2026-02-04 11:57:08,394 - shared.diagnostics - INFO - Memory usage (after 3450 tiles): RSS=5068.78MB, Available=4015.8MB
+2026-02-04 11:57:09,693 - shared.diagnostics - INFO - Memory usage (after 3500 tiles): RSS=5214.69MB, Available=3681.49MB
+2026-02-04 11:57:10,842 - shared.diagnostics - INFO - Memory usage (after 3550 tiles): RSS=5364.64MB, Available=3650.61MB
+2026-02-04 11:57:12,137 - shared.diagnostics - INFO - Memory usage (after 3600 tiles): RSS=5510.72MB, Available=3347.63MB
+2026-02-04 11:57:13,547 - shared.diagnostics - INFO - Memory usage (after 3650 tiles): RSS=5528.62MB, Available=3414.74MB
+2026-02-04 11:57:14,719 - shared.diagnostics - INFO - Memory usage (after 3700 tiles): RSS=5673.24MB, Available=3273.95MB
+2026-02-04 11:57:16,023 - shared.diagnostics - INFO - Memory usage (after 3750 tiles): RSS=5825.25MB, Available=3049.69MB
+2026-02-04 11:57:17,447 - shared.diagnostics - INFO - Memory usage (after 3800 tiles): RSS=5846.17MB, Available=3013.36MB
+2026-02-04 11:57:18,690 - shared.diagnostics - INFO - Memory usage (after 3850 tiles): RSS=5992.08MB, Available=2974.87MB
+2026-02-04 11:57:20,003 - shared.diagnostics - INFO - Memory usage (after 3900 tiles): RSS=6142.16MB, Available=2823.43MB
+2026-02-04 11:57:20,969 - shared.diagnostics - INFO - Memory usage (after 3950 tiles): RSS=6230.9MB, Available=2561.15MB
+2026-02-04 11:57:25,881 - shared.diagnostics - INFO - Memory usage (after all tiles processed): RSS=6149.69MB, Available=2807.63MB
+2026-02-04 11:57:25,890 - shared.diagnostics - INFO - Thread status (after all tiles processed): Active=4, System=38
+2026-02-04 11:57:25,890 - services.processors.xyz_tiles - INFO - Tile timing breakdown (cumulative across 3996 tiles):
+  - Fetch (cache/network): 31.54s
+  - Process (np/resize):   13.31s
+  - Paste (mmap write):    48.67s
+  - Total wall clock:      95.32s
+2026-02-04 11:57:25,891 - services.processors.xyz_tiles - INFO - Tile processing complete: 74358x53986
+2026-02-04 11:57:25,899 - services.map_download_service - INFO - Поворот изображения ПРОПУЩЕН (0.60° < 3.0°) — сетка будет под углом
+2026-02-04 11:57:25,900 - services.map_download_service - INFO - Поворот изображения — завершён (0.00s)
+2026-02-04 11:57:25,921 - shared.diagnostics - INFO - Memory usage (after rotation): RSS=6152.45MB, Available=2791.75MB
+2026-02-04 11:57:25,921 - services.map_download_service - INFO - Обрезка к целевому размеру — старт
+2026-02-04 11:57:25,922 - services.map_download_service - INFO - Обрезка к целевому размеру — завершена (0.00s)
+2026-02-04 11:57:25,922 - shared.diagnostics - INFO - Memory usage (after cropping): RSS=6152.48MB, Available=2791.81MB
+2026-02-04 11:57:25,922 - services.map_download_service - INFO - Рисование км-сетки — старт
+2026-02-04 11:57:25,925 - imaging.text - INFO - Адаптивный размер шрифта сетки: 120 px (mpp=0.196348, target=50.0 м, range=[12,120])
+2026-02-04 11:59:09,463 - services.map_download_service - INFO - Рисование оверлеев — завершено (103.54s)
+2026-02-04 11:59:09,469 - shared.diagnostics - INFO - Memory usage (after overlays): RSS=6132.81MB, Available=3943.5MB
+2026-02-04 11:59:09,561 - tiles.writer - INFO - CacheWriter stopped: 0 tiles written, 0 dropped
+2026-02-04 11:59:09,562 - services.map_download_service - INFO - Tile cache: 3996 hits, 0 misses (100.0% hit rate), 0 downloads, 0 errors
+2026-02-04 11:59:09,846 - tiles.cache - INFO - TileCache closed
+2026-02-04 11:59:09,909 - services.map_download_service - INFO - Публикация предпросмотра — старт
+2026-02-04 11:59:09,910 - imaging.pyramid - INFO - Building pyramid from StreamingImage 74358x53986, max_base=8192
+2026-02-04 11:59:09,910 - imaging.pyramid - INFO - Pyramid base level: 8192x5947 (scale 0.1102 from 74358x53986)
+2026-02-04 11:59:42,967 - imaging.pyramid - INFO - Pyramid built: 6 levels, sizes: ['8192x5947', '4096x2973', '2048x1486', '1024x743', '512x371', '256x185']
+2026-02-04 11:59:42,981 - services.map_download_service - INFO - Map resolution at center: 0.1963 m/px (zoom 17, scale 4)
+2026-02-04 11:59:43,005 - services.map_download_service - INFO - Публикация предпросмотра — успех (33.10s)
+2026-02-04 11:59:43,005 - services.map_download_service - INFO - Сохранение файла — старт (размер: 74358x53986 = 4014.3M пикселей)
+2026-02-04 11:59:43,027 - gui.view - WARNING - Invalid image object for preview: <class 'NoneType'>
+2026-02-04 11:59:43,653 - gui.preview_window - INFO - Pyramid set: original 74358x53986, base level 8192x5947, scale 0.1102
+2026-02-04 11:59:43,653 - gui.view - INFO - Pyramid preview displayed: original 74358x53986, base 8192x5947
+2026-02-04 11:59:43,799 - imaging.streaming - INFO - Saving TIFF: ..\maps\map.tif (74358x53986 = 4014.3M pixels, compression=jpeg, quality=95)
+2026-02-04 12:00:09,944 - imaging.streaming - INFO - TIFF saved: ..\maps\map.tif
+2026-02-04 12:00:10,056 - services.map_download_service - INFO - Сохранение файла — завершено (27.05s)
+2026-02-04 12:00:10,058 - shared.diagnostics - INFO - Memory usage (after file save): RSS=9712.97MB, Available=470.32MB
+2026-02-04 12:00:10,069 - gui.view - WARNING - Invalid image object for preview: <class 'NoneType'>
+2026-02-04 12:00:11,854 - gui.preview_window - INFO - Pyramid set: original 74358x53986, base level 8192x5947, scale 0.1102
+2026-02-04 12:00:11,854 - gui.view - INFO - Pyramid preview displayed: original 74358x53986, base 8192x5947
+2026-02-04 12:00:12,569 - services.map_download_service - INFO - Сборка мусора — старт
+2026-02-04 12:00:12,757 - services.map_download_service - INFO - Сборка мусора — завершена (0.19s)
+2026-02-04 12:00:12,757 - shared.diagnostics - INFO - Memory usage (after garbage collection): RSS=629.6MB, Available=8196.52MB
+2026-02-04 12:00:12,763 - shared.diagnostics - INFO - Thread status (final cleanup): Active=3, System=48
+2026-02-04 12:00:12,763 - services.map_download_service - INFO - === ОБЩИЙ ТАЙМЕР: завершён MapDownloadService.download (284.24s) ===
+2026-02-04 12:00:12,769 - shared.diagnostics - INFO - Memory usage (after download complete): RSS=630.39MB, Available=8193.91MB
+2026-02-04 12:00:12,769 - gui.model - INFO - Download completed successfully
+2026-02-04 12:00:12,769 - gui.controller - INFO - Загрузка завершена успешно
+2026-02-04 12:00:12,769 - shared.diagnostics - INFO - Operation 'MAP_DOWNLOAD' completed in 286.27 seconds
+2026-02-04 12:00:13,310 - shared.diagnostics - INFO - Resource changes detected: {'memory': {'process_rss_mb': '231.08 -> 630.4 (+399.31999999999994)', 'process_vms_mb': '1106.36 -> 1699.09 (+592.73)', 'system_available_mb': '4892.81 -> 8193.38 (+3300.569999999999)', 'system_used_percent': '65.5 -> 42.2 (-23.299999999999997)', 'process_memory_percent': '1.63 -> 4.45 (+2.8200000000000003)'}, 'threads': {'active_count': '2 -> 3 (+1)'}, 'files': {}}
+2026-02-04 12:00:13,310 - shared.diagnostics - INFO - === DIAGNOSTIC INFO: MAP_DOWNLOAD - END ===
+2026-02-04 12:00:13,310 - shared.diagnostics - INFO - Memory - RSS: 632.73MB, VMS: 1700.11MB, System Available: 8144.91MB (42.5% used)
+2026-02-04 12:00:13,315 - shared.diagnostics - INFO - Threads - Active: 3, System: 49, Main alive: True
+2026-02-04 12:00:13,644 - shared.diagnostics - INFO - Resources - Open files: 411, Network connections: 2
+2026-02-04 12:00:13,746 - shared.diagnostics - INFO - System - CPU: 10.7%, Load avg: N/A
+2026-02-04 12:00:13,748 - shared.diagnostics - INFO - SQLite - Cache files: 4
+2026-02-04 12:00:13,753 - shared.diagnostics - INFO - Active threads: MainThread, Dummy-1, asyncio_0
+2026-02-04 12:00:13,753 - shared.diagnostics - INFO - === END DIAGNOSTIC INFO: MAP_DOWNLOAD - END ===
+2026-02-04 12:00:13,761 - gui.workers.download_worker - INFO - DownloadWorker completed successfully
+2026-02-04 12:00:13,765 - shared.diagnostics - INFO - Thread status (worker thread end): Active=2, System=48
+2026-02-04 12:00:13,767 - shared.diagnostics - INFO - Memory usage (worker thread end): RSS=633.23MB, Available=8156.12MB
+2026-02-04 12:00:13,770 - tiles.cache - INFO - TileCache initialized at C:\Users\vlaki\.sk24mapper\cache\tiles
+2026-02-04 12:00:17,783 - tiles.cache - INFO - TileCache closed
+2026-02-04 12:00:37,492 - gui.view - INFO - Starting save operation to: C:\programming\SK24mapper\maps\map.jpg
+2026-02-04 12:00:37,493 - gui.view - INFO - Saving map with JPEG quality: 95%
+2026-02-04 12:00:38,089 - gui.view - INFO - [SAVE_DEBUG] _on_save_complete called: success=True
+2026-02-04 12:00:38,089 - gui.view - INFO - Image saved to: C:\programming\SK24mapper\maps\map.jpg

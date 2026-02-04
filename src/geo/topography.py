@@ -14,6 +14,7 @@ from pyproj.transformer import TransformerGroup
 
 from shared.constants import (
     _DEM_CACHE_MAX_SIZE,
+    DEM_CACHE_ENABLED,
     EARTH_RADIUS_M,
     EAST_VECTOR_SAMPLE_M,
     ELEV_MIN_RANGE_M,
@@ -179,9 +180,17 @@ def choose_zoom_with_limit(
     max_pixels: int,
 ) -> int:
     """Выбирает максимально возможный zoom, не превышающий max_pixels по площади."""
+    import logging
+    _logger = logging.getLogger(__name__)
     zoom = desired_zoom
     while zoom >= 0:
-        _, _, total = estimate_crop_size_px(center_lat, width_m, height_m, zoom, scale)
+        w_px, h_px, total = estimate_crop_size_px(center_lat, width_m, height_m, zoom, scale)
+        _logger.debug(
+            'choose_zoom: z=%d, lat=%.4f, size_m=(%.0f x %.0f), scale=%d, '
+            'px=(%d x %d)=%dM, limit=%dM',
+            zoom, center_lat, width_m, height_m, scale,
+            w_px, h_px, total // 1_000_000, max_pixels // 1_000_000,
+        )
         if total <= max_pixels:
             return zoom
         zoom -= 1
@@ -408,7 +417,13 @@ async def async_fetch_xyz_tile(
                     data = await resp.read()
                     # Контент может быть png/jpg/webp — PIL откроет всё;
                     # конвертируем в RGB
-                    return Image.open(BytesIO(data)).convert('RGB')
+                    img = Image.open(BytesIO(data)).convert('RGB')
+                    # Диагностика: логируем размер первого тайла
+                    logging.getLogger(__name__).debug(
+                        'XYZ tile z=%d x=%d y=%d: requested ts=%d retina=%s, got %dx%d',
+                        z, x, y, ts, use_retina, img.width, img.height
+                    )
+                    return img
                 if sc in (HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN):
                     msg = (
                         f'Доступ запрещён (HTTP {sc}). Проверьте токен и права. '
@@ -561,11 +576,15 @@ _dem_tile_cache: dict[tuple[int, int, int], np.ndarray] = {}
 
 def get_cached_dem_tile(z: int, x: int, y: int) -> np.ndarray | None:
     """Возвращает закэшированный DEM-тайл или None."""
+    if not DEM_CACHE_ENABLED:
+        return None
     return _dem_tile_cache.get((z, x, y))
 
 
 def cache_dem_tile(z: int, x: int, y: int, dem: np.ndarray) -> None:
     """Кэширует DEM-тайл с ограничением размера кэша."""
+    if not DEM_CACHE_ENABLED:
+        return
     if len(_dem_tile_cache) >= _DEM_CACHE_MAX_SIZE:
         # Удаляем самый старый элемент (FIFO)
         oldest_key = next(iter(_dem_tile_cache))
@@ -752,16 +771,31 @@ def latlng_to_final_pixel(
 def compute_rotation_deg_for_east_axis(
     center_lat_sk42: float,
     center_lng_sk42: float,
-    map_params: tuple[float, float, float, int, int, int, int],
+    map_params: tuple[float, float, float, int, int, int, int] | None,
     crs_sk42_gk: CRS,
     t_sk42_to_wgs: Transformer,
+    zoom: int | None = None,
+    scale: int | None = None,
 ) -> float:
     """
     Вычисляет угол поворота оси «восток» СК‑42/ГК.
 
     Поворачивает исходное изображение так, чтобы ось «восток»
     (X в СК‑42/ГК) стала строго горизонтальной.
+
+    Можно вызвать либо с map_params, либо с zoom+scale напрямую.
+    При передаче zoom+scale map_params игнорируется.
     """
+    # Определяем zoom и scale
+    if zoom is not None and scale is not None:
+        effective_zoom = zoom
+        effective_scale = scale
+    elif map_params is not None:
+        effective_zoom = map_params[6]  # zoom
+        effective_scale = map_params[3]  # scale
+    else:
+        return 0.0
+
     t_sk42gk_from_sk42 = Transformer.from_crs(
         crs_sk42_geog,
         crs_sk42_gk,
@@ -782,8 +816,10 @@ def compute_rotation_deg_for_east_axis(
     lon_s1, lat_s1 = t_sk42_from_sk42gk.transform(x1_gk, y1_gk)
     lon_w1, lat_w1 = t_sk42_to_wgs.transform(lon_s1, lat_s1)
 
-    p0x, p0y = latlng_to_final_pixel(lat_w0, lon_w0, map_params)
-    p1x, p1y = latlng_to_final_pixel(lat_w1, lon_w1, map_params)
+    # Вычисляем пиксельные координаты напрямую (crop не влияет на угол)
+    p0x, p0y = latlng_to_pixel_xy(lat_w0, lon_w0, effective_zoom)
+    p1x, p1y = latlng_to_pixel_xy(lat_w1, lon_w1, effective_zoom)
+    # Scale не влияет на угол, только на абсолютные координаты
     vx, vy = (p1x - p0x), (p1y - p0y)
 
     angle_rad = math.atan2(vy, vx)

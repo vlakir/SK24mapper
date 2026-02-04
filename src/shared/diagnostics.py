@@ -1,5 +1,4 @@
-"""
-Diagnostic utilities.
+"""Diagnostic utilities.
 
 This module monitors system resources and detects potential hanging issues.
 """
@@ -9,25 +8,16 @@ import contextlib
 import io
 import logging
 import os
-import sqlite3
 import ssl
 import threading
 import time
 import types
-from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
 import aiohttp
 import certifi
 import psutil
-from aiohttp import TCPConnector
-from aiohttp_client_cache import (
-    CachedSession as _CachedSession,
-)
-from aiohttp_client_cache import (
-    SQLiteBackend as _SQLiteBackend,
-)
 from PIL import Image
 
 from geo.topography import (
@@ -36,16 +26,12 @@ from geo.topography import (
 )
 from shared.constants import (
     ELEVATION_USE_RETINA,
-    HTTP_CACHE_DIR,
-    HTTP_CACHE_ENABLED,
-    HTTP_CACHE_EXPIRE_HOURS,
-    HTTP_CACHE_RESPECT_HEADERS,
-    HTTP_CACHE_STALE_IF_ERROR_HOURS,
     HTTP_FORBIDDEN,
     HTTP_OK,
     HTTP_UNAUTHORIZED,
     MAPBOX_STATIC_BASE,
     MAPBOX_TERRAIN_RGB_PATH,
+    TILE_CACHE_DIR,
     MapType,
     default_map_type,
     map_type_to_style_id,
@@ -53,15 +39,6 @@ from shared.constants import (
 from shared.constants import PSUTIL_AVAILABLE as _PSUTIL_AVAILABLE
 
 logger = logging.getLogger(__name__)
-
-# --- Кэш/HTTP проверка для Terrain-RGB
-CachedSession: Any
-SQLiteBackend: Any
-
-
-CachedSession = _CachedSession
-SQLiteBackend = _SQLiteBackend
-_AIOHTTP_CACHE_AVAILABLE = True
 
 
 def get_memory_info() -> dict[str, Any]:
@@ -121,11 +98,9 @@ def get_file_descriptor_info() -> dict[str, Any]:
     try:
         process = psutil.Process()
         open_files = len(process.open_files())
-        # Use net_connections() instead of deprecated connections()
         try:
             connections = len(process.net_connections())
         except AttributeError:
-            # Fallback for older psutil versions
             connections = len(process.connections())
     except Exception as e:
         return {'error': f'Failed to get file descriptor info: {e}'}
@@ -140,15 +115,20 @@ def get_file_descriptor_info() -> dict[str, Any]:
 def get_sqlite_info() -> dict[str, Any]:
     """Get SQLite connection information from cache directories."""
     try:
-        # Check cache directory for SQLite files
-        repo_root = Path(__file__).resolve().parent.parent
-        cache_dir = repo_root / '.cache'
+        # Check tile cache directory for SQLite files
+        cache_dir = Path(TILE_CACHE_DIR)
+        if not cache_dir.is_absolute():
+            local = os.getenv('LOCALAPPDATA')
+            cache_dir = (
+                (Path(local) / 'SK42mapper' / '.cache' / 'tiles').resolve()
+                if local
+                else (Path.home() / '.sk42mapper_cache' / 'tiles').resolve()
+            )
 
         sqlite_files = []
         if cache_dir.exists():
-            for sqlite_file in cache_dir.rglob('*.sqlite*'):
+            for sqlite_file in cache_dir.rglob('*.db'):
                 try:
-                    # Try to get file info
                     stat = sqlite_file.stat()
                     sqlite_files.append(
                         {
@@ -289,6 +269,7 @@ def log_thread_status(context: str = '') -> None:
 
 
 def _ensure_writable_dir(path: Path) -> None:
+    """Ensure directory exists and is writable."""
     try:
         path.mkdir(parents=True, exist_ok=True)
         test_file = path / '.write_test.tmp'
@@ -299,21 +280,17 @@ def _ensure_writable_dir(path: Path) -> None:
 
 
 async def run_deep_verification(*, api_key: str, settings: object) -> None:
-    """
-    Глубокая проверка перед стартом тяжёлой обработки.
+    """Deep verification before starting heavy processing.
 
-    Проверяет:
-    - Наличие API-ключа.
-    - Доступность соответствующего источника (Styles или Terrain-RGB)
-      в зависимости от типа карты.
-    - Возможность записи в каталог кэша HTTP.
-    - Возможность записи в каталог вывода.
-    - Для Terrain-RGB: пробную загрузку маленького тайла и декодирование
-      DEM -> цвет.
+    Checks:
+    - API key presence
+    - Source availability (Styles or Terrain-RGB) based on map type
+    - Write access to tile cache directory
+    - Write access to output directory
+    - For Terrain-RGB: test download and DEM decode
 
-    Не логирует токен; в логах — только пути без query.
-    В случае проблем выбрасывает RuntimeError с понятным сообщением для
-    пользователя.
+    Does not log the token; paths in logs without query params.
+    Raises RuntimeError with user-friendly message on failure.
     """
     # 1) API key presence
     if not api_key:
@@ -331,10 +308,8 @@ async def run_deep_verification(*, api_key: str, settings: object) -> None:
         mt_enum = default_map_type()
 
     # 3) Cache directory writability
-    # 3) Cache directory writability
-    cache_dir = Path(HTTP_CACHE_DIR)
+    cache_dir = Path(TILE_CACHE_DIR)
     if not cache_dir.is_absolute():
-        # Mirror logic similar to service._resolve_cache_dir()
         local = os.getenv('LOCALAPPDATA')
         cache_dir = (
             (Path(local) / 'SK42mapper' / '.cache' / 'tiles').resolve()
@@ -382,7 +357,6 @@ async def run_deep_verification(*, api_key: str, settings: object) -> None:
                         )
                         raise RuntimeError(msg)
                 except asyncio.CancelledError:
-                    # важно не маскировать отмену задач
                     raise
                 except (TimeoutError, aiohttp.ClientError, OSError) as e:
                     if i < attempts - 1:
@@ -407,7 +381,6 @@ async def run_deep_verification(*, api_key: str, settings: object) -> None:
         ssl_context = ssl.create_default_context(cafile=certifi.where())
         connector = aiohttp.TCPConnector(ssl=ssl_context)
 
-        # Try z=0/x=0/y=0
         path = f'{MAPBOX_TERRAIN_RGB_PATH}/0/0/0.pngraw'
         url = f'{path}?access_token={api_key}'
         timeout = aiohttp.ClientTimeout(
@@ -486,11 +459,6 @@ async def run_deep_verification(*, api_key: str, settings: object) -> None:
         logger.info('Глубокая проверка: Terrain-RGB (%s)', mt_enum)
         try:
             await _check_terrain_small()
-            # Дополнительно: глубокая проверка кэширования Terrain-RGB
-            try:
-                await verify_cache_for_terrain(api_key)
-            except Exception as e:
-                logger.warning('Проверка кэширования не удалась или пропущена: %s', e)
         except RuntimeError:
             raise
         except Exception as e:
@@ -509,136 +477,6 @@ async def run_deep_verification(*, api_key: str, settings: object) -> None:
             raise RuntimeError(msg) from e
 
     logger.info('Глубокая проверка успешно пройдена')
-
-
-async def _make_cached_session_for_diag() -> aiohttp.ClientSession:
-    """
-    Создаёт CachedSession с теми же параметрами, что в сервисе, для проверки кэша.
-
-    Возвращает aiohttp.ClientSession, если кэш отключён или библиотека недоступна.
-    """
-    # Создать SSL-контекст с сертификатами из certifi
-    ssl_context = ssl.create_default_context(cafile=certifi.where())
-    connector = TCPConnector(ssl=ssl_context)
-
-    if not HTTP_CACHE_ENABLED or not _AIOHTTP_CACHE_AVAILABLE:
-        return aiohttp.ClientSession(connector=connector)
-
-    # Разрешаем каталог кэша аналогично service._resolve_cache_dir
-    raw_dir = Path(HTTP_CACHE_DIR)
-    if raw_dir.is_absolute():
-        cache_dir = raw_dir
-    else:
-        local = os.getenv('LOCALAPPDATA')
-        cache_dir = (
-            (Path(local) / 'SK42mapper' / '.cache' / 'tiles').resolve()
-            if local
-            else (Path.home() / '.sk42mapper_cache' / 'tiles').resolve()
-        )
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    cache_path = cache_dir / 'http_cache.sqlite'
-    # Инициализация WAL
-    try:
-        if not cache_path.exists():
-            with sqlite3.connect(cache_path) as _conn:
-                _conn.execute('PRAGMA journal_mode=WAL;')
-    except Exception as e:
-        logger.debug('Failed to init WAL for cache DB at %s: %s', cache_path, e)
-
-    expire_td = timedelta(hours=max(0, int(HTTP_CACHE_EXPIRE_HOURS)))
-    stale_hours = int(HTTP_CACHE_STALE_IF_ERROR_HOURS)
-    stale_param = timedelta(hours=stale_hours) if stale_hours > 0 else False
-
-    # Build SQLiteBackend with RAM cache disabled when supported by the library version
-    backend = None
-    last_err = None
-    for kwargs in (
-        {'expire_after': expire_td, 'use_memory_cache': False, 'cache_capacity': 0},
-        {'expire_after': expire_td, 'use_memory_cache': False},
-        {'expire_after': expire_td, 'cache_capacity': 0},
-        {'expire_after': expire_td},
-    ):
-        try:
-            backend = SQLiteBackend(str(cache_path), **kwargs)
-            break
-        except TypeError as e:
-            last_err = e
-            continue
-    if backend is None:
-        raise last_err  # type: ignore[misc]
-    return CachedSession(
-        cache=backend,
-        connector=connector,
-        expire_after=expire_td,
-        cache_control=bool(HTTP_CACHE_RESPECT_HEADERS),
-        stale_if_error=stale_param,
-    )
-
-
-async def verify_cache_for_terrain(api_key: str) -> None:
-    """
-    Глубокая проверка кэширования Terrain‑RGB: два запроса одного и того же тайла.
-
-    Логируются статус, признак from_cache и размер тела. Токен не печатается.
-    """
-    if not HTTP_CACHE_ENABLED:
-        logger.info('Кэширование HTTP отключено — проверка кэширования пропущена')
-        return
-
-    scale_suffix = '@2x' if ELEVATION_USE_RETINA else ''
-    z, x, y = 0, 0, 0
-    path = f'{MAPBOX_TERRAIN_RGB_PATH}/{z}/{x}/{y}{scale_suffix}.pngraw'
-    url = f'{path}?access_token={api_key}'
-
-    async with await _make_cached_session_for_diag() as client:
-
-        async def fetch(iter_no: int) -> tuple[int, int, bool, int]:
-            try:
-                resp = await client.get(url, timeout=aiohttp.ClientTimeout(total=10))
-                try:
-                    status = getattr(resp, 'status', 0)
-                    from_cache = bool(getattr(resp, 'from_cache', False))
-                    body = await resp.read()
-                    size = len(body or b'')
-                finally:
-                    with contextlib.suppress(Exception):
-                        close = getattr(resp, 'close', None)
-                        if callable(close):
-                            close()
-                        release = getattr(resp, 'release', None)
-                        if callable(release):
-                            release()
-            except Exception as e:
-                logger.warning(
-                    'Cache check failed (iter=%s) for path=%s: %s', iter_no, path, e
-                )
-                return 0, 0, False, iter_no
-            else:
-                logger.info(
-                    'Cache check iter=%s z/x/y=%s/%s/%s status=%s from_cache=%s '
-                    'size=%s bytes path=%s',
-                    iter_no,
-                    z,
-                    x,
-                    y,
-                    status,
-                    from_cache,
-                    size,
-                    path,
-                )
-                return status, size, from_cache, iter_no
-
-        s1, b1, c1, _ = await fetch(1)
-        s2, b2, c2, _ = await fetch(2)
-        http_not_modified = 304  # RFC 7232
-        hits = int(c2 or s2 == http_not_modified)
-        logger.info(
-            'Cache deep verification summary: second-iter '
-            'hits/revalidated=%s/1; bytes first=%s, second=%s',
-            hits,
-            b1,
-            b2,
-        )
 
 
 def monitor_resource_changes(

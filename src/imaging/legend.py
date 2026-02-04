@@ -34,6 +34,132 @@ from shared.constants import (
 logger = logging.getLogger(__name__)
 
 
+def compute_legend_bounds(
+    img_width: int,
+    img_height: int,
+    center_lat_wgs: float,
+    zoom: int,
+    scale: int = STATIC_SCALE,
+    title: str | None = None,
+) -> tuple[int, int, int, int]:
+    """
+    Compute legend bounding box without drawing.
+
+    Returns (x1, y1, x2, y2) - the area that the legend will occupy.
+    This can be used to load only the necessary region for drawing.
+
+    Args:
+        img_width: Image width in pixels.
+        img_height: Image height in pixels.
+        center_lat_wgs: Center latitude in WGS84.
+        zoom: Map zoom level.
+        scale: Scale factor (1 or 2 for retina).
+        title: Optional legend title.
+
+    Returns:
+        Tuple (x1, y1, x2, y2) of legend bounds with padding.
+
+    """
+    w, h = img_width, img_height
+
+    mpp = meters_per_pixel(center_lat_wgs, zoom, scale=scale)
+    ppm = 1.0 / mpp if mpp > 0 else 0.0
+
+    map_height_m = h * mpp
+
+    if map_height_m < LEGEND_MIN_MAP_HEIGHT_M_FOR_RATIO:
+        legend_height = int(LEGEND_MIN_HEIGHT_GRID_SQUARES * GRID_STEP_M * ppm)
+    else:
+        legend_height = int(h * LEGEND_HEIGHT_RATIO)
+
+    min_legend_height = max(1, int(h * LEGEND_HEIGHT_MIN_RATIO))
+    max_legend_height = max(min_legend_height, int(h * LEGEND_HEIGHT_MAX_RATIO))
+    legend_height = max(min_legend_height, min(legend_height, max_legend_height))
+
+    legend_width = int(legend_height * LEGEND_WIDTH_TO_HEIGHT_RATIO)
+    margin = int(legend_height * LEGEND_MARGIN_RATIO)
+
+    font_size = int(legend_height * LEGEND_LABEL_FONT_RATIO)
+    font_size = max(LEGEND_LABEL_FONT_MIN_PX, min(font_size, LEGEND_LABEL_FONT_MAX_PX))
+
+    grid_square_px = GRID_STEP_M * ppm
+
+    last_square_right = w - margin
+    legend_center_x = last_square_right - grid_square_px * LEGEND_HORIZONTAL_POSITION_RATIO
+    legend_x = int(legend_center_x - legend_width / 2.0)
+
+    first_grid_line_y = h - grid_square_px
+    legend_y = int(
+        first_grid_line_y - legend_height - grid_square_px * LEGEND_VERTICAL_OFFSET_RATIO
+    )
+
+    text_width_estimate = font_size * 6
+    text_offset_px = max(1, round(LEGEND_TEXT_OFFSET_M * ppm))
+    legend_total_width = legend_width + text_offset_px + text_width_estimate
+
+    # Estimate title height if provided
+    title_block_height = 0
+    title_gap_px = 0
+    title_extra_offset_px = 0
+    if title:
+        title_gap_px = max(1, round(LEGEND_TEXT_OFFSET_M * ppm))
+        # Estimate title lines (rough approximation)
+        chars_per_line = max(1, int(legend_total_width / (font_size * 0.6)))
+        num_lines = max(1, (len(title) + chars_per_line - 1) // chars_per_line)
+        title_line_height = font_size + 4
+        title_line_gap_px = max(0, round(title_line_height * 0.15))
+        title_block_height = title_line_height * num_lines + title_line_gap_px * (num_lines - 1)
+        title_extra_offset_px = max(1, int(legend_height * LEGEND_TITLE_OFFSET_RATIO))
+        # Estimate title width
+        title_block_width = min(len(title) * int(font_size * 0.6), legend_total_width * 2)
+        legend_total_width = max(legend_total_width, title_block_width)
+
+    legend_total_height = legend_height + (
+        title_block_height + title_gap_px + title_extra_offset_px if title else 0
+    )
+
+    bg_padding_px = max(1, round(LEGEND_BACKGROUND_PADDING_M * ppm))
+    bg_padding_x = max(int(legend_total_width * 0.10), bg_padding_px)
+    bg_padding_y = max(int(legend_total_height * 0.10), bg_padding_px)
+
+    title_y = legend_y
+    if title:
+        title_y = legend_y - title_gap_px - title_block_height - title_extra_offset_px
+
+    bg_x1 = legend_x - bg_padding_x
+    bg_y1 = title_y - bg_padding_y
+    bg_x2 = legend_x + legend_total_width + bg_padding_x
+    bg_y2 = legend_y + legend_height + bg_padding_y
+
+    # Shift inside image bounds
+    if bg_x1 < 0:
+        shift_x = -bg_x1
+        bg_x1 += shift_x
+        bg_x2 += shift_x
+    if bg_x2 > w:
+        shift_x = w - bg_x2
+        bg_x1 += shift_x
+        bg_x2 += shift_x
+
+    if bg_y1 < 0:
+        shift_y = -bg_y1
+        bg_y1 += shift_y
+        bg_y2 += shift_y
+    if bg_y2 > h:
+        shift_y = h - bg_y2
+        bg_y1 += shift_y
+        bg_y2 += shift_y
+
+    # Add extra padding for safety
+    extra_pad = max(20, int(legend_height * 0.1))
+    return (
+        max(0, int(bg_x1) - extra_pad),
+        max(0, int(bg_y1) - extra_pad),
+        min(w, int(bg_x2) + extra_pad),
+        min(h, int(bg_y2) + extra_pad),
+    )
+
+
 def draw_elevation_legend(
     img: Image.Image,
     color_ramp: list[tuple[float, tuple[int, int, int]]],
@@ -349,3 +475,282 @@ def draw_elevation_legend(
         bg_x2 + gap_padding,
         bg_y2 + gap_padding,
     )
+
+
+def draw_elevation_legend_on_region(
+    img: Image.Image,
+    region_offset: tuple[int, int],
+    full_img_size: tuple[int, int],
+    color_ramp: list[tuple[float, tuple[int, int, int]]],
+    min_elevation_m: float,
+    max_elevation_m: float,
+    center_lat_wgs: float,
+    zoom: int,
+    scale: int = STATIC_SCALE,
+    title: str | None = None,
+    label_step_m: float | None = None,
+) -> None:
+    """
+    Draw elevation legend on a region (sub-image) of the full map.
+
+    This is an optimized version that draws on a small region instead of
+    the full image, significantly reducing memory usage for large maps.
+
+    Args:
+        img: Region image to draw on (modified in place).
+        region_offset: (x, y) offset of the region in the full image.
+        full_img_size: (width, height) of the full image.
+        color_ramp: Color palette [(t, (R, G, B)), ...] where t in [0, 1].
+        min_elevation_m: Minimum elevation in meters.
+        max_elevation_m: Maximum elevation in meters.
+        center_lat_wgs: Center latitude in WGS84.
+        zoom: Map zoom level.
+        scale: Scale factor (1 or 2 for retina).
+        title: Optional legend title.
+        label_step_m: Optional label step for elevation rounding.
+
+    """
+
+    def _wrap_legend_title(
+        draw_obj: ImageDraw.ImageDraw,
+        text: str,
+        title_font: ImageFont.ImageFont,
+        max_width_px: int,
+    ) -> list[str]:
+        def _text_width(candidate: str) -> int:
+            bbox = draw_obj.textbbox((0, 0), candidate, font=title_font, anchor='lt')
+            return int(bbox[2] - bbox[0])
+
+        words = text.split()
+        if not words:
+            return [text]
+
+        lines: list[str] = []
+        current = ''
+        for word in words:
+            candidate = word if not current else f'{current} {word}'
+            if _text_width(candidate) <= max_width_px:
+                current = candidate
+                continue
+            if current:
+                lines.append(current)
+            current = word
+
+        if current:
+            lines.append(current)
+        return lines
+
+    offset_x, offset_y = region_offset
+    full_w, full_h = full_img_size
+
+    draw = ImageDraw.Draw(img)
+
+    mpp = meters_per_pixel(center_lat_wgs, zoom, scale=scale)
+    ppm = 1.0 / mpp if mpp > 0 else 0.0
+
+    map_height_m = full_h * mpp
+
+    if map_height_m < LEGEND_MIN_MAP_HEIGHT_M_FOR_RATIO:
+        legend_height = int(LEGEND_MIN_HEIGHT_GRID_SQUARES * GRID_STEP_M * ppm)
+    else:
+        legend_height = int(full_h * LEGEND_HEIGHT_RATIO)
+
+    min_legend_height = max(1, int(full_h * LEGEND_HEIGHT_MIN_RATIO))
+    max_legend_height = max(min_legend_height, int(full_h * LEGEND_HEIGHT_MAX_RATIO))
+    legend_height = max(min_legend_height, min(legend_height, max_legend_height))
+
+    legend_width = int(legend_height * LEGEND_WIDTH_TO_HEIGHT_RATIO)
+    margin = int(legend_height * LEGEND_MARGIN_RATIO)
+
+    font_size = int(legend_height * LEGEND_LABEL_FONT_RATIO)
+    font_size = max(LEGEND_LABEL_FONT_MIN_PX, min(font_size, LEGEND_LABEL_FONT_MAX_PX))
+
+    try:
+        font = load_grid_font(font_size)
+    except Exception:
+        font = ImageFont.load_default()
+
+    grid_square_px = GRID_STEP_M * ppm
+
+    last_square_right = full_w - margin
+    legend_center_x = last_square_right - grid_square_px * LEGEND_HORIZONTAL_POSITION_RATIO
+    legend_x = int(legend_center_x - legend_width / 2.0)
+
+    first_grid_line_y = full_h - grid_square_px
+    legend_y = int(
+        first_grid_line_y - legend_height - grid_square_px * LEGEND_VERTICAL_OFFSET_RATIO
+    )
+
+    text_width_estimate = font_size * 6
+    text_offset_px = max(1, round(LEGEND_TEXT_OFFSET_M * ppm))
+    legend_total_width = legend_width + text_offset_px + text_width_estimate
+
+    title_lines = None
+    title_gap_px = 0
+    title_line_height = 0
+    title_line_gap_px = 0
+    title_block_width = 0
+    title_block_height = 0
+    title_extra_offset_px = 0
+
+    if title:
+        title_gap_px = max(1, round(LEGEND_TEXT_OFFSET_M * ppm))
+        max_title_width = legend_total_width
+        title_lines = _wrap_legend_title(draw, title, font, max_title_width)
+        title_sizes = [
+            draw.textbbox((0, 0), line, font=font, anchor='lt') for line in title_lines
+        ]
+        title_line_height = int(max(1, *(bbox[3] - bbox[1] for bbox in title_sizes)))
+        title_line_gap_px = max(0, round(title_line_height * 0.15))
+        title_block_width = int(max(bbox[2] - bbox[0] for bbox in title_sizes))
+        title_block_height = title_line_height * len(
+            title_lines
+        ) + title_line_gap_px * (len(title_lines) - 1)
+        title_extra_offset_px = max(1, int(legend_height * LEGEND_TITLE_OFFSET_RATIO))
+
+    legend_total_width = max(legend_total_width, title_block_width)
+    legend_total_height = legend_height + (
+        title_block_height + title_gap_px + title_extra_offset_px if title_lines else 0
+    )
+
+    bg_padding_px = max(1, round(LEGEND_BACKGROUND_PADDING_M * ppm))
+    bg_padding_x = max(int(legend_total_width * 0.10), bg_padding_px)
+    bg_padding_y = max(int(legend_total_height * 0.10), bg_padding_px)
+
+    title_x = legend_x
+    title_y = legend_y
+    if title_lines:
+        title_y = legend_y - title_gap_px - title_block_height - title_extra_offset_px
+
+    bg_x1 = legend_x - bg_padding_x
+    bg_y1 = title_y - bg_padding_y
+    bg_x2 = legend_x + legend_total_width + bg_padding_x
+    bg_y2 = legend_y + legend_height + bg_padding_y
+
+    # Shift inside image bounds
+    shift_x = 0
+    if bg_x1 < 0:
+        shift_x = -bg_x1
+    if bg_x2 + shift_x > full_w:
+        shift_x = full_w - bg_x2
+
+    shift_y = 0
+    if bg_y1 < 0:
+        shift_y = -bg_y1
+    if bg_y2 + shift_y > full_h:
+        shift_y = full_h - bg_y2
+
+    if shift_x or shift_y:
+        legend_x += shift_x
+        legend_y += shift_y
+        title_x += shift_x
+        title_y += shift_y
+        bg_x1 += shift_x
+        bg_x2 += shift_x
+        bg_y1 += shift_y
+        bg_y2 += shift_y
+
+    # Convert to local coordinates (relative to region)
+    local_legend_x = legend_x - offset_x
+    local_legend_y = legend_y - offset_y
+    local_title_x = title_x - offset_x
+    local_title_y = title_y - offset_y
+    local_bg_x1 = bg_x1 - offset_x
+    local_bg_y1 = bg_y1 - offset_y
+    local_bg_x2 = bg_x2 - offset_x
+    local_bg_y2 = bg_y2 - offset_y
+
+    # Draw background with alpha compositing
+    if img.mode != 'RGBA':
+        temp_rgba = img.convert('RGBA')
+        bg_overlay = Image.new('RGBA', img.size, (0, 0, 0, 0))
+        bg_draw = ImageDraw.Draw(bg_overlay)
+        bg_draw.rectangle(
+            [local_bg_x1, local_bg_y1, local_bg_x2, local_bg_y2],
+            fill=LEGEND_BACKGROUND_COLOR,
+        )
+        temp_rgba = Image.alpha_composite(temp_rgba, bg_overlay)
+        img_rgb = temp_rgba.convert('RGB')
+        img.paste(img_rgb)
+        draw = ImageDraw.Draw(img)
+    else:
+        bg_overlay = Image.new('RGBA', img.size, (0, 0, 0, 0))
+        bg_draw = ImageDraw.Draw(bg_overlay)
+        bg_draw.rectangle(
+            [local_bg_x1, local_bg_y1, local_bg_x2, local_bg_y2],
+            fill=LEGEND_BACKGROUND_COLOR,
+        )
+        composited = Image.alpha_composite(img, bg_overlay)
+        img.paste(composited)
+        draw = ImageDraw.Draw(img)
+
+    # Draw color bar
+    for i in range(legend_height):
+        t = 1.0 - (i / (legend_height - 1)) if legend_height > 1 else 0.0
+
+        color = None
+        for j in range(1, len(color_ramp)):
+            t0, c0 = color_ramp[j - 1]
+            t1, c1 = color_ramp[j]
+            if t <= t1 or j == len(color_ramp) - 1:
+                local = 0.0 if t1 == t0 else (t - t0) / (t1 - t0)
+                r = int(c0[0] + (c1[0] - c0[0]) * local)
+                g = int(c0[1] + (c1[1] - c0[1]) * local)
+                b = int(c0[2] + (c1[2] - c0[2]) * local)
+                color = (r, g, b)
+                break
+
+        if color:
+            y_pos = local_legend_y + i
+            draw.line(
+                [(local_legend_x, y_pos), (local_legend_x + legend_width, y_pos)],
+                fill=color,
+                width=1,
+            )
+
+    # Draw border
+    border_width_px = max(1, round(LEGEND_BORDER_WIDTH_M * ppm))
+    draw.rectangle(
+        [local_legend_x, local_legend_y,
+         local_legend_x + legend_width, local_legend_y + legend_height],
+        outline=(0, 0, 0),
+        width=border_width_px,
+    )
+
+    # Draw title
+    if title_lines:
+        title_line_step = title_line_height + title_line_gap_px
+        for index, line in enumerate(title_lines):
+            line_y = local_title_y + index * title_line_step
+            draw_text_with_outline(
+                draw,
+                (local_title_x, line_y),
+                line,
+                font=font,
+                fill=(0, 0, 0),
+                outline=(255, 255, 255),
+                outline_width=max(1, round(LEGEND_TEXT_OUTLINE_WIDTH_M * ppm)),
+                anchor='lt',
+            )
+
+    # Draw elevation labels
+    for i in range(LEGEND_NUM_LABELS):
+        t = i / (LEGEND_NUM_LABELS - 1) if LEGEND_NUM_LABELS > 1 else 0.0
+        elevation = min_elevation_m + (max_elevation_m - min_elevation_m) * t
+        if label_step_m:
+            elevation = round(elevation / label_step_m) * label_step_m
+        label_text = f'{int(elevation)} м'
+
+        label_y = local_legend_y + legend_height - int(t * legend_height)
+        text_x = local_legend_x + legend_width + text_offset_px
+
+        draw_text_with_outline(
+            draw,
+            (text_x, label_y),
+            label_text,
+            font=font,
+            fill=(0, 0, 0),
+            outline=(255, 255, 255),
+            outline_width=max(1, round(LEGEND_TEXT_OUTLINE_WIDTH_M * ppm)),
+            anchor='lm',
+        )
