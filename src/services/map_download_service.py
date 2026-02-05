@@ -870,6 +870,7 @@ class MapDownloadService:
                     'overlay_alpha': ctx.settings.radio_horizon_overlay_alpha,
                     'max_height_m': ctx.settings.max_flight_height_m,
                     'uav_height_reference': ctx.settings.uav_height_reference,
+                    'final_size': (ctx.target_w_px, ctx.target_h_px),  # Финальный размер для масштабирования
                 }
 
             if gui_image is not None:

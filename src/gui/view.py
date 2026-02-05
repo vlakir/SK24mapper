@@ -146,6 +146,16 @@ class RadioHorizonRecomputeWorker(QThread):
                 uav_height_reference=self._rh_cache['uav_height_reference'],
             )
 
+            # Resize to final size if needed (DEM was downsampled)
+            final_size = self._rh_cache.get('final_size')
+            if final_size and result_image.size != final_size:
+                logger.info(
+                    'RadioHorizonRecomputeWorker: resizing result %s -> %s',
+                    result_image.size,
+                    final_size,
+                )
+                result_image = result_image.resize(final_size, Image.Resampling.BILINEAR)
+
             logger.info('RadioHorizonRecomputeWorker: recomputation completed')
             self.finished.emit(result_image, self._new_antenna_row, self._new_antenna_col)
 
