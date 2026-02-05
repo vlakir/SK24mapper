@@ -13,6 +13,7 @@ def is_portable_mode() -> bool:
 
     Returns:
         bool: True если приложение в portable режиме, иначе False
+
     """
     exe_name = Path(sys.argv[0]).name.lower()
     return '_portable' in exe_name
@@ -24,6 +25,7 @@ def get_app_dir() -> Path:
 
     Returns:
         Path: Путь к директории приложения
+
     """
     return Path(sys.argv[0]).resolve().parent
 
@@ -43,5 +45,6 @@ def get_portable_path(subdir: str) -> Path:
 
     Returns:
         Path: Полный путь к поддиректории
+
     """
     return get_app_dir() / subdir

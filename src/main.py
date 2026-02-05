@@ -1,7 +1,6 @@
 """Main entry point for Mil Mapper 2.0 with PySide6 MVC architecture."""
 
 import argparse
-import contextlib
 import logging
 import os
 import shutil
@@ -37,7 +36,8 @@ def setup_logging() -> tuple[Path, Path]:
     else:
         # Обычный режим: стандартные пути Windows
         appdata_base = (
-            Path(os.getenv('APPDATA') or Path.home() / 'AppData' / 'Roaming') / 'SK42mapper'
+            Path(os.getenv('APPDATA') or Path.home() / 'AppData' / 'Roaming')
+            / 'SK42mapper'
         )
         local_base = (
             Path(os.getenv('LOCALAPPDATA') or Path.home() / 'AppData' / 'Local')
@@ -87,7 +87,9 @@ def main() -> int:
 
         logger.info(f'Looking for default configs in: {default_cfg_root}')
         if default_cfg_root.exists():
-            logger.info(f'Found default configs, copying to: {appdata_base / "configs"}')
+            logger.info(
+                f'Found default configs, copying to: {appdata_base / "configs"}'
+            )
             # Copy files only if missing in user configs
             for src in default_cfg_root.rglob('*'):
                 if src.is_file():

@@ -59,6 +59,10 @@ class OptimizedImageView(QGraphicsView):
         self._image_item: QGraphicsPixmapItem | None = None
         self._original_image: Image.Image | None = None
 
+        # Prevent concurrent wheel event processing
+        self._processing_wheel_event = False
+        self._updating_image = False
+
         # Configure view for optimal performance with proper antialiasing for thin lines
         self.setDragMode(QGraphicsView.DragMode.NoDrag)
         # Zoom to cursor: anchor transformations under the mouse pointer
@@ -89,9 +93,10 @@ class OptimizedImageView(QGraphicsView):
 
         # Zoom limits
         self._min_zoom = 0.1  # Will be updated to fit-to-window scale
-        self._max_zoom = 10.0
+        self._max_zoom = 10.0  # Will be updated relative to fit-to-window scale
         self._zoom_factor = 1.15
         self._fit_to_window_scale = 1.0  # Store the fit-to-window scale as minimum
+        self._max_zoom_multiplier = 20.0  # Allow 20x zoom from fit-to-window
 
         # Enable mouse tracking for smooth interactions
         self.setMouseTracking(True)
@@ -108,64 +113,72 @@ class OptimizedImageView(QGraphicsView):
 
         Keeps current zoom/center if an image is already displayed.
         """
-        # Preserve current view transform and center if already showing an image
-        preserve_transform = self._image_item is not None
-        current_transform = QTransform(self.transform()) if preserve_transform else None
-        current_center = (
-            self.mapToScene(self.viewport().rect().center())
-            if preserve_transform
-            else None
-        )
+        try:
+            self._updating_image = True
 
-        self._original_image = pil_image
-        self._meters_per_px = meters_per_px
+            # Preserve current view transform and center if already showing an image
+            preserve_transform = self._image_item is not None
+            current_transform = (
+                QTransform(self.transform()) if preserve_transform else None
+            )
+            current_center = (
+                self.mapToScene(self.viewport().rect().center())
+                if preserve_transform
+                else None
+            )
 
-        # Convert PIL image to QPixmap efficiently
-        if pil_image.mode != 'RGB':
-            pil_image = pil_image.convert('RGB')
+            self._original_image = pil_image
+            self._meters_per_px = meters_per_px
 
-        # Create QImage directly from PIL data
-        width, height = pil_image.size
-        image_data = pil_image.tobytes()
-        # Keep a reference to the backing bytes to prevent premature GC
-        self._qimage_bytes = image_data
-        qimage = QImage(
-            self._qimage_bytes,
-            width,
-            height,
-            width * 3,
-            QImage.Format.Format_RGB888,
-        )
+            # Convert PIL image to QPixmap efficiently
+            if pil_image.mode != 'RGB':
+                pil_image = pil_image.convert('RGB')
 
-        # Create QPixmap from QImage
-        qpixmap = QPixmap.fromImage(qimage)
+            # Create QImage directly from PIL data
+            width, height = pil_image.size
+            image_data = pil_image.tobytes()
+            # Keep a reference to the backing bytes to prevent premature GC
+            self._qimage_bytes = image_data
+            qimage = QImage(
+                self._qimage_bytes,
+                width,
+                height,
+                width * 3,
+                QImage.Format.Format_RGB888,
+            )
 
-        # Clear scene and add image
-        self._scene.clear()
-        self._image_item = self._scene.addPixmap(qpixmap)
+            # Create QPixmap from QImage
+            qpixmap = QPixmap.fromImage(qimage)
 
-        # Apply fixed rotation to improve thin line visibility
-        if PREVIEW_ROTATION_ANGLE != 0:
-            transform = QTransform()
-            transform.rotate(PREVIEW_ROTATION_ANGLE)
-            self._image_item.setTransform(transform)
+            # Clear scene and add image
+            self._scene.clear()
+            self._image_item = self._scene.addPixmap(qpixmap)
 
-            # Update scene rect to account for rotation
-            rotated_rect = transform.mapRect(qpixmap.rect())
-            self._scene.setSceneRect(rotated_rect)
-        else:
-            # Set scene rect to image bounds
-            self._scene.setSceneRect(qpixmap.rect())
+            # Apply fixed rotation to improve thin line visibility
+            if PREVIEW_ROTATION_ANGLE != 0:
+                transform = QTransform()
+                transform.rotate(PREVIEW_ROTATION_ANGLE)
+                self._image_item.setTransform(transform)
 
-        # Fit or restore transform
-        if preserve_transform and current_transform is not None:
-            # Restore previous transform and keep center
-            self.setTransform(current_transform)
-            if current_center is not None:
-                self.centerOn(current_center)
-        else:
-            # First time: fit image to view
-            self.fit_to_window()
+                # Update scene rect to account for rotation
+                rotated_rect = transform.mapRect(qpixmap.rect())
+                self._scene.setSceneRect(rotated_rect)
+            else:
+                # Set scene rect to image bounds
+                self._scene.setSceneRect(qpixmap.rect())
+
+            # Fit or restore transform
+            if preserve_transform and current_transform is not None:
+                # Restore previous transform and keep center
+                self.setTransform(current_transform)
+                if current_center is not None:
+                    self.centerOn(current_center)
+            else:
+                # First time: fit image to view
+                self.fit_to_window()
+
+        finally:
+            self._updating_image = False
 
     def clear(self) -> None:
         """Clear the preview area and release pixmap resources."""
@@ -190,6 +203,8 @@ class OptimizedImageView(QGraphicsView):
             # Store the fit-to-window scale as the minimum zoom limit
             self._fit_to_window_scale = self.transform().m11()
             self._min_zoom = self._fit_to_window_scale
+            # Set max zoom relative to fit-to-window scale for consistent behavior
+            self._max_zoom = self._fit_to_window_scale * self._max_zoom_multiplier
 
     def zoom_in(self) -> None:
         """Zoom in by the defined zoom factor."""
@@ -344,23 +359,28 @@ class OptimizedImageView(QGraphicsView):
         current_scale = self.transform().m11()
         new_scale = current_scale * factor
 
-        # Apply zoom limits
-        if new_scale < self._min_zoom:
+        # Use tolerance to handle floating-point precision issues
+        tolerance = 0.001
+
+        # Apply zoom limits with tolerance
+        if new_scale < self._min_zoom * (1.0 - tolerance):
             factor = self._min_zoom / current_scale
-        elif new_scale > self._max_zoom:
+        elif new_scale > self._max_zoom * (1.0 + tolerance):
             factor = self._max_zoom / current_scale
 
         # Apply zoom
         self.scale(factor, factor)
 
         # Solution #4: Force pixel-perfect alignment for thin lines
+        # Use finer rounding (3 decimal places) to reduce rounding errors
         transform = self.transform()
         self.setTransform(
             QTransform(
-                round(transform.m11() * 100) / 100,  # Round scale factors
+                round(transform.m11() * 1000)
+                / 1000,  # Round scale factors to 3 decimals
                 transform.m12(),
                 transform.m21(),
-                round(transform.m22() * 100) / 100,
+                round(transform.m22() * 1000) / 1000,
                 round(transform.dx()),  # Round translation
                 round(transform.dy()),
             ),
@@ -369,22 +389,39 @@ class OptimizedImageView(QGraphicsView):
     def wheelEvent(self, event: QWheelEvent) -> None:
         """Handle mouse wheel for zooming with zoom-to-cursor behavior."""
         if not self._image_item:
-            return
-
-        # Determine scroll amount (support angleDelta and pixelDelta for touchpads)
-        delta = event.angleDelta().y()
-        if delta == 0:
-            delta = event.pixelDelta().y()
-        if delta == 0:
             event.ignore()
             return
 
-        zoom_in = delta > 0
-        factor = self._zoom_factor if zoom_in else (1.0 / self._zoom_factor)
+        # Skip if image is being updated (prevents conflicts during image load)
+        if self._updating_image:
+            event.accept()  # Accept to prevent propagation, but don't process
+            return
 
-        # Apply zoom (anchor is under mouse, no manual centering needed)
-        self._zoom(factor)
-        event.accept()
+        # Skip if already processing a wheel event (prevents event queue buildup)
+        if self._processing_wheel_event:
+            event.accept()  # Accept to prevent propagation, but don't process
+            return
+
+        try:
+            self._processing_wheel_event = True
+
+            # Determine scroll amount (support angleDelta and pixelDelta for touchpads)
+            delta = event.angleDelta().y()
+            if delta == 0:
+                delta = event.pixelDelta().y()
+            if delta == 0:
+                event.ignore()
+                return
+
+            zoom_in = delta > 0
+            factor = self._zoom_factor if zoom_in else (1.0 / self._zoom_factor)
+
+            # Apply zoom (anchor is under mouse, no manual centering needed)
+            self._zoom(factor)
+            event.accept()
+
+        finally:
+            self._processing_wheel_event = False
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         """Handle mouse press for panning."""
@@ -429,6 +466,8 @@ class OptimizedImageView(QGraphicsView):
             self.fitInView(self._image_item, Qt.AspectRatioMode.KeepAspectRatio)
             self._fit_to_window_scale = self.transform().m11()
             self._min_zoom = self._fit_to_window_scale
+            # Update max zoom relative to new fit-to-window scale
+            self._max_zoom = self._fit_to_window_scale * self._max_zoom_multiplier
             # Restore the previous scale if it was larger than fit-to-window
             if current_scale > self._fit_to_window_scale:
                 factor = current_scale / self._fit_to_window_scale

@@ -69,7 +69,10 @@ class MilMapperController:
                         with api_key_file.open('r', encoding='utf-8') as f:
                             self._api_key = f.read().strip()
                         if self._api_key:
-                            logger.info('API-ключ успешно загружен из api_key.txt (portable режим)')
+                            logger.info(
+                                'API-ключ успешно загружен из api_key.txt '
+                                '(portable режим)'
+                            )
                             return
                     except Exception as e:
                         logger.warning(f'Не удалось прочитать api_key.txt: {e}')
