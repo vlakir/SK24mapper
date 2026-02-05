@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from PIL import Image
+from PIL import Image, ImageDraw
 from PySide6.QtCore import QObject, QSignalBlocker, Qt, QThread, Signal, Slot
 from PySide6.QtGui import (
     QAction,
@@ -54,10 +54,17 @@ from gui.widgets import (
     OldCoordinateInputWidget,
 )
 from gui.workers import DownloadWorker
+from imaging import draw_label_with_bg, draw_label_with_subscript_bg, load_grid_font
 from services.coordinate_transformer import CoordinateTransformer
-from services.map_postprocessing import compute_control_point_image_coords
+from services.map_postprocessing import (
+    compute_control_point_image_coords,
+    draw_control_point_triangle,
+)
 from services.radio_horizon import recompute_radio_horizon_fast
 from shared.constants import (
+    CONTROL_POINT_LABEL_GAP_MIN_PX,
+    CONTROL_POINT_LABEL_GAP_RATIO,
+    CONTROL_POINT_SIZE_M,
     COORDINATE_FORMAT_SPLIT_LENGTH,
     MAP_TYPE_LABELS_RU,
     MIN_DECIMALS_FOR_SMALL_STEP,
@@ -1610,18 +1617,20 @@ class MainWindow(QMainWindow):
             self._rh_cache['antenna_row'] = new_antenna_row
             self._rh_cache['antenna_col'] = new_antenna_col
 
-            # Update display
-            self._base_image = result_image.convert('RGB') if result_image.mode != 'RGB' else result_image
-            self._current_image = self._base_image
-
-            metadata = self._model.state.last_map_metadata
-            mpp = metadata.meters_per_pixel if metadata else 0.0
-            self._preview_area.set_image(self._current_image, meters_per_px=mpp)
-
-            # Update control point marker at new position using stored click coordinates
+            # Draw control point triangle and label on the image (like in first build)
             if hasattr(self, '_rh_click_pos'):
                 px, py = self._rh_click_pos
-                self._preview_area.set_control_point_marker(float(px), float(py))
+                metadata = self._model.state.last_map_metadata
+                mpp = metadata.meters_per_pixel if metadata else 0.0
+
+                if mpp > 0:
+                    # Draw triangle
+                    draw_control_point_triangle(
+                        result_image, px, py, mpp, rotation_deg=0.0
+                    )
+
+                    # Draw label (name + height)
+                    self._draw_rh_control_point_label(result_image, px, py, mpp)
 
                 # Calculate and update SK-42 coordinates
                 coords = self._calculate_sk42_from_scene_pos(px, py)
@@ -1634,6 +1643,14 @@ class MainWindow(QMainWindow):
                     self._sync_ui_to_model_now()
 
                     logger.info('Control point updated to X=%d, Y=%d', x_val, y_val)
+
+            # Update display
+            self._base_image = result_image.convert('RGB') if result_image.mode != 'RGB' else result_image
+            self._current_image = self._base_image
+
+            metadata = self._model.state.last_map_metadata
+            mpp = metadata.meters_per_pixel if metadata else 0.0
+            self._preview_area.set_image(self._current_image, meters_per_px=mpp)
 
             # Restore cursor and show success message
             QApplication.restoreOverrideCursor()
@@ -1648,6 +1665,90 @@ class MainWindow(QMainWindow):
             if self._rh_worker is not None:
                 self._rh_worker.deleteLater()
                 self._rh_worker = None
+
+    def _draw_rh_control_point_label(
+        self,
+        result: Image.Image,
+        cx_img: float,
+        cy_img: float,
+        mpp: float,
+    ) -> None:
+        """Draw control point label for radio horizon map."""
+        try:
+            settings = self._model.settings
+            cp_name = settings.control_point_name
+            antenna_h = settings.antenna_height_m
+
+            ppm = 1.0 / mpp if mpp > 0 else 0.0
+            font_size_px = max(12, round(settings.grid_font_size_m * ppm))
+            label_font = load_grid_font(font_size_px)
+            subscript_font = load_grid_font(max(8, font_size_px * 2 // 3))
+            bg_padding_px = max(2, round(settings.grid_label_bg_padding_m * ppm))
+
+            draw = ImageDraw.Draw(result)
+
+            # Position below triangle
+            tri_size_px = max(5, round(CONTROL_POINT_SIZE_M * ppm))
+            label_x = int(cx_img)
+            label_gap_px = max(
+                CONTROL_POINT_LABEL_GAP_MIN_PX,
+                round(tri_size_px * CONTROL_POINT_LABEL_GAP_RATIO),
+            )
+            current_y = int(cy_img + tri_size_px / 2 + label_gap_px + bg_padding_px)
+
+            # Name line
+            if cp_name:
+                draw_label_with_bg(
+                    draw,
+                    (label_x, current_y),
+                    cp_name,
+                    font=label_font,
+                    anchor='mt',
+                    img_size=result.size,
+                    padding=bg_padding_px,
+                )
+                name_bbox = draw.textbbox((0, 0), cp_name, font=label_font, anchor='lt')
+                name_height = name_bbox[3] - name_bbox[1]
+                current_y += name_height + bg_padding_px * 2
+
+            # Height line with subscript
+            # Get elevation from DEM cache
+            dem = self._rh_cache.get('dem')
+            cp_elev = None
+            if dem is not None:
+                antenna_row = self._rh_cache.get('antenna_row')
+                antenna_col = self._rh_cache.get('antenna_col')
+                if antenna_row is not None and antenna_col is not None:
+                    dem_h, dem_w = dem.shape
+                    if 0 <= antenna_row < dem_h and 0 <= antenna_col < dem_w:
+                        cp_elev = float(dem[antenna_row, antenna_col])
+
+            if cp_elev is not None:
+                height_parts = [
+                    ('h = ', False),
+                    (f'{int(cp_elev)}', False),
+                    (' + ', False),
+                    (f'{int(antenna_h)} м', False),
+                ]
+            else:
+                height_parts = [
+                    ('h', False),
+                    ('ант', True),
+                    (f' = {int(antenna_h)} м', False),
+                ]
+
+            draw_label_with_subscript_bg(
+                draw,
+                (label_x, current_y),
+                height_parts,
+                font=label_font,
+                subscript_font=subscript_font,
+                anchor='mt',
+                img_size=result.size,
+                padding=bg_padding_px,
+            )
+        except Exception as e:
+            logger.warning('Не удалось нарисовать подпись контрольной точки: %s', e)
 
     @Slot(str)
     def _on_radio_horizon_recompute_error(self, error_msg: str) -> None:
