@@ -512,6 +512,7 @@ class MainWindow(QMainWindow):
         # Radio horizon cache for interactive rebuilding
         self._rh_cache: dict[str, Any] = {}
         self._rh_worker: QThread | None = None
+        self._rh_click_pos: tuple[float, float] | None = None  # Store click position for marker
 
         # Guard flag to prevent model updates while UI is being populated
         # programmatically
@@ -1550,32 +1551,44 @@ class MainWindow(QMainWindow):
             self._rh_worker = None
 
         # Convert pixel coordinates to DEM coordinates
-        # px, py are in scene (image) coordinates
-        # We need to convert to DEM row/col
+        # px, py are in scene (final image) coordinates
+        # We need to convert to DEM row/col considering downsampling
         dem = self._rh_cache.get('dem')
+        final_size = self._rh_cache.get('final_size')
         if dem is None:
             logger.warning('No DEM in cache, cannot recompute')
             return
 
-        # DEM coordinates are same as image coordinates for radio horizon
-        # (no rotation after DEM processing)
         dem_h, dem_w = dem.shape
-        new_antenna_col = int(px)
-        new_antenna_row = int(py)
+
+        # Calculate downsampling factor from DEM size and final size
+        if final_size:
+            final_w, final_h = final_size
+            scale_x = dem_w / final_w
+            scale_y = dem_h / final_h
+            # Convert final image coordinates to DEM coordinates
+            new_antenna_col = int(px * scale_x)
+            new_antenna_row = int(py * scale_y)
+        else:
+            # No downsampling, coordinates are the same
+            new_antenna_col = int(px)
+            new_antenna_row = int(py)
 
         # Clamp to DEM bounds
         new_antenna_row = max(0, min(new_antenna_row, dem_h - 1))
         new_antenna_col = max(0, min(new_antenna_col, dem_w - 1))
 
         logger.info(
-            'Starting radio horizon recompute at DEM position (%d, %d)',
-            new_antenna_col,
-            new_antenna_row,
+            'Starting radio horizon recompute: scene pos (%.1f, %.1f) -> DEM pos (%d, %d)',
+            px, py, new_antenna_col, new_antenna_row,
         )
 
         # Show wait cursor and status message
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         self._status_proxy.show_message('Пересчет радиогоризонта...', 0)
+
+        # Store click position for later use (marker and coordinates update)
+        self._rh_click_pos = (px, py)
 
         # Create and start worker
         self._rh_worker = RadioHorizonRecomputeWorker(
@@ -1605,11 +1618,22 @@ class MainWindow(QMainWindow):
             mpp = metadata.meters_per_pixel if metadata else 0.0
             self._preview_area.set_image(self._current_image, meters_per_px=mpp)
 
-            # Update control point marker at new position
-            # Convert DEM coordinates to scene coordinates (same for radio horizon)
-            self._preview_area.set_control_point_marker(
-                float(new_antenna_col), float(new_antenna_row)
-            )
+            # Update control point marker at new position using stored click coordinates
+            if hasattr(self, '_rh_click_pos'):
+                px, py = self._rh_click_pos
+                self._preview_area.set_control_point_marker(float(px), float(py))
+
+                # Calculate and update SK-42 coordinates
+                coords = self._calculate_sk42_from_scene_pos(px, py)
+                if coords:
+                    x_val, y_val = coords
+                    self.control_point_x_widget.set_coordinate(x_val)
+                    self.control_point_y_widget.set_coordinate(y_val)
+
+                    # Update model
+                    self._sync_ui_to_model_now()
+
+                    logger.info('Control point updated to X=%d, Y=%d', x_val, y_val)
 
             # Restore cursor and show success message
             QApplication.restoreOverrideCursor()
