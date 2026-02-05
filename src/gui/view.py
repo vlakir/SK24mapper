@@ -54,7 +54,14 @@ from gui.widgets import (
     OldCoordinateInputWidget,
 )
 from gui.workers import DownloadWorker
-from imaging import draw_label_with_bg, draw_label_with_subscript_bg, load_grid_font
+from imaging import (
+    draw_axis_aligned_km_grid,
+    draw_elevation_legend,
+    draw_label_with_bg,
+    draw_label_with_subscript_bg,
+    load_grid_font,
+)
+from geo.topography import meters_per_pixel as calc_meters_per_pixel
 from services.coordinate_transformer import CoordinateTransformer
 from services.map_postprocessing import (
     compute_control_point_image_coords,
@@ -66,8 +73,10 @@ from shared.constants import (
     CONTROL_POINT_LABEL_GAP_RATIO,
     CONTROL_POINT_SIZE_M,
     COORDINATE_FORMAT_SPLIT_LENGTH,
+    ELEVATION_LEGEND_STEP_M,
     MAP_TYPE_LABELS_RU,
     MIN_DECIMALS_FOR_SMALL_STEP,
+    RADIO_HORIZON_COLOR_RAMP,
     MapType,
     UavHeightReference,
 )
@@ -1617,11 +1626,21 @@ class MainWindow(QMainWindow):
             self._rh_cache['antenna_row'] = new_antenna_row
             self._rh_cache['antenna_col'] = new_antenna_col
 
+            # Apply postprocessing (grid, legend, contours)
+            metadata = self._model.state.last_map_metadata
+            mpp = metadata.meters_per_pixel if metadata else 0.0
+
+            # Draw grid
+            if self._rh_cache.get('settings'):
+                settings = self._rh_cache['settings']
+                self._draw_rh_grid(result_image, settings, mpp)
+
+            # Draw legend
+            self._draw_rh_legend(result_image, mpp)
+
             # Draw control point triangle and label on the image (like in first build)
             if hasattr(self, '_rh_click_pos'):
                 px, py = self._rh_click_pos
-                metadata = self._model.state.last_map_metadata
-                mpp = metadata.meters_per_pixel if metadata else 0.0
 
                 if mpp > 0:
                     # Draw triangle
@@ -1665,6 +1684,70 @@ class MainWindow(QMainWindow):
             if self._rh_worker is not None:
                 self._rh_worker.deleteLater()
                 self._rh_worker = None
+
+    def _draw_rh_grid(
+        self,
+        result: Image.Image,
+        settings: Any,
+        mpp: float,
+    ) -> None:
+        """Draw grid on radio horizon map."""
+        try:
+            if mpp <= 0:
+                return
+
+            ppm = 1.0 / mpp
+            grid_width_px = max(1, round(settings.grid_width_m * ppm))
+            font_size_px = max(12, round(settings.grid_font_size_m * ppm))
+            text_margin_px = max(5, round(settings.grid_text_margin_m * ppm))
+            label_bg_padding_px = max(2, round(settings.grid_label_bg_padding_m * ppm))
+
+            draw_axis_aligned_km_grid(
+                result,
+                center_x_m=settings.control_point_x_sk42_gk if settings.control_point_enabled else 0,
+                center_y_m=settings.control_point_y_sk42_gk if settings.control_point_enabled else 0,
+                meters_per_px=mpp,
+                rotation_deg=0.0,
+                grid_width_px=grid_width_px,
+                font_size_px=font_size_px,
+                text_margin_px=text_margin_px,
+                label_bg_padding_px=label_bg_padding_px,
+                display_grid=settings.display_grid,
+            )
+        except Exception as e:
+            logger.warning('Не удалось нарисовать сетку: %s', e)
+
+    def _draw_rh_legend(
+        self,
+        result: Image.Image,
+        mpp: float,
+    ) -> None:
+        """Draw legend on radio horizon map."""
+        try:
+            if mpp <= 0:
+                return
+
+            settings = self._rh_cache.get('settings')
+            if not settings:
+                return
+
+            max_height_m = settings.max_flight_height_m
+            ppm = 1.0 / mpp
+            font_size_px = max(12, round(settings.grid_font_size_m * ppm))
+            label_bg_padding_px = max(2, round(settings.grid_label_bg_padding_m * ppm))
+
+            draw_elevation_legend(
+                result,
+                min_value=0.0,
+                max_value=max_height_m,
+                color_ramp=RADIO_HORIZON_COLOR_RAMP,
+                unit_label='м',
+                step=ELEVATION_LEGEND_STEP_M,
+                font_size_px=font_size_px,
+                label_bg_padding_px=label_bg_padding_px,
+            )
+        except Exception as e:
+            logger.warning('Не удалось нарисовать легенду: %s', e)
 
     def _draw_rh_control_point_label(
         self,

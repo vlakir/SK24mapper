@@ -871,6 +871,13 @@ class MapDownloadService:
                     'max_height_m': ctx.settings.max_flight_height_m,
                     'uav_height_reference': ctx.settings.uav_height_reference,
                     'final_size': (ctx.target_w_px, ctx.target_h_px),  # Финальный размер для масштабирования
+                    # Параметры постобработки
+                    'overlay_contours': ctx.overlay_contours,
+                    'settings': ctx.settings,  # Для сетки и легенды
+                    'zoom': ctx.zoom,
+                    'center_lat_wgs': ctx.center_lat_wgs,
+                    'center_lng_wgs': ctx.center_lng_wgs,
+                    'rotation_deg': ctx.rotation_deg,
                 }
 
             if gui_image is not None:
