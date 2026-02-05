@@ -469,6 +469,10 @@ class MapDownloadService:
         if ctx.is_elev_color or ctx.is_radio_horizon:
             self._draw_legend(ctx, result)
 
+        # For radio horizon: create and cache overlay layer with grid/legend/contours
+        if ctx.is_radio_horizon:
+            self._create_rh_overlay_layer(ctx, result)
+
         # Center cross
         self._draw_center_cross(ctx, result)
 
@@ -735,6 +739,30 @@ class MapDownloadService:
         except Exception as e:
             logger.warning('Не удалось нарисовать контрольную точку: %s', e)
 
+    def _create_rh_overlay_layer(
+        self,
+        ctx: MapDownloadContext,
+        result: Image.Image,
+    ) -> None:
+        """Create overlay layer with grid/legend/contours for radio horizon caching."""
+        try:
+            # Create transparent layer same size as result
+            overlay = Image.new('RGBA', result.size, (0, 0, 0, 0))
+
+            # Draw grid on overlay
+            self._draw_grid(ctx, overlay)
+
+            # Draw legend on overlay
+            if ctx.is_radio_horizon:
+                self._draw_legend(ctx, overlay)
+
+            # Save to cache
+            ctx.rh_cache_overlay = overlay.copy()
+            logger.info('Created radio horizon overlay layer for caching')
+
+        except Exception as e:
+            logger.warning('Failed to create radio horizon overlay layer: %s', e)
+
     def _draw_control_point_label(
         self,
         ctx: MapDownloadContext,
@@ -871,13 +899,10 @@ class MapDownloadService:
                     'max_height_m': ctx.settings.max_flight_height_m,
                     'uav_height_reference': ctx.settings.uav_height_reference,
                     'final_size': (ctx.target_w_px, ctx.target_h_px),  # Финальный размер для масштабирования
-                    # Параметры постобработки
-                    'overlay_contours': ctx.overlay_contours,
-                    'settings': ctx.settings,  # Для сетки и легенды
-                    'zoom': ctx.zoom,
-                    'center_lat_wgs': ctx.center_lat_wgs,
-                    'center_lng_wgs': ctx.center_lng_wgs,
-                    'rotation_deg': ctx.rotation_deg,
+                    # Кэшированный слой с сеткой/легендой/изолиниями
+                    'overlay_layer': ctx.rh_cache_overlay,
+                    # Параметры постобработки (на всякий случай, если overlay_layer не создался)
+                    'settings': ctx.settings,
                 }
 
             if gui_image is not None:

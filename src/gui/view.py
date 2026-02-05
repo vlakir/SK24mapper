@@ -1630,13 +1630,20 @@ class MainWindow(QMainWindow):
             metadata = self._model.state.last_map_metadata
             mpp = metadata.meters_per_pixel if metadata else 0.0
 
-            # Draw grid
-            if self._rh_cache.get('settings'):
-                settings = self._rh_cache['settings']
-                self._draw_rh_grid(result_image, settings, mpp)
-
-            # Draw legend
-            self._draw_rh_legend(result_image, mpp)
+            # Apply cached overlay layer if available, otherwise draw manually
+            overlay_layer = self._rh_cache.get('overlay_layer')
+            if overlay_layer:
+                # Use cached overlay (grid + legend + contours)
+                logger.info('Applying cached overlay layer')
+                result_image = result_image.convert('RGBA')
+                result_image = Image.alpha_composite(result_image, overlay_layer)
+            else:
+                # Fallback: draw grid and legend manually
+                logger.info('No cached overlay, drawing manually')
+                if self._rh_cache.get('settings'):
+                    settings = self._rh_cache['settings']
+                    self._draw_rh_grid(result_image, settings, mpp)
+                self._draw_rh_legend(result_image, mpp)
 
             # Draw control point triangle and label on the image (like in first build)
             if hasattr(self, '_rh_click_pos'):
