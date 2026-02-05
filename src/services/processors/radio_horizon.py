@@ -184,6 +184,13 @@ async def process_radio_horizon(ctx: MapDownloadContext) -> Image.Image:
 
     sp.stop('Радиогоризонт вычислен')
 
+    # Save DEM for cache BEFORE deleting it
+    # dem_full at this point is already downsampled if ds_factor > 1
+    ctx.rh_cache_dem = dem_full.copy()
+    ctx.rh_cache_antenna_row = antenna_row
+    ctx.rh_cache_antenna_col = antenna_col
+    ctx.rh_cache_pixel_size_m = pixel_size_m
+
     del dem_full
     gc.collect()
 
@@ -246,13 +253,9 @@ async def process_radio_horizon(ctx: MapDownloadContext) -> Image.Image:
     if topo_base.size != result.size:
         topo_base = topo_base.resize(result.size, Image.Resampling.BILINEAR)
 
-    # Save cache data for interactive rebuilding BEFORE blending
+    # Save topo base for cache BEFORE blending
     # Сохраняем топооснову в исходном размере (после ресайза если был)
     ctx.rh_cache_topo_base = topo_base.copy()
-    ctx.rh_cache_dem = dem_full.copy() if ds_factor == 1 else dem_full
-    ctx.rh_cache_antenna_row = antenna_row
-    ctx.rh_cache_antenna_col = antenna_col
-    ctx.rh_cache_pixel_size_m = pixel_size_m
 
     # Blend radio horizon with topo base
     # В настройках хранится "прозрачность слоя" (1 = чистая топооснова),
