@@ -153,8 +153,9 @@ class RadioHorizonRecomputeWorker(QThread):
                 self._new_antenna_row,
             )
 
-            # Step 1: Recompute radio horizon
+            # Step 1: Recompute radio horizon (with resize inside if needed)
             step_start = time.monotonic()
+            final_size = self._rh_cache.get('final_size')
             result_image = recompute_radio_horizon_fast(
                 dem=self._rh_cache['dem'],
                 new_antenna_row=self._new_antenna_row,
@@ -165,22 +166,10 @@ class RadioHorizonRecomputeWorker(QThread):
                 overlay_alpha=self._rh_cache['overlay_alpha'],
                 max_height_m=self._rh_cache['max_height_m'],
                 uav_height_reference=self._rh_cache['uav_height_reference'],
+                final_size=final_size,
             )
             step_elapsed = time.monotonic() - step_start
-            logger.info('  └─ Recompute radio horizon: %.3f sec', step_elapsed)
-
-            # Step 2: Resize to final size if needed (DEM was downsampled)
-            final_size = self._rh_cache.get('final_size')
-            if final_size and result_image.size != final_size:
-                step_start = time.monotonic()
-                logger.info(
-                    'RadioHorizonRecomputeWorker: resizing result %s -> %s',
-                    result_image.size,
-                    final_size,
-                )
-                result_image = result_image.resize(final_size, Image.Resampling.BILINEAR)
-                step_elapsed = time.monotonic() - step_start
-                logger.info('  └─ Resize to final size: %.3f sec', step_elapsed)
+            logger.info('  └─ Recompute radio horizon (with resize): %.3f sec', step_elapsed)
 
             total_elapsed = time.monotonic() - start_time
             logger.info('RadioHorizonRecomputeWorker: recomputation completed in %.3f sec', total_elapsed)

@@ -581,6 +581,7 @@ def recompute_radio_horizon_fast(
     earth_radius_m: float = EARTH_RADIUS_M,
     refraction_k: float = RADIO_HORIZON_REFRACTION_K,
     grid_step: int = RADIO_HORIZON_GRID_STEP,
+    final_size: tuple[int, int] | None = None,
 ) -> Image.Image:
     """
     Быстрое перестроение радиогоризонта с новой контрольной точкой.
@@ -642,13 +643,26 @@ def recompute_radio_horizon_fast(
     step_elapsed = time.monotonic() - step_start
     logger.info('    └─ compute_and_colorize_radio_horizon: %.3f sec', step_elapsed)
 
-    # Проверяем размеры
-    step_start = time.monotonic()
-    if topo_base.size != result.size:
-        topo_base = topo_base.resize(result.size, Image.Resampling.BILINEAR)
-    step_elapsed = time.monotonic() - step_start
-    if step_elapsed > 0.001:  # Только если заметное время
-        logger.info('    └─ Resize topo base: %.3f sec', step_elapsed)
+    # Resize to final size if needed (DEM was downsampled)
+    # Do this BEFORE blend to avoid resizing both images separately
+    if final_size and result.size != final_size:
+        step_start = time.monotonic()
+        # Use cv2 for faster resize
+        result_array = np.array(result)
+        result_array = cv2.resize(
+            result_array, final_size, interpolation=cv2.INTER_LINEAR
+        )
+        result = Image.fromarray(result_array)
+
+        # Resize topo base to match
+        topo_array = np.array(topo_base)
+        topo_array = cv2.resize(
+            topo_array, final_size, interpolation=cv2.INTER_LINEAR
+        )
+        topo_base = Image.fromarray(topo_array)
+
+        step_elapsed = time.monotonic() - step_start
+        logger.info('    └─ Resize both to final size using cv2: %.3f sec', step_elapsed)
 
     # Накладываем на топооснову
     step_start = time.monotonic()
