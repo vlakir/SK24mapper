@@ -10,6 +10,9 @@ stable API for preview publication.
 
 
 def publish_preview_image(
-    img: object, metadata: object | None = None, dem_grid: object | None = None
+    img: object,
+    metadata: object | None = None,
+    dem_grid: object | None = None,
+    rh_cache: dict | None = None,
 ) -> bool:
-    return _publish_preview_image(img, metadata, dem_grid)
+    return _publish_preview_image(img, metadata, dem_grid, rh_cache)

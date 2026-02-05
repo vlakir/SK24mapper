@@ -56,6 +56,7 @@ from gui.widgets import (
 from gui.workers import DownloadWorker
 from services.coordinate_transformer import CoordinateTransformer
 from services.map_postprocessing import compute_control_point_image_coords
+from services.radio_horizon import recompute_radio_horizon_fast
 from shared.constants import (
     COORDINATE_FORMAT_SPLIT_LENGTH,
     MAP_TYPE_LABELS_RU,
@@ -105,6 +106,52 @@ class _ViewObserver(Observer):
 
     def update(self, event_data: EventData) -> None:
         self._handler(event_data)
+
+
+class RadioHorizonRecomputeWorker(QThread):
+    """Worker thread for radio horizon recomputation."""
+
+    finished = Signal(Image.Image, int, int)  # result_image, new_antenna_row, new_antenna_col
+    error = Signal(str)  # error_message
+
+    def __init__(
+        self,
+        rh_cache: dict[str, Any],
+        new_antenna_row: int,
+        new_antenna_col: int,
+    ) -> None:
+        super().__init__()
+        self._rh_cache = rh_cache
+        self._new_antenna_row = new_antenna_row
+        self._new_antenna_col = new_antenna_col
+
+    def run(self) -> None:
+        """Execute recomputation in background thread."""
+        try:
+            logger.info(
+                'RadioHorizonRecomputeWorker: recomputing with antenna at (%d, %d)',
+                self._new_antenna_col,
+                self._new_antenna_row,
+            )
+
+            result_image = recompute_radio_horizon_fast(
+                dem=self._rh_cache['dem'],
+                new_antenna_row=self._new_antenna_row,
+                new_antenna_col=self._new_antenna_col,
+                antenna_height_m=self._rh_cache['antenna_height_m'],
+                pixel_size_m=self._rh_cache['pixel_size_m'],
+                topo_base=self._rh_cache['topo_base'],
+                overlay_alpha=self._rh_cache['overlay_alpha'],
+                max_height_m=self._rh_cache['max_height_m'],
+                uav_height_reference=self._rh_cache['uav_height_reference'],
+            )
+
+            logger.info('RadioHorizonRecomputeWorker: recomputation completed')
+            self.finished.emit(result_image, self._new_antenna_row, self._new_antenna_col)
+
+        except Exception as e:
+            logger.exception('RadioHorizonRecomputeWorker failed')
+            self.error.emit(str(e))
 
 
 class GridSettingsWidget(QWidget):
@@ -451,6 +498,10 @@ class MainWindow(QMainWindow):
         self._base_image: Image.Image | None = None
         # DEM grid for cursor elevation display
         self._dem_grid: Any = None
+
+        # Radio horizon cache for interactive rebuilding
+        self._rh_cache: dict[str, Any] = {}
+        self._rh_worker: QThread | None = None
 
         # Guard flag to prevent model updates while UI is being populated
         # programmatically
@@ -1439,34 +1490,142 @@ class MainWindow(QMainWindow):
 
     @Slot(float, float)
     def _on_map_right_clicked(self, px: float, py: float) -> None:
-        """Transfer coordinates from map right-click to control point settings."""
-        # Only allowed if control point was enabled during map generation
+        """Transfer coordinates from map right-click to control point settings or rebuild radio horizon."""
         metadata = self._model.state.last_map_metadata
-        if not metadata or not metadata.control_point_enabled:
+        if not metadata:
             return
 
-        coords = self._calculate_sk42_from_scene_pos(px, py)
-        if coords is None:
-            return
-
-        x_val, y_val = coords
-
-        self.control_point_x_widget.set_coordinate(x_val)
-        self.control_point_y_widget.set_coordinate(y_val)
-
-        # Enable control point if it was disabled
-        if not self.control_point_checkbox.isChecked():
-            self.control_point_checkbox.setChecked(True)
-
-        # Sync to model to ensure it's saved/propagated
-        self._sync_ui_to_model_now()
-
-        # Update markers on preview
-        self._update_cp_marker_from_settings(self._model.settings)
-
-        self._status_proxy.show_message(
-            f'Координаты КТ обновлены: X={x_val}, Y={y_val}', 3000
+        # Check if this is a radio horizon map with cache available
+        is_radio_horizon = (
+            metadata.map_type == MapType.RADIO_HORIZON
+            and self._rh_cache
+            and 'dem' in self._rh_cache
         )
+
+        if is_radio_horizon:
+            # Interactive radio horizon rebuilding
+            self._recompute_radio_horizon_at_click(px, py)
+        elif metadata.control_point_enabled:
+            # Standard behavior: update control point coordinates
+            coords = self._calculate_sk42_from_scene_pos(px, py)
+            if coords is None:
+                return
+
+            x_val, y_val = coords
+
+            self.control_point_x_widget.set_coordinate(x_val)
+            self.control_point_y_widget.set_coordinate(y_val)
+
+            # Enable control point if it was disabled
+            if not self.control_point_checkbox.isChecked():
+                self.control_point_checkbox.setChecked(True)
+
+            # Sync to model to ensure it's saved/propagated
+            self._sync_ui_to_model_now()
+
+            # Update markers on preview
+            self._update_cp_marker_from_settings(self._model.settings)
+
+            self._status_proxy.show_message(
+                f'Координаты КТ обновлены: X={x_val}, Y={y_val}', 3000
+            )
+
+    def _recompute_radio_horizon_at_click(self, px: float, py: float) -> None:
+        """Recompute radio horizon with new control point at clicked position."""
+        # Stop any running recompute worker
+        if self._rh_worker is not None and self._rh_worker.isRunning():
+            logger.info('Stopping previous radio horizon recompute worker')
+            self._rh_worker.quit()
+            self._rh_worker.wait(1000)
+            self._rh_worker = None
+
+        # Convert pixel coordinates to DEM coordinates
+        # px, py are in scene (image) coordinates
+        # We need to convert to DEM row/col
+        dem = self._rh_cache.get('dem')
+        if dem is None:
+            logger.warning('No DEM in cache, cannot recompute')
+            return
+
+        # DEM coordinates are same as image coordinates for radio horizon
+        # (no rotation after DEM processing)
+        dem_h, dem_w = dem.shape
+        new_antenna_col = int(px)
+        new_antenna_row = int(py)
+
+        # Clamp to DEM bounds
+        new_antenna_row = max(0, min(new_antenna_row, dem_h - 1))
+        new_antenna_col = max(0, min(new_antenna_col, dem_w - 1))
+
+        logger.info(
+            'Starting radio horizon recompute at DEM position (%d, %d)',
+            new_antenna_col,
+            new_antenna_row,
+        )
+
+        # Show wait cursor and status message
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        self._status_proxy.show_message('Пересчет радиогоризонта...', 0)
+
+        # Create and start worker
+        self._rh_worker = RadioHorizonRecomputeWorker(
+            self._rh_cache, new_antenna_row, new_antenna_col
+        )
+        self._rh_worker.finished.connect(self._on_radio_horizon_recompute_finished)
+        self._rh_worker.error.connect(self._on_radio_horizon_recompute_error)
+        self._rh_worker.start()
+
+    @Slot(Image.Image, int, int)
+    def _on_radio_horizon_recompute_finished(
+        self, result_image: Image.Image, new_antenna_row: int, new_antenna_col: int
+    ) -> None:
+        """Handle radio horizon recompute completion."""
+        try:
+            logger.info('Radio horizon recompute finished successfully')
+
+            # Update cache with new antenna position
+            self._rh_cache['antenna_row'] = new_antenna_row
+            self._rh_cache['antenna_col'] = new_antenna_col
+
+            # Update display
+            self._base_image = result_image.convert('RGB') if result_image.mode != 'RGB' else result_image
+            self._current_image = self._base_image
+
+            metadata = self._model.state.last_map_metadata
+            mpp = metadata.meters_per_pixel if metadata else 0.0
+            self._preview_area.set_image(self._current_image, meters_per_px=mpp)
+
+            # Update control point marker at new position
+            # Convert DEM coordinates to scene coordinates (same for radio horizon)
+            self._preview_area.set_control_point_marker(
+                float(new_antenna_col), float(new_antenna_row)
+            )
+
+            # Restore cursor and show success message
+            QApplication.restoreOverrideCursor()
+            self._status_proxy.show_message('Радиогоризонт пересчитан', 2000)
+
+        except Exception as e:
+            logger.exception('Failed to update preview after radio horizon recompute')
+            QApplication.restoreOverrideCursor()
+            self._status_proxy.show_message(f'Ошибка при обновлении превью: {e}', 5000)
+        finally:
+            # Clean up worker
+            if self._rh_worker is not None:
+                self._rh_worker.deleteLater()
+                self._rh_worker = None
+
+    @Slot(str)
+    def _on_radio_horizon_recompute_error(self, error_msg: str) -> None:
+        """Handle radio horizon recompute error."""
+        logger.error('Radio horizon recompute failed: %s', error_msg)
+        QApplication.restoreOverrideCursor()
+        self._status_proxy.show_message(f'Ошибка пересчета: {error_msg}', 5000)
+
+        # Clean up worker
+        if self._rh_worker is not None:
+            self._rh_worker.deleteLater()
+            self._rh_worker = None
 
     @Slot(bool, str)
     def _on_download_finished(
@@ -1895,6 +2054,7 @@ class MainWindow(QMainWindow):
         image: Image.Image,
         metadata: MapMetadata | None = None,
         dem_grid: object = None,
+        rh_cache: dict | None = None,
     ) -> None:
         """Show preview image in the main window's integrated preview area."""
         try:
@@ -1904,6 +2064,13 @@ class MainWindow(QMainWindow):
 
             # Save DEM grid for cursor elevation display
             self._dem_grid = dem_grid
+
+            # Save radio horizon cache for interactive rebuilding
+            if rh_cache is not None:
+                self._rh_cache = rh_cache
+                logger.info('Radio horizon cache saved for interactive rebuilding')
+            else:
+                self._rh_cache = {}  # Clear cache for non-RH maps
 
             # Update model with metadata for informer
             self._model.update_preview(None, metadata)
@@ -1920,7 +2087,11 @@ class MainWindow(QMainWindow):
             self._update_cp_marker_from_settings(self._model.settings)
 
             # Set tooltip for coordinate informer and preview area
-            if metadata and metadata.control_point_enabled:
+            if metadata and metadata.map_type == MapType.RADIO_HORIZON and rh_cache:
+                tooltip = 'Правая кнопка мыши - перестроение радиогоризонта с новой контрольной точкой'
+                self._coords_label.setToolTip(tooltip)
+                self._preview_area.setToolTip(tooltip)
+            elif metadata and metadata.control_point_enabled:
                 tooltip = 'Правая кнопка мыши - установка контрольной точки'
                 self._coords_label.setToolTip(tooltip)
                 self._preview_area.setToolTip(tooltip)

@@ -856,10 +856,26 @@ class MapDownloadService:
                 metadata.zoom,
                 metadata.scale,
             )
+
+            # Collect radio horizon cache if available
+            rh_cache = None
+            if ctx.is_radio_horizon and ctx.rh_cache_dem is not None:
+                rh_cache = {
+                    'dem': ctx.rh_cache_dem,
+                    'topo_base': ctx.rh_cache_topo_base,
+                    'antenna_row': ctx.rh_cache_antenna_row,
+                    'antenna_col': ctx.rh_cache_antenna_col,
+                    'pixel_size_m': ctx.rh_cache_pixel_size_m,
+                    'antenna_height_m': ctx.settings.antenna_height_m,
+                    'overlay_alpha': ctx.settings.radio_horizon_overlay_alpha,
+                    'max_height_m': ctx.settings.max_flight_height_m,
+                    'uav_height_reference': ctx.settings.uav_height_reference,
+                }
+
             if gui_image is not None:
-                did_publish = publish_preview_image(gui_image, metadata, ctx.dem_grid)
+                did_publish = publish_preview_image(gui_image, metadata, ctx.dem_grid, rh_cache)
             else:
-                did_publish = publish_preview_image(result, metadata, ctx.dem_grid)
+                did_publish = publish_preview_image(result, metadata, ctx.dem_grid, rh_cache)
         except Exception:
             did_publish = False
         preview_elapsed = time.monotonic() - preview_start_time

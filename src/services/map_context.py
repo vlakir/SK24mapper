@@ -83,6 +83,13 @@ class MapDownloadContext:
     # Control point elevation (filled by processors if available)
     control_point_elevation: float | None = None
 
+    # Radio horizon cache data (for interactive rebuilding)
+    rh_cache_dem: Any | None = None  # numpy array - DEM
+    rh_cache_topo_base: Image.Image | None = None  # PIL Image - топооснова
+    rh_cache_antenna_row: int | None = None  # позиция антенны в DEM (строка)
+    rh_cache_antenna_col: int | None = None  # позиция антенны в DEM (столбец)
+    rh_cache_pixel_size_m: float | None = None  # размер пикселя в метрах
+
     # Internal coordinate storage (set by service)
     coord_result: Any | None = None
     crs_sk42_gk: Any | None = None
@@ -120,6 +127,7 @@ class MapDownloadContext:
             if self.settings.control_point_enabled
             else None,
             helmert_params=self.settings.custom_helmert,
+            map_type=self.settings.map_type,
         )
 
     def get_meters_per_pixel(self) -> float:

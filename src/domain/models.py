@@ -27,6 +27,7 @@ class MapMetadata(BaseModel):
     original_cp_x_gk: float | None = None
     original_cp_y_gk: float | None = None
     helmert_params: tuple[float, float, float, float, float, float, float] | None = None
+    map_type: MapType | None = None
 
 
 class MapSettings(BaseModel):

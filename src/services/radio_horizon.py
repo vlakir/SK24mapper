@@ -566,6 +566,89 @@ def compute_and_colorize_radio_horizon(
     return Image.fromarray(rgb)
 
 
+def recompute_radio_horizon_fast(
+    dem: np.ndarray,
+    new_antenna_row: int,
+    new_antenna_col: int,
+    antenna_height_m: float,
+    pixel_size_m: float,
+    topo_base: Image.Image,
+    overlay_alpha: float,
+    max_height_m: float = RADIO_HORIZON_MAX_HEIGHT_M,
+    color_ramp: list[tuple[float, tuple[int, int, int]]] | None = None,
+    unreachable_color: tuple[int, int, int] = RADIO_HORIZON_UNREACHABLE_COLOR,
+    uav_height_reference: UavHeightReference = UavHeightReference.GROUND,
+    earth_radius_m: float = EARTH_RADIUS_M,
+    refraction_k: float = RADIO_HORIZON_REFRACTION_K,
+    grid_step: int = RADIO_HORIZON_GRID_STEP,
+) -> Image.Image:
+    """
+    Быстрое перестроение радиогоризонта с новой контрольной точкой.
+
+    Использует кэшированный DEM и топооснову для ускорения вычислений.
+    Пересчитывает только матрицу радиогоризонта и цветовую раскраску.
+
+    Args:
+        dem: Кэшированная матрица высот
+        new_antenna_row: Новый индекс строки антенны в DEM
+        new_antenna_col: Новый индекс столбца антенны в DEM
+        antenna_height_m: Высота антенны над поверхностью
+        pixel_size_m: Размер пикселя в метрах
+        topo_base: Кэшированная топографическая основа
+        overlay_alpha: Прозрачность наложения (1.0 = чистая топооснова)
+        max_height_m: Максимальная высота для шкалы
+        color_ramp: Цветовая палитра
+        unreachable_color: Цвет недостижимых зон
+        uav_height_reference: Режим отсчёта высоты БпЛА
+        earth_radius_m: Радиус Земли
+        refraction_k: Коэффициент рефракции
+        grid_step: Шаг сетки для вычислений
+
+    Returns:
+        Готовое изображение с наложенной топоосновой
+
+    """
+    if color_ramp is None:
+        color_ramp = RADIO_HORIZON_COLOR_RAMP
+
+    # Получаем высоту контрольной точки для режима CONTROL_POINT
+    h, w = dem.shape
+    new_antenna_row = max(0, min(new_antenna_row, h - 1))
+    new_antenna_col = max(0, min(new_antenna_col, w - 1))
+    cp_elevation = float(dem[new_antenna_row, new_antenna_col])
+
+    # Вычисляем радиогоризонт с раскраской
+    result = compute_and_colorize_radio_horizon(
+        dem=dem,
+        antenna_row=new_antenna_row,
+        antenna_col=new_antenna_col,
+        antenna_height_m=antenna_height_m,
+        pixel_size_m=pixel_size_m,
+        earth_radius_m=earth_radius_m,
+        refraction_k=refraction_k,
+        grid_step=grid_step,
+        max_height_m=max_height_m,
+        color_ramp=color_ramp,
+        unreachable_color=unreachable_color,
+        uav_height_reference=uav_height_reference,
+        cp_elevation=cp_elevation,
+    )
+
+    # Проверяем размеры
+    if topo_base.size != result.size:
+        topo_base = topo_base.resize(result.size, Image.Resampling.BILINEAR)
+
+    # Накладываем на топооснову
+    # В настройках хранится "прозрачность слоя" (1 = чистая топооснова),
+    # а blend принимает "непрозрачность" (1 = только радиогоризонт), поэтому инвертируем
+    blend_alpha = 1.0 - overlay_alpha
+    topo_base_copy = topo_base.convert('L').convert('RGBA')
+    result = result.convert('RGBA')
+    result = Image.blend(topo_base_copy, result, blend_alpha)
+
+    return result
+
+
 def get_radio_horizon_legend_params(
     max_height_m: float = RADIO_HORIZON_MAX_HEIGHT_M,
 ) -> tuple[float, float, str]:
