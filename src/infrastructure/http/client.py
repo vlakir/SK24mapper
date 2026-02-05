@@ -24,9 +24,15 @@ from shared.constants import (
     MAPBOX_STATIC_BASE,
     MAPBOX_TERRAIN_RGB_PATH,
 )
+from shared.portable import get_portable_path, is_portable_mode
 
 
 def resolve_cache_dir() -> Path | None:
+    # Portable режим: кэш в папке приложения
+    if is_portable_mode():
+        return get_portable_path('cache/tiles')
+
+    # Обычный режим
     raw_dir = Path(HTTP_CACHE_DIR)
     if raw_dir.is_absolute():
         return raw_dir

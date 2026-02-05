@@ -13,6 +13,7 @@ from PySide6.QtGui import QIcon
 
 from gui.view import create_application
 from shared.diagnostics import log_comprehensive_diagnostics, log_memory_usage
+from shared.portable import get_portable_path, is_portable_mode
 
 logger = logging.getLogger(__name__)
 
@@ -20,20 +21,30 @@ logger = logging.getLogger(__name__)
 def setup_logging() -> tuple[Path, Path]:
     """
     Configure application logging to LOCALAPPDATA and ensure user dirs.
+    В portable режиме использует локальные папки относительно exe.
 
     Returns:
         Tuple (appdata_base, local_base) for further use.
 
     """
     # Determine user profile dirs
-    appdata_base = (
-        Path(os.getenv('APPDATA') or Path.home() / 'AppData' / 'Roaming') / 'SK42mapper'
-    )
-    local_base = (
-        Path(os.getenv('LOCALAPPDATA') or Path.home() / 'AppData' / 'Local')
-        / 'SK42mapper'
-    )
-    log_dir = local_base / 'log'
+    if is_portable_mode():
+        # Portable режим: все данные в папке с exe
+        # appdata_base должен указывать на корень, потому что код добавляет /configs
+        appdata_base = Path(sys.argv[0]).resolve().parent
+        local_base = get_portable_path('data')
+        log_dir = get_portable_path('logs')
+    else:
+        # Обычный режим: стандартные пути Windows
+        appdata_base = (
+            Path(os.getenv('APPDATA') or Path.home() / 'AppData' / 'Roaming') / 'SK42mapper'
+        )
+        local_base = (
+            Path(os.getenv('LOCALAPPDATA') or Path.home() / 'AppData' / 'Local')
+            / 'SK42mapper'
+        )
+        log_dir = local_base / 'log'
+
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / 'mil_mapper.log'
 
@@ -56,13 +67,27 @@ def main() -> int:
     # Ensure user data directories and bootstrap defaults
     try:
         # Create user dirs
-        (appdata_base / 'configs' / 'profiles').mkdir(parents=True, exist_ok=True)
-        (appdata_base / 'maps').mkdir(parents=True, exist_ok=True)
-        (local_base / '.cache' / 'tiles').mkdir(parents=True, exist_ok=True)
+        if is_portable_mode():
+            # Portable режим: создаем папки в директории приложения
+            get_portable_path('configs/profiles').mkdir(parents=True, exist_ok=True)
+            get_portable_path('maps').mkdir(parents=True, exist_ok=True)
+            get_portable_path('cache/tiles').mkdir(parents=True, exist_ok=True)
+        else:
+            # Обычный режим
+            (appdata_base / 'configs' / 'profiles').mkdir(parents=True, exist_ok=True)
+            (appdata_base / 'maps').mkdir(parents=True, exist_ok=True)
+            (local_base / '.cache' / 'tiles').mkdir(parents=True, exist_ok=True)
         # Copy default configs if not present
         install_dir = Path(sys.argv[0]).resolve().parent
-        default_cfg_root = install_dir / 'configs'
+        # В PyInstaller onedir сборке данные находятся в _internal/
+        # В onefile или при разработке - рядом с exe/скриптом
+        default_cfg_root = install_dir / '_internal' / 'configs'
+        if not default_cfg_root.exists():
+            default_cfg_root = install_dir / 'configs'
+
+        logger.info(f'Looking for default configs in: {default_cfg_root}')
         if default_cfg_root.exists():
+            logger.info(f'Found default configs, copying to: {appdata_base / "configs"}')
             # Copy files only if missing in user configs
             for src in default_cfg_root.rglob('*'):
                 if src.is_file():
@@ -70,10 +95,15 @@ def main() -> int:
                     dst = appdata_base / 'configs' / rel
                     if not dst.exists():
                         dst.parent.mkdir(parents=True, exist_ok=True)
-                        with contextlib.suppress(Exception):
+                        try:
                             shutil.copy2(src, dst)
-    except Exception:
-        logger.warning('User data bootstrap failed')
+                            logger.info(f'Copied config: {rel}')
+                        except Exception as e:
+                            logger.warning(f'Failed to copy {rel}: {e}')
+        else:
+            logger.warning(f'Default configs not found at: {default_cfg_root}')
+    except Exception as e:
+        logger.warning(f'User data bootstrap failed: {e}')
 
     # Log initial system state
     log_comprehensive_diagnostics('APPLICATION_STARTUP')

@@ -21,6 +21,7 @@ from domain.profiles import (
 from gui.model import MilMapperModel, ModelEvent
 from service import download_satellite_rectangle
 from shared.diagnostics import ResourceMonitor, log_memory_usage, run_deep_verification
+from shared.portable import get_app_dir, is_portable_mode
 
 logger = logging.getLogger(__name__)
 
@@ -57,9 +58,22 @@ class MilMapperController:
     def _load_api_key(self) -> None:
         """
         Загрузка API-ключа из переменных окружения (.env/.secrets.env) для разных
-        сценариев запуска.
+        сценариев запуска. В portable режиме приоритет имеет файл api_key.txt.
         """
         try:
+            # Portable режим: проверяем api_key.txt рядом с exe
+            if is_portable_mode():
+                api_key_file = get_app_dir() / 'api_key.txt'
+                if api_key_file.exists():
+                    try:
+                        with api_key_file.open('r', encoding='utf-8') as f:
+                            self._api_key = f.read().strip()
+                        if self._api_key:
+                            logger.info('API-ключ успешно загружен из api_key.txt (portable режим)')
+                            return
+                    except Exception as e:
+                        logger.warning(f'Не удалось прочитать api_key.txt: {e}')
+
             # Каталог установленного приложения (папка с exe при сборке PyInstaller)
             install_dir = Path(sys.argv[0]).resolve().parent
             # Рабочая директория процесса (может отличаться от install_dir)

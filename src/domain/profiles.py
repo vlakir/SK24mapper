@@ -7,6 +7,7 @@ import tomlkit
 
 from domain.models import MapSettings
 from shared.constants import CONTROL_POINT_PRECISION_TOLERANCE_M
+from shared.portable import get_portable_path, is_portable_mode
 
 logger = logging.getLogger(__name__)
 
@@ -15,12 +16,17 @@ def _user_profiles_dir() -> Path:
     """
     Determine profiles directory.
 
-    1) If <project_root>/configs/profiles exists, use it (useful for
+    1) Portable mode: use ./configs/profiles relative to exe.
+    2) If <project_root>/configs/profiles exists, use it (useful for
        portable/run-from-repo setups).
-    2) Otherwise, fall back to user APPDATA directory:
+    3) Otherwise, fall back to user APPDATA directory:
        %APPDATA%/SK42mapper/configs/profiles or
        ~/AppData/Roaming/SK42mapper/configs/profiles when APPDATA is not set.
     """
+    # Portable режим: профили в папке приложения
+    if is_portable_mode():
+        return get_portable_path('configs/profiles')
+
     override = None
     try:
         override = getattr(sys.modules.get('profiles'), '_user_profiles_dir', None)

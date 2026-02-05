@@ -91,9 +91,96 @@ jobs:
           path: |
             SK42mapper-*-setup.exe
 
+      - name: Build portable version with PyInstaller
+        run: poetry run pyinstaller SK42mapper_portable.spec --noconfirm --clean
+
+      - name: Verify portable build output
+        shell: pwsh
+        run: |
+          Write-Host "Checking portable build output:"
+          if (Test-Path 'dist/SK42mapper_portable') {
+            Get-ChildItem 'dist/SK42mapper_portable' -Force | Format-List -Property Name,FullName
+          } else {
+            Write-Host 'ERROR: dist/SK42mapper_portable not found'
+            exit 1
+          }
+
+      - name: Create portable package structure
+        shell: pwsh
+        run: |
+          $portableDir = "SK42mapper_portable_package"
+          $distDir = "dist/SK42mapper_portable"
+
+          # Создаём структуру папок
+          New-Item -ItemType Directory -Force -Path "$portableDir"
+          New-Item -ItemType Directory -Force -Path "$portableDir/cache"
+          New-Item -ItemType Directory -Force -Path "$portableDir/cache/tiles"
+          New-Item -ItemType Directory -Force -Path "$portableDir/configs"
+          New-Item -ItemType Directory -Force -Path "$portableDir/configs/profiles"
+          New-Item -ItemType Directory -Force -Path "$portableDir/maps"
+          New-Item -ItemType Directory -Force -Path "$portableDir/logs"
+
+          # Копируем все файлы из dist/SK42mapper_portable
+          Copy-Item -Path "$distDir/*" -Destination "$portableDir" -Recurse -Force
+
+          # Создаём пример api_key.txt
+          @"
+          YOUR_MAPBOX_API_KEY_HERE
+          "@.Trim() | Out-File -FilePath "$portableDir/api_key.txt" -Encoding UTF8 -NoNewline
+
+          # Создаём README
+          @"
+          SK42mapper Portable Edition
+          ==========================
+
+          Инструкция по использованию:
+
+          1. Откройте файл api_key.txt и вставьте свой API ключ Mapbox
+             (замените текст YOUR_MAPBOX_API_KEY_HERE на ваш ключ)
+
+          2. Запустите SK42mapper_portable.exe
+
+          3. Все данные (кэш, конфигурация, карты, логи) будут храниться
+             в папках рядом с программой:
+             - cache/ - кэш загруженных тайлов
+             - configs/ - файлы конфигурации и профили
+             - maps/ - сохранённые карты
+             - logs/ - лог-файлы
+
+          4. Вы можете перенести всю папку на другой компьютер или флешку
+
+          Требования:
+          - Windows 10/11 (64-bit)
+          - Подключение к интернету для загрузки карт
+
+          "@.Trim() | Out-File -FilePath "$portableDir/README.txt" -Encoding UTF8
+
+          Write-Host "Portable package structure created successfully"
+          Get-ChildItem $portableDir
+
+      - name: Create portable ZIP archive
+        shell: pwsh
+        run: |
+          $version = "${{ env.VERSION }}"
+          $zipName = "SK42mapper-${version}-portable.zip"
+          Compress-Archive -Path "SK42mapper_portable_package/*" -DestinationPath $zipName -Force
+          Write-Host "Created portable archive: $zipName"
+          if (Test-Path $zipName) {
+            $size = (Get-Item $zipName).Length / 1MB
+            Write-Host "Archive size: $([math]::Round($size, 2)) MB"
+          }
+
+      - name: Upload portable artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: SK42mapper-portable
+          path: |
+            SK42mapper-*-portable.zip
+
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: |
             SK42mapper-*-setup.exe
+            SK42mapper-*-portable.zip

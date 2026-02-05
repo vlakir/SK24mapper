@@ -51,6 +51,7 @@ from shared.constants import (
     map_type_to_style_id,
 )
 from shared.constants import PSUTIL_AVAILABLE as _PSUTIL_AVAILABLE
+from shared.portable import get_portable_path, is_portable_mode
 
 logger = logging.getLogger(__name__)
 
@@ -331,16 +332,18 @@ async def run_deep_verification(*, api_key: str, settings: object) -> None:
         mt_enum = default_map_type()
 
     # 3) Cache directory writability
-    # 3) Cache directory writability
-    cache_dir = Path(HTTP_CACHE_DIR)
-    if not cache_dir.is_absolute():
-        # Mirror logic similar to service._resolve_cache_dir()
-        local = os.getenv('LOCALAPPDATA')
-        cache_dir = (
-            (Path(local) / 'SK42mapper' / '.cache' / 'tiles').resolve()
-            if local
-            else (Path.home() / '.sk42mapper_cache' / 'tiles').resolve()
-        )
+    if is_portable_mode():
+        cache_dir = get_portable_path('cache/tiles')
+    else:
+        cache_dir = Path(HTTP_CACHE_DIR)
+        if not cache_dir.is_absolute():
+            # Mirror logic similar to service._resolve_cache_dir()
+            local = os.getenv('LOCALAPPDATA')
+            cache_dir = (
+                (Path(local) / 'SK42mapper' / '.cache' / 'tiles').resolve()
+                if local
+                else (Path.home() / '.sk42mapper_cache' / 'tiles').resolve()
+            )
     _ensure_writable_dir(cache_dir)
 
     # 4) Output path directory writability
@@ -525,16 +528,19 @@ async def _make_cached_session_for_diag() -> aiohttp.ClientSession:
         return aiohttp.ClientSession(connector=connector)
 
     # Разрешаем каталог кэша аналогично service._resolve_cache_dir
-    raw_dir = Path(HTTP_CACHE_DIR)
-    if raw_dir.is_absolute():
-        cache_dir = raw_dir
+    if is_portable_mode():
+        cache_dir = get_portable_path('cache/tiles')
     else:
-        local = os.getenv('LOCALAPPDATA')
-        cache_dir = (
-            (Path(local) / 'SK42mapper' / '.cache' / 'tiles').resolve()
-            if local
-            else (Path.home() / '.sk42mapper_cache' / 'tiles').resolve()
-        )
+        raw_dir = Path(HTTP_CACHE_DIR)
+        if raw_dir.is_absolute():
+            cache_dir = raw_dir
+        else:
+            local = os.getenv('LOCALAPPDATA')
+            cache_dir = (
+                (Path(local) / 'SK42mapper' / '.cache' / 'tiles').resolve()
+                if local
+                else (Path.home() / '.sk42mapper_cache' / 'tiles').resolve()
+            )
     cache_dir.mkdir(parents=True, exist_ok=True)
     cache_path = cache_dir / 'http_cache.sqlite'
     # Инициализация WAL
