@@ -608,6 +608,11 @@ def recompute_radio_horizon_fast(
         Готовое изображение с наложенной топоосновой
 
     """
+    import logging
+    import time
+
+    logger = logging.getLogger(__name__)
+
     if color_ramp is None:
         color_ramp = RADIO_HORIZON_COLOR_RAMP
 
@@ -618,6 +623,7 @@ def recompute_radio_horizon_fast(
     cp_elevation = float(dem[new_antenna_row, new_antenna_col])
 
     # Вычисляем радиогоризонт с раскраской
+    step_start = time.monotonic()
     result = compute_and_colorize_radio_horizon(
         dem=dem,
         antenna_row=new_antenna_row,
@@ -633,18 +639,27 @@ def recompute_radio_horizon_fast(
         uav_height_reference=uav_height_reference,
         cp_elevation=cp_elevation,
     )
+    step_elapsed = time.monotonic() - step_start
+    logger.info('    └─ compute_and_colorize_radio_horizon: %.3f sec', step_elapsed)
 
     # Проверяем размеры
+    step_start = time.monotonic()
     if topo_base.size != result.size:
         topo_base = topo_base.resize(result.size, Image.Resampling.BILINEAR)
+    step_elapsed = time.monotonic() - step_start
+    if step_elapsed > 0.001:  # Только если заметное время
+        logger.info('    └─ Resize topo base: %.3f sec', step_elapsed)
 
     # Накладываем на топооснову
+    step_start = time.monotonic()
     # В настройках хранится "прозрачность слоя" (1 = чистая топооснова),
     # а blend принимает "непрозрачность" (1 = только радиогоризонт), поэтому инвертируем
     blend_alpha = 1.0 - overlay_alpha
     topo_base_copy = topo_base.convert('L').convert('RGBA')
     result = result.convert('RGBA')
     result = Image.blend(topo_base_copy, result, blend_alpha)
+    step_elapsed = time.monotonic() - step_start
+    logger.info('    └─ Blend with topo base: %.3f sec', step_elapsed)
 
     return result
 

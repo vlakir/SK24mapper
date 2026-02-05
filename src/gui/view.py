@@ -143,13 +143,18 @@ class RadioHorizonRecomputeWorker(QThread):
 
     def run(self) -> None:
         """Execute recomputation in background thread."""
+        import time
+
         try:
+            start_time = time.monotonic()
             logger.info(
                 'RadioHorizonRecomputeWorker: recomputing with antenna at (%d, %d)',
                 self._new_antenna_col,
                 self._new_antenna_row,
             )
 
+            # Step 1: Recompute radio horizon
+            step_start = time.monotonic()
             result_image = recompute_radio_horizon_fast(
                 dem=self._rh_cache['dem'],
                 new_antenna_row=self._new_antenna_row,
@@ -161,18 +166,24 @@ class RadioHorizonRecomputeWorker(QThread):
                 max_height_m=self._rh_cache['max_height_m'],
                 uav_height_reference=self._rh_cache['uav_height_reference'],
             )
+            step_elapsed = time.monotonic() - step_start
+            logger.info('  └─ Recompute radio horizon: %.3f sec', step_elapsed)
 
-            # Resize to final size if needed (DEM was downsampled)
+            # Step 2: Resize to final size if needed (DEM was downsampled)
             final_size = self._rh_cache.get('final_size')
             if final_size and result_image.size != final_size:
+                step_start = time.monotonic()
                 logger.info(
                     'RadioHorizonRecomputeWorker: resizing result %s -> %s',
                     result_image.size,
                     final_size,
                 )
                 result_image = result_image.resize(final_size, Image.Resampling.BILINEAR)
+                step_elapsed = time.monotonic() - step_start
+                logger.info('  └─ Resize to final size: %.3f sec', step_elapsed)
 
-            logger.info('RadioHorizonRecomputeWorker: recomputation completed')
+            total_elapsed = time.monotonic() - start_time
+            logger.info('RadioHorizonRecomputeWorker: recomputation completed in %.3f sec', total_elapsed)
             self.finished.emit(result_image, self._new_antenna_row, self._new_antenna_col)
 
         except Exception as e:
@@ -1619,8 +1630,11 @@ class MainWindow(QMainWindow):
         self, result_image: Image.Image, new_antenna_row: int, new_antenna_col: int
     ) -> None:
         """Handle radio horizon recompute completion."""
+        import time
+
         try:
-            logger.info('Radio horizon recompute finished successfully')
+            gui_start_time = time.monotonic()
+            logger.info('Radio horizon recompute finished successfully - applying postprocessing')
 
             # Update cache with new antenna position
             self._rh_cache['antenna_row'] = new_antenna_row
@@ -1631,21 +1645,25 @@ class MainWindow(QMainWindow):
             mpp = metadata.meters_per_pixel if metadata else 0.0
 
             # Apply cached overlay layer if available, otherwise draw manually
+            step_start = time.monotonic()
             overlay_layer = self._rh_cache.get('overlay_layer')
             if overlay_layer:
                 # Use cached overlay (grid + legend + contours)
-                logger.info('Applying cached overlay layer')
                 result_image = result_image.convert('RGBA')
                 result_image = Image.alpha_composite(result_image, overlay_layer)
+                step_elapsed = time.monotonic() - step_start
+                logger.info('  └─ Apply cached overlay layer: %.3f sec', step_elapsed)
             else:
                 # Fallback: draw grid and legend manually
-                logger.info('No cached overlay, drawing manually')
                 if self._rh_cache.get('settings'):
                     settings = self._rh_cache['settings']
                     self._draw_rh_grid(result_image, settings, mpp)
                 self._draw_rh_legend(result_image, mpp)
+                step_elapsed = time.monotonic() - step_start
+                logger.info('  └─ Draw grid and legend manually: %.3f sec', step_elapsed)
 
             # Draw control point triangle and label on the image (like in first build)
+            step_start = time.monotonic()
             if hasattr(self, '_rh_click_pos'):
                 px, py = self._rh_click_pos
 
@@ -1669,17 +1687,25 @@ class MainWindow(QMainWindow):
                     self._sync_ui_to_model_now()
 
                     logger.info('Control point updated to X=%d, Y=%d', x_val, y_val)
+            step_elapsed = time.monotonic() - step_start
+            logger.info('  └─ Draw control point marker: %.3f sec', step_elapsed)
 
             # Update display
+            step_start = time.monotonic()
             self._base_image = result_image.convert('RGB') if result_image.mode != 'RGB' else result_image
             self._current_image = self._base_image
 
             metadata = self._model.state.last_map_metadata
             mpp = metadata.meters_per_pixel if metadata else 0.0
             self._preview_area.set_image(self._current_image, meters_per_px=mpp)
+            step_elapsed = time.monotonic() - step_start
+            logger.info('  └─ Update display: %.3f sec', step_elapsed)
 
             # Restore cursor and show success message
             QApplication.restoreOverrideCursor()
+
+            gui_total_elapsed = time.monotonic() - gui_start_time
+            logger.info('GUI postprocessing total: %.3f sec', gui_total_elapsed)
             self._status_proxy.show_message('Радиогоризонт пересчитан', 2000)
 
         except Exception as e:
