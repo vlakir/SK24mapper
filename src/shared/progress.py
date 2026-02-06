@@ -37,7 +37,9 @@ class _CbStore:
     progress: ClassVar[Callable[[int, int, str], None] | None] = None
     spinner_start: ClassVar[Callable[[str], None] | None] = None
     spinner_stop: ClassVar[Callable[[str], None] | None] = None
-    preview_image: ClassVar[Callable[[object, object, object, object], None] | None] = None
+    preview_image: ClassVar[Callable[[object, object, object, object], None] | None] = (
+        None
+    )
 
 
 def get_progress_callback() -> Callable[[int, int, str], None] | None:
@@ -52,7 +54,9 @@ def get_spinner_stop_callback() -> Callable[[str], None] | None:
     return _CbStore.spinner_stop
 
 
-def get_preview_image_callback() -> Callable[[object, object, object, object], None] | None:
+def get_preview_image_callback() -> (
+    Callable[[object, object, object, object], None] | None
+):
     return _CbStore.preview_image
 
 

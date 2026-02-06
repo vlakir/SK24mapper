@@ -10,7 +10,9 @@
 
 from __future__ import annotations
 
+import logging
 import math
+import time
 
 import cv2
 import numpy as np
@@ -604,14 +606,12 @@ def recompute_radio_horizon_fast(
         earth_radius_m: Радиус Земли
         refraction_k: Коэффициент рефракции
         grid_step: Шаг сетки для вычислений
+        final_size: Финальный размер результата (width, height) или None
 
     Returns:
         Готовое изображение с наложенной топоосновой
 
     """
-    import logging
-    import time
-
     logger = logging.getLogger(__name__)
 
     if color_ramp is None:
@@ -622,6 +622,15 @@ def recompute_radio_horizon_fast(
     new_antenna_row = max(0, min(new_antenna_row, h - 1))
     new_antenna_col = max(0, min(new_antenna_col, w - 1))
     cp_elevation = float(dem[new_antenna_row, new_antenna_col])
+
+    # Debug logging
+    logger.info(
+        '    └─ Input: DEM size=(%d, %d), topo_base size=%s, final_size=%s',
+        w,
+        h,
+        topo_base.size,
+        final_size,
+    )
 
     # Вычисляем радиогоризонт с раскраской
     step_start = time.monotonic()
@@ -643,35 +652,38 @@ def recompute_radio_horizon_fast(
     step_elapsed = time.monotonic() - step_start
     logger.info('    └─ compute_and_colorize_radio_horizon: %.3f sec', step_elapsed)
 
-    # Resize to final size if needed (DEM was downsampled)
-    # Do this BEFORE blend to avoid resizing both images separately
+    # Resize result to final size if needed (DEM was downsampled)
     if final_size and result.size != final_size:
         step_start = time.monotonic()
-        # Use cv2 for faster resize
-        result_array = np.array(result)
-        result_array = cv2.resize(
-            result_array, final_size, interpolation=cv2.INTER_LINEAR
-        )
-        result = Image.fromarray(result_array)
-
-        # Resize topo base to match
-        topo_array = np.array(topo_base)
-        topo_array = cv2.resize(
-            topo_array, final_size, interpolation=cv2.INTER_LINEAR
-        )
-        topo_base = Image.fromarray(topo_array)
-
+        result = result.resize(final_size, Image.Resampling.BILINEAR)
         step_elapsed = time.monotonic() - step_start
-        logger.info('    └─ Resize both to final size using cv2: %.3f sec', step_elapsed)
+        logger.info('    └─ Resize result to final size: %.3f sec', step_elapsed)
+
+    # Resize topo_base if it doesn't match final_size (cached with old code or wrong size)
+    if final_size and topo_base.size != final_size:
+        step_start = time.monotonic()
+        logger.warning(
+            '    └─ topo_base size mismatch! Expected %s, got %s. Resizing...',
+            final_size,
+            topo_base.size,
+        )
+        topo_base = topo_base.resize(final_size, Image.Resampling.BILINEAR)
+        step_elapsed = time.monotonic() - step_start
+        logger.info('    └─ Resize topo_base to final size: %.3f sec', step_elapsed)
 
     # Накладываем на топооснову
     step_start = time.monotonic()
     # В настройках хранится "прозрачность слоя" (1 = чистая топооснова),
     # а blend принимает "непрозрачность" (1 = только радиогоризонт), поэтому инвертируем
     blend_alpha = 1.0 - overlay_alpha
-    topo_base_copy = topo_base.convert('L').convert('RGBA')
+
+    # topo_base уже в RGBA формате (предконвертирован при кэшировании)
+    # Это избавляет от конвертации L->RGBA каждый раз
     result = result.convert('RGBA')
-    result = Image.blend(topo_base_copy, result, blend_alpha)
+
+    # Используем PIL Image.blend (numpy оказался медленнее для таких размеров)
+    result = Image.blend(topo_base, result, blend_alpha)
+
     step_elapsed = time.monotonic() - step_start
     logger.info('    └─ Blend with topo base: %.3f sec', step_elapsed)
 

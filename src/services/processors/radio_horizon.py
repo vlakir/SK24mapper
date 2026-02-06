@@ -249,13 +249,34 @@ async def process_radio_horizon(ctx: MapDownloadContext) -> Image.Image:
 
     sp_topo.stop('Топографическая основа загружена')
 
-    # Resize topo base if needed
+    # Save topo base for cache in FINAL size (after rotation and crop)
+    # Use target_w_px and target_h_px, not crop_rect (which is before rotation)
+    # Convert to RGBA to avoid conversion on every recompute
+    final_topo_size = (ctx.target_w_px, ctx.target_h_px)
+    if topo_base.size != final_topo_size:
+        logger.info(
+            'Масштабирование топоосновы для кэша %s -> %s (после поворота)',
+            topo_base.size,
+            final_topo_size,
+        )
+        topo_for_cache = topo_base.resize(final_topo_size, Image.Resampling.BILINEAR)
+    else:
+        logger.info(
+            'Топооснова уже в финальном размере, копируем в кэш: %s', topo_base.size
+        )
+        topo_for_cache = topo_base.copy()
+
+    # Convert to RGBA for fast blending (avoids L->RGBA conversion on every recompute)
+    ctx.rh_cache_topo_base = topo_for_cache.convert('L').convert('RGBA')
+
+    logger.info(
+        'Топооснова сохранена в кэш с размером: %s в RGBA формате (финальный размер после поворота)',
+        ctx.rh_cache_topo_base.size,
+    )
+
+    # Resize topo base to match result for current blend
     if topo_base.size != result.size:
         topo_base = topo_base.resize(result.size, Image.Resampling.BILINEAR)
-
-    # Save topo base for cache BEFORE blending
-    # Сохраняем топооснову в исходном размере (после ресайза если был)
-    ctx.rh_cache_topo_base = topo_base.copy()
 
     # Blend radio horizon with topo base
     # В настройках хранится "прозрачность слоя" (1 = чистая топооснова),

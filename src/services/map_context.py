@@ -89,7 +89,9 @@ class MapDownloadContext:
     rh_cache_antenna_row: int | None = None  # позиция антенны в DEM (строка)
     rh_cache_antenna_col: int | None = None  # позиция антенны в DEM (столбец)
     rh_cache_pixel_size_m: float | None = None  # размер пикселя в метрах
-    rh_cache_overlay: Image.Image | None = None  # PIL Image - слой с сеткой/легендой/изолиниями
+    rh_cache_overlay: Image.Image | None = (
+        None  # PIL Image - слой с сеткой/легендой/изолиниями
+    )
 
     # Internal coordinate storage (set by service)
     coord_result: Any | None = None

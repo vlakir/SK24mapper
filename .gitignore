@@ -1,4 +1,6 @@
 .idea/
+.claude/
+.zencoder/
 venv/
 env/
 doc/
@@ -24,3 +26,8 @@ vanilla_docker.sh
 secrets.env
 .cache/
 maps/
+
+# Prevent IDE/tool folders in .github
+.github/.idea/
+.github/.claude/
+.github/.zencoder/

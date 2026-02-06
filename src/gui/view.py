@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -61,7 +62,6 @@ from imaging import (
     draw_label_with_subscript_bg,
     load_grid_font,
 )
-from geo.topography import meters_per_pixel as calc_meters_per_pixel
 from services.coordinate_transformer import CoordinateTransformer
 from services.map_postprocessing import (
     compute_control_point_image_coords,
@@ -127,7 +127,9 @@ class _ViewObserver(Observer):
 class RadioHorizonRecomputeWorker(QThread):
     """Worker thread for radio horizon recomputation."""
 
-    finished = Signal(Image.Image, int, int)  # result_image, new_antenna_row, new_antenna_col
+    finished = Signal(
+        Image.Image, int, int
+    )  # result_image, new_antenna_row, new_antenna_col
     error = Signal(str)  # error_message
 
     def __init__(
@@ -143,8 +145,6 @@ class RadioHorizonRecomputeWorker(QThread):
 
     def run(self) -> None:
         """Execute recomputation in background thread."""
-        import time
-
         try:
             start_time = time.monotonic()
             logger.info(
@@ -169,11 +169,18 @@ class RadioHorizonRecomputeWorker(QThread):
                 final_size=final_size,
             )
             step_elapsed = time.monotonic() - step_start
-            logger.info('  └─ Recompute radio horizon (with resize): %.3f sec', step_elapsed)
+            logger.info(
+                '  └─ Recompute radio horizon (with resize): %.3f sec', step_elapsed
+            )
 
             total_elapsed = time.monotonic() - start_time
-            logger.info('RadioHorizonRecomputeWorker: recomputation completed in %.3f sec', total_elapsed)
-            self.finished.emit(result_image, self._new_antenna_row, self._new_antenna_col)
+            logger.info(
+                'RadioHorizonRecomputeWorker: recomputation completed in %.3f sec',
+                total_elapsed,
+            )
+            self.finished.emit(
+                result_image, self._new_antenna_row, self._new_antenna_col
+            )
 
         except Exception as e:
             logger.exception('RadioHorizonRecomputeWorker failed')
@@ -528,7 +535,9 @@ class MainWindow(QMainWindow):
         # Radio horizon cache for interactive rebuilding
         self._rh_cache: dict[str, Any] = {}
         self._rh_worker: QThread | None = None
-        self._rh_click_pos: tuple[float, float] | None = None  # Store click position for marker
+        self._rh_click_pos: tuple[float, float] | None = (
+            None  # Store click position for marker
+        )
 
         # Guard flag to prevent model updates while UI is being populated
         # programmatically
@@ -1596,7 +1605,10 @@ class MainWindow(QMainWindow):
 
         logger.info(
             'Starting radio horizon recompute: scene pos (%.1f, %.1f) -> DEM pos (%d, %d)',
-            px, py, new_antenna_col, new_antenna_row,
+            px,
+            py,
+            new_antenna_col,
+            new_antenna_row,
         )
 
         # Show wait cursor and status message
@@ -1619,11 +1631,11 @@ class MainWindow(QMainWindow):
         self, result_image: Image.Image, new_antenna_row: int, new_antenna_col: int
     ) -> None:
         """Handle radio horizon recompute completion."""
-        import time
-
         try:
             gui_start_time = time.monotonic()
-            logger.info('Radio horizon recompute finished successfully - applying postprocessing')
+            logger.info(
+                'Radio horizon recompute finished successfully - applying postprocessing'
+            )
 
             # Update cache with new antenna position
             self._rh_cache['antenna_row'] = new_antenna_row
@@ -1649,11 +1661,13 @@ class MainWindow(QMainWindow):
                     self._draw_rh_grid(result_image, settings, mpp)
                 self._draw_rh_legend(result_image, mpp)
                 step_elapsed = time.monotonic() - step_start
-                logger.info('  └─ Draw grid and legend manually: %.3f sec', step_elapsed)
+                logger.info(
+                    '  └─ Draw grid and legend manually: %.3f sec', step_elapsed
+                )
 
             # Draw control point triangle and label on the image (like in first build)
             step_start = time.monotonic()
-            if hasattr(self, '_rh_click_pos'):
+            if hasattr(self, '_rh_click_pos') and self._rh_click_pos is not None:
                 px, py = self._rh_click_pos
 
                 if mpp > 0:
@@ -1681,7 +1695,11 @@ class MainWindow(QMainWindow):
 
             # Update display
             step_start = time.monotonic()
-            self._base_image = result_image.convert('RGB') if result_image.mode != 'RGB' else result_image
+            self._base_image = (
+                result_image.convert('RGB')
+                if result_image.mode != 'RGB'
+                else result_image
+            )
             self._current_image = self._base_image
 
             metadata = self._model.state.last_map_metadata
@@ -1726,8 +1744,12 @@ class MainWindow(QMainWindow):
 
             draw_axis_aligned_km_grid(
                 result,
-                center_x_m=settings.control_point_x_sk42_gk if settings.control_point_enabled else 0,
-                center_y_m=settings.control_point_y_sk42_gk if settings.control_point_enabled else 0,
+                center_x_m=settings.control_point_x_sk42_gk
+                if settings.control_point_enabled
+                else 0,
+                center_y_m=settings.control_point_y_sk42_gk
+                if settings.control_point_enabled
+                else 0,
                 meters_per_px=mpp,
                 rotation_deg=0.0,
                 grid_width_px=grid_width_px,

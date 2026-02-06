@@ -1,0 +1,37 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(*)",
+      "Edit(*)",
+      "Write(*)",
+      "Read(*)",
+      "Glob(*)",
+      "Grep(*)",
+      "Task(*)",
+      "WebSearch",
+      "WebFetch",
+      "mcp__mcp-control__*"
+    ]
+  },
+  "autoApprove": {
+    "tools": [
+      "Bash",
+      "Edit",
+      "Write",
+      "Read",
+      "Glob",
+      "Grep",
+      "Task",
+      "mcp__mcp-control__get_screenshot",
+      "mcp__mcp-control__click_at",
+      "mcp__mcp-control__move_mouse",
+      "mcp__mcp-control__click_mouse",
+      "mcp__mcp-control__double_click",
+      "mcp__mcp-control__press_key",
+      "mcp__mcp-control__press_key_combination",
+      "mcp__mcp-control__type_text",
+      "mcp__mcp-control__focus_window",
+      "mcp__mcp-control__get_active_window"
+    ]
+  }
+}

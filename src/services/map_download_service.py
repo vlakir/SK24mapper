@@ -898,7 +898,10 @@ class MapDownloadService:
                     'overlay_alpha': ctx.settings.radio_horizon_overlay_alpha,
                     'max_height_m': ctx.settings.max_flight_height_m,
                     'uav_height_reference': ctx.settings.uav_height_reference,
-                    'final_size': (ctx.target_w_px, ctx.target_h_px),  # Финальный размер для масштабирования
+                    'final_size': (
+                        ctx.target_w_px,
+                        ctx.target_h_px,
+                    ),  # Финальный размер для масштабирования
                     # Кэшированный слой с сеткой/легендой/изолиниями
                     'overlay_layer': ctx.rh_cache_overlay,
                     # Параметры постобработки (на всякий случай, если overlay_layer не создался)
@@ -906,9 +909,13 @@ class MapDownloadService:
                 }
 
             if gui_image is not None:
-                did_publish = publish_preview_image(gui_image, metadata, ctx.dem_grid, rh_cache)
+                did_publish = publish_preview_image(
+                    gui_image, metadata, ctx.dem_grid, rh_cache
+                )
             else:
-                did_publish = publish_preview_image(result, metadata, ctx.dem_grid, rh_cache)
+                did_publish = publish_preview_image(
+                    result, metadata, ctx.dem_grid, rh_cache
+                )
         except Exception:
             did_publish = False
         preview_elapsed = time.monotonic() - preview_start_time
