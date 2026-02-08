@@ -69,26 +69,78 @@ Filename: "{app}\{#MyAppExeName}"; Description: "Запустить {#MyAppName}
 
 [Code]
 var
-  SecretsPage: TInputQueryWizardPage;
+  KeyChoicePage: TWizardPage;
+  KeepKeyRadio: TNewRadioButton;
+  ReplaceKeyRadio: TNewRadioButton;
+  ExistingKeyFound: Boolean;
+  KeyInputPage: TInputQueryWizardPage;
 
 procedure InitializeWizard;
+var
+  SecretsFile: string;
+  InfoLabel: TNewStaticText;
 begin
-  SecretsPage := CreateInputQueryPage(
+  { Проверяем наличие существующего ключа }
+  SecretsFile := AddBackslash(ExpandConstant('{userappdata}')) + 'SK42mapper\.secrets.env';
+  ExistingKeyFound := FileExists(SecretsFile);
+
+  { Страница выбора: оставить или заменить ключ }
+  KeyChoicePage := CreateCustomPage(
     wpSelectTasks,
+    'API ключ',
+    'Обнаружен сохранённый ключ API'
+  );
+
+  InfoLabel := TNewStaticText.Create(KeyChoicePage);
+  InfoLabel.Parent := KeyChoicePage.Surface;
+  InfoLabel.Caption := 'У вас уже есть сохранённый ключ API от предыдущей установки.'#13#10 +
+                       'Выберите действие:';
+  InfoLabel.Top := 0;
+  InfoLabel.Left := 0;
+  InfoLabel.AutoSize := True;
+
+  KeepKeyRadio := TNewRadioButton.Create(KeyChoicePage);
+  KeepKeyRadio.Parent := KeyChoicePage.Surface;
+  KeepKeyRadio.Caption := 'Оставить текущий ключ (рекомендуется)';
+  KeepKeyRadio.Top := InfoLabel.Top + InfoLabel.Height + 16;
+  KeepKeyRadio.Left := 0;
+  KeepKeyRadio.Width := KeyChoicePage.SurfaceWidth;
+  KeepKeyRadio.Checked := True;
+
+  ReplaceKeyRadio := TNewRadioButton.Create(KeyChoicePage);
+  ReplaceKeyRadio.Parent := KeyChoicePage.Surface;
+  ReplaceKeyRadio.Caption := 'Ввести новый ключ';
+  ReplaceKeyRadio.Top := KeepKeyRadio.Top + KeepKeyRadio.Height + 8;
+  ReplaceKeyRadio.Left := 0;
+  ReplaceKeyRadio.Width := KeyChoicePage.SurfaceWidth;
+
+  { Страница ввода ключа }
+  KeyInputPage := CreateInputQueryPage(
+    KeyChoicePage.ID,
     'Конфигурация ключа',
     'Введите ключ API',
     'Ключ будет сохранён в профиле пользователя (%AppData%\SK42mapper).'
   );
-  { Второй параметр True — скрытый ввод, как пароль }
-  SecretsPage.Add('API_KEY:', True);
+  KeyInputPage.Add('API_KEY:', True);
+end;
+
+function ShouldSkipPage(PageID: Integer): Boolean;
+begin
+  Result := False;
+  { Пропускаем страницу выбора, если ключа ещё нет }
+  if PageID = KeyChoicePage.ID then
+    Result := not ExistingKeyFound;
+  { Пропускаем страницу ввода, если пользователь решил оставить текущий ключ }
+  if PageID = KeyInputPage.ID then
+    Result := ExistingKeyFound and KeepKeyRadio.Checked;
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;
 begin
   Result := True;
-  if CurPageID = SecretsPage.ID then
+  if CurPageID = KeyInputPage.ID then
   begin
-    if Trim(SecretsPage.Values[0]) = '' then
+    if Trim(KeyInputPage.Values[0]) = '' then
     begin
       MsgBox('Введите ключ API.', mbError, MB_OK);
       Result := False;
@@ -100,75 +152,43 @@ procedure CurStepChanged(CurStep: TSetupStep);
 var
   BaseDir, F, Content: string;
   ResultCode: Integer;
-  Resp: Integer;
 begin
   if CurStep = ssPostInstall then
   begin
-    { Корректно формируем путь и создаём каталог }
     BaseDir := AddBackslash(ExpandConstant('{userappdata}')) + 'SK42mapper';
     ForceDirectories(BaseDir);
-
     F := BaseDir + '\.secrets.env';
-    Content := 'API_KEY=' + Trim(SecretsPage.Values[0]) + #13#10;
 
+    { Если пользователь выбрал "оставить текущий" — ничего не делаем }
+    if ExistingKeyFound and KeepKeyRadio.Checked then
+    begin
+      Log('Сохраняем существующий .secrets.env без изменений: ' + F);
+      Exit;
+    end;
+
+    Content := 'API_KEY=' + Trim(KeyInputPage.Values[0]) + #13#10;
+
+    { Снимаем атрибуты со старого файла, если он есть }
     if FileExists(F) then
     begin
-      Resp := MsgBox(
-        'Файл с ключом уже существует:\n' + F + '\n\nПерезаписать новым значением?\n' +
-        'ДА — перезаписать, НЕТ — оставить как есть, ОТМЕНА — прервать установку.',
-        mbConfirmation, MB_YESNOCANCEL);
+      if not Exec(ExpandConstant('{cmd}'), '/c attrib -R -H -S "' + F + '"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+        Log('Не удалось снять атрибуты (attrib -R -H -S). Код=' + IntToStr(ResultCode));
+      if not DeleteFile(F) then
+        Log('Предупреждение: не удалось удалить старый файл перед записью: ' + F);
+    end;
 
-      case Resp of
-        IDYES:
-          begin
-            { Снимаем все атрибуты и удаляем файл, затем создаём заново — максимально чистая перезапись }
-            if not Exec(ExpandConstant('{cmd}'), '/c attrib -R -H -S "' + F + '"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
-              Log('Не удалось снять атрибуты (attrib -R -H -S). Код=' + IntToStr(ResultCode));
-
-            if FileExists(F) then
-            begin
-              if not DeleteFile(F) then
-                Log('Предупреждение: не удалось удалить старый файл перед записью: ' + F);
-            end;
-
-            if not SaveStringToFile(F, Content, False) then
-            begin
-              MsgBox('Не удалось записать файл: ' + F + '\n' +
-                     'Попробуйте закрыть приложение и переустановить, либо запустите установщик от имени текущего пользователя.',
-                     mbError, MB_OK);
-            end
-            else
-            begin
-              if not Exec(ExpandConstant('{cmd}'), '/c attrib +H "' + F + '"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
-                Log(Format('Не удалось скрыть файл атрибутом Hidden, код=%d', [ResultCode]));
-            end;
-          end;
-        IDNO:
-          begin
-            Log('Сохраняем существующий .secrets.env без изменений: ' + F);
-            { Ничего не делаем }
-          end;
-        IDCANCEL:
-          begin
-            Log('Пользователь отменил установку при обнаружении существующего .secrets.env');
-            WizardForm.Close;
-          end;
-      end;
+    { Записываем новый файл }
+    if not SaveStringToFile(F, Content, False) then
+    begin
+      MsgBox('Не удалось записать файл: ' + F + #13#10 +
+             'Попробуйте закрыть приложение и переустановить, либо запустите установщик от имени текущего пользователя.',
+             mbError, MB_OK);
     end
     else
     begin
-      if not SaveStringToFile(F, Content, False) then
-      begin
-        MsgBox('Не удалось записать файл: ' + F, mbError, MB_OK);
-      end
-      else
-      begin
-        { Скрываем файл через системную утилиту attrib }
-        if not Exec(ExpandConstant('{cmd}'), '/c attrib +H "' + F + '"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
-        begin
-          Log(Format('Не удалось скрыть файл атрибутом Hidden, код=%d', [ResultCode]));
-        end;
-      end;
+      { Скрываем файл через системную утилиту attrib }
+      if not Exec(ExpandConstant('{cmd}'), '/c attrib +H "' + F + '"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+        Log(Format('Не удалось скрыть файл атрибутом Hidden, код=%d', [ResultCode]));
     end;
   end;
 end;

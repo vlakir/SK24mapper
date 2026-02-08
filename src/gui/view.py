@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
     QComboBox,
+    QDialog,
     QDoubleSpinBox,
     QFileDialog,
     QFrame,
@@ -71,7 +72,6 @@ from services.radio_horizon import recompute_radio_horizon_fast
 from shared.constants import (
     CONTROL_POINT_LABEL_GAP_MIN_PX,
     CONTROL_POINT_LABEL_GAP_RATIO,
-    CONTROL_POINT_SIZE_M,
     COORDINATE_FORMAT_SPLIT_LENGTH,
     ELEVATION_LEGEND_STEP_M,
     MAP_TYPE_LABELS_RU,
@@ -509,6 +509,78 @@ class ModalOverlay(QWidget):
             self.raise_()
 
 
+class ApiKeyDialog(QDialog):
+    """Dialog for viewing and changing the API key."""
+
+    def __init__(self, controller: MilMapperController, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._controller = controller
+        self.setWindowTitle('API ключ')
+        self.setMinimumWidth(450)
+        self._setup_ui()
+
+    def _setup_ui(self) -> None:
+        layout = QVBoxLayout(self)
+
+        # Current key group
+        current_group = QGroupBox('Текущий ключ')
+        current_layout = QHBoxLayout(current_group)
+        self._current_key_edit = QLineEdit()
+        self._current_key_edit.setReadOnly(True)
+        self._current_key_edit.setText(self._controller.get_masked_api_key())
+        current_layout.addWidget(self._current_key_edit)
+        self._toggle_btn = QPushButton('Показать')
+        self._toggle_btn.setFixedWidth(90)
+        self._toggle_btn.clicked.connect(self._toggle_key_visibility)
+        current_layout.addWidget(self._toggle_btn)
+        self._key_visible = False
+        layout.addWidget(current_group)
+
+        # New key group
+        new_group = QGroupBox('Новый ключ')
+        new_layout = QVBoxLayout(new_group)
+        self._new_key_edit = QLineEdit()
+        self._new_key_edit.setPlaceholderText('Введите новый API ключ...')
+        self._new_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self._new_key_edit.textChanged.connect(self._on_new_key_changed)
+        new_layout.addWidget(self._new_key_edit)
+        layout.addWidget(new_group)
+
+        # Buttons
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        self._save_btn = QPushButton('Сохранить')
+        self._save_btn.setEnabled(False)
+        self._save_btn.clicked.connect(self._save_key)
+        btn_layout.addWidget(self._save_btn)
+        cancel_btn = QPushButton('Отмена')
+        cancel_btn.clicked.connect(self.reject)
+        btn_layout.addWidget(cancel_btn)
+        layout.addLayout(btn_layout)
+
+    def _toggle_key_visibility(self) -> None:
+        self._key_visible = not self._key_visible
+        if self._key_visible:
+            self._current_key_edit.setText(self._controller.get_api_key())
+            self._toggle_btn.setText('Скрыть')
+        else:
+            self._current_key_edit.setText(self._controller.get_masked_api_key())
+            self._toggle_btn.setText('Показать')
+
+    def _on_new_key_changed(self, text: str) -> None:
+        self._save_btn.setEnabled(bool(text.strip()))
+
+    def _save_key(self) -> None:
+        new_key = self._new_key_edit.text().strip()
+        if not new_key:
+            return
+        if self._controller.save_api_key(new_key):
+            QMessageBox.information(self, 'Успешно', 'API ключ сохранён.')
+            self.accept()
+        else:
+            QMessageBox.critical(self, 'Ошибка', 'Не удалось сохранить API ключ.')
+
+
 class MainWindow(QMainWindow):
     """Main application window implementing Observer pattern."""
 
@@ -572,8 +644,15 @@ class MainWindow(QMainWindow):
         self.setWindowTitle('SK42mapper')
         # Используем минимальный размер и возможность свободно менять размер окна
         self.setMinimumSize(900, 500)
-        # Предпочитаемый стартовый размер (не фиксированный)
-        self.resize(1500, 950)
+        # Адаптивный стартовый размер: 90% экрана, но не более 1500x950
+        screen = QApplication.primaryScreen()
+        if screen:
+            avail = screen.availableGeometry()
+            w = min(int(avail.width() * 0.9), 1500)
+            h = min(int(avail.height() * 0.9), 950)
+            self.resize(max(w, 900), max(h, 500))
+        else:
+            self.resize(1500, 950)
 
         # Центральный виджет
         central_widget = QWidget()
@@ -910,10 +989,13 @@ class MainWindow(QMainWindow):
         settings_container.setLayout(settings_main_layout)
         left_container.addWidget(settings_container)
 
-        # Растяжка перед кнопкой создания карты
-        left_container.addStretch()
+        # Оборачиваем левую колонку в QScrollArea для предотвращения обрезания контента
+        left_scroll = QScrollArea()
+        left_scroll.setWidgetResizable(True)
+        left_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        left_scroll.setWidget(left_widget)
 
-        # Кнопка "Создать карту"
+        # Кнопка "Создать карту" — вне скролла, всегда видна
         self.download_btn = QPushButton('Создать карту')
         self.download_btn.setToolTip('Начать создание карты')
         self.download_btn.setStyleSheet('QPushButton { font-weight: bold; }')
@@ -921,13 +1003,14 @@ class MainWindow(QMainWindow):
             QSizePolicy.Policy.Expanding,
             QSizePolicy.Policy.Fixed,
         )
-        left_container.addWidget(self.download_btn)
 
-        # Оборачиваем левую колонку в QScrollArea для предотвращения обрезания контента
-        left_scroll = QScrollArea()
-        left_scroll.setWidgetResizable(True)
-        left_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        left_scroll.setWidget(left_widget)
+        # Обёртка: скролл и кнопка
+        left_panel = QWidget()
+        left_panel_layout = QVBoxLayout()
+        left_panel_layout.setContentsMargins(0, 0, 0, 0)
+        left_panel_layout.addWidget(left_scroll, 1)
+        left_panel_layout.addWidget(self.download_btn)
+        left_panel.setLayout(left_panel_layout)
 
         # Превью справа
         preview_frame = QFrame()
@@ -968,13 +1051,13 @@ class MainWindow(QMainWindow):
 
         # Разделитель колонок для настраиваемых ширин
         splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.addWidget(left_scroll)
+        splitter.addWidget(left_panel)
         splitter.addWidget(right_widget)
         splitter.setChildrenCollapsible(False)
         splitter.setHandleWidth(6)
         # Prevent left panel from collapsing too small
         left_min = max(300, left_widget.sizeHint().width())
-        left_scroll.setMinimumWidth(left_min)
+        left_panel.setMinimumWidth(left_min)
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
         splitter.setSizes([left_min + 100, 600])
@@ -1008,6 +1091,12 @@ class MainWindow(QMainWindow):
         save_as_action.setShortcut('Ctrl+Shift+S')
         save_as_action.triggered.connect(self._save_profile_as)
         file_menu.addAction(save_as_action)
+
+        file_menu.addSeparator()
+
+        api_key_action = QAction('API ключ...', self)
+        api_key_action.triggered.connect(self._show_api_key_dialog)
+        file_menu.addAction(api_key_action)
 
         file_menu.addSeparator()
 
@@ -1526,7 +1615,7 @@ class MainWindow(QMainWindow):
 
     @Slot(float, float)
     def _on_map_right_clicked(self, px: float, py: float) -> None:
-        """Transfer coordinates from map right-click to control point settings or rebuild radio horizon."""
+        """Transfer right-click to control point or rebuild radio horizon."""
         metadata = self._model.state.last_map_metadata
         if not metadata:
             return
@@ -1604,7 +1693,7 @@ class MainWindow(QMainWindow):
         new_antenna_col = max(0, min(new_antenna_col, dem_w - 1))
 
         logger.info(
-            'Starting radio horizon recompute: scene pos (%.1f, %.1f) -> DEM pos (%d, %d)',
+            'RH recompute: scene (%.1f, %.1f) -> DEM (%d, %d)',
             px,
             py,
             new_antenna_col,
@@ -1633,9 +1722,7 @@ class MainWindow(QMainWindow):
         """Handle radio horizon recompute completion."""
         try:
             gui_start_time = time.monotonic()
-            logger.info(
-                'Radio horizon recompute finished successfully - applying postprocessing'
-            )
+            logger.info('RH recompute finished - applying postprocessing')
 
             # Update cache with new antenna position
             self._rh_cache['antenna_row'] = new_antenna_row
@@ -1671,9 +1758,14 @@ class MainWindow(QMainWindow):
                 px, py = self._rh_click_pos
 
                 if mpp > 0:
-                    # Draw triangle
+                    # Draw triangle (size matches font)
                     draw_control_point_triangle(
-                        result_image, px, py, mpp, rotation_deg=0.0
+                        result_image,
+                        px,
+                        py,
+                        mpp,
+                        rotation_deg=0.0,
+                        size_m=self._model.settings.grid_font_size_m,
                     )
 
                     # Draw label (name + height)
@@ -1728,7 +1820,7 @@ class MainWindow(QMainWindow):
     def _draw_rh_grid(
         self,
         result: Image.Image,
-        settings: Any,
+        settings: MapSettings,
         mpp: float,
     ) -> None:
         """Draw grid on radio horizon map."""
@@ -1814,8 +1906,8 @@ class MainWindow(QMainWindow):
 
             draw = ImageDraw.Draw(result)
 
-            # Position below triangle
-            tri_size_px = max(5, round(CONTROL_POINT_SIZE_M * ppm))
+            # Position below triangle (triangle size matches font size)
+            tri_size_px = font_size_px
             label_x = int(cx_img)
             label_gap_px = max(
                 CONTROL_POINT_LABEL_GAP_MIN_PX,
@@ -2350,7 +2442,7 @@ class MainWindow(QMainWindow):
 
             # Set tooltip for coordinate informer and preview area
             if metadata and metadata.map_type == MapType.RADIO_HORIZON and rh_cache:
-                tooltip = 'Правая кнопка мыши - перестроение радиогоризонта с новой контрольной точкой'
+                tooltip = 'ПКМ - перестроение радиогоризонта с новой контрольной точкой'
                 self._coords_label.setToolTip(tooltip)
                 self._preview_area.setToolTip(tooltip)
             elif metadata and metadata.control_point_enabled:
@@ -2703,6 +2795,12 @@ class MainWindow(QMainWindow):
             'SK42mapper v0.2\n\nПриложение для создания карт в системе '
             'Гаусса-Крюгера\n',
         )
+
+    @Slot()
+    def _show_api_key_dialog(self) -> None:
+        """Show API key management dialog."""
+        dialog = ApiKeyDialog(self._controller, parent=self)
+        dialog.exec()
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         """Handle window resize to update overlay size."""

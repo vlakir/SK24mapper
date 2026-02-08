@@ -292,6 +292,67 @@ class MilMapperController:
         """Проверка наличия валидного API-ключа в окружении."""
         return self._api_key is not None and len(self._api_key) > 0
 
+    def get_masked_api_key(self) -> str:
+        """Возвращает API-ключ с маскировкой (первые 4 символа + звёздочки)."""
+        if not self._api_key:
+            return '(ключ не задан)'
+        if len(self._api_key) <= 4:
+            return self._api_key
+        return self._api_key[:4] + '*' * (len(self._api_key) - 4)
+
+    def get_api_key(self) -> str:
+        """Возвращает полный API-ключ."""
+        return self._api_key or ''
+
+    def save_api_key(self, new_key: str) -> bool:
+        """Сохранение нового API-ключа на диск и обновление in-memory."""
+        try:
+            new_key = new_key.strip()
+            if not new_key:
+                return False
+
+            if is_portable_mode():
+                key_file = get_app_dir() / 'api_key.txt'
+                key_file.write_text(new_key, encoding='utf-8')
+                logger.info('API-ключ сохранён в api_key.txt (portable режим)')
+            else:
+                appdata = os.getenv('APPDATA')
+                if not appdata:
+                    logger.error('Переменная APPDATA не найдена')
+                    return False
+                secrets_dir = Path(appdata) / 'SK42mapper'
+                secrets_dir.mkdir(parents=True, exist_ok=True)
+                secrets_file = secrets_dir / '.secrets.env'
+                # Снимаем Hidden-атрибут перед записью (Windows)
+                if sys.platform == 'win32' and secrets_file.exists():
+                    import subprocess
+
+                    subprocess.run(
+                        ['attrib', '-H', str(secrets_file)],
+                        check=False,
+                        capture_output=True,
+                    )
+                secrets_file.write_text(
+                    f'API_KEY={new_key}\n', encoding='utf-8'
+                )
+                # Возвращаем Hidden-атрибут
+                if sys.platform == 'win32':
+                    import subprocess
+
+                    subprocess.run(
+                        ['attrib', '+H', str(secrets_file)],
+                        check=False,
+                        capture_output=True,
+                    )
+                logger.info('API-ключ сохранён в .secrets.env')
+
+            self._api_key = new_key
+            os.environ['API_KEY'] = new_key
+            return True
+        except Exception as e:
+            logger.exception(f'Не удалось сохранить API-ключ: {e}')
+            return False
+
     async def start_map_download(self) -> None:
         """Запуск процесса загрузки карты."""
         if not self.validate_api_key():
