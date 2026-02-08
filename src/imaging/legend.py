@@ -44,6 +44,7 @@ def draw_elevation_legend(
     scale: int = STATIC_SCALE,
     title: str | None = None,
     label_step_m: float | None = None,
+    grid_font_size_m: float | None = None,
 ) -> tuple[int, int, int, int]:
     """
     Рисует адаптивную легенду высот в правом нижнем углу карты.
@@ -61,6 +62,7 @@ def draw_elevation_legend(
         scale: Масштабный коэффициент (обычно 1 или 2 для retina)
         title: Заголовок легенды (опционально)
         label_step_m: Шаг округления меток высоты (опционально)
+        grid_font_size_m: Размер шрифта сетки в метрах (опционально)
 
     Returns:
         Кортеж (x1, y1, x2, y2) - границы легенды с отступом для разрыва сетки
@@ -125,9 +127,14 @@ def draw_elevation_legend(
     legend_width = int(legend_height * LEGEND_WIDTH_TO_HEIGHT_RATIO)
     margin = int(legend_height * LEGEND_MARGIN_RATIO)
 
-    # Рассчитываем адаптивный размер шрифта
-    font_size = int(legend_height * LEGEND_LABEL_FONT_RATIO)
-    font_size = max(LEGEND_LABEL_FONT_MIN_PX, min(font_size, LEGEND_LABEL_FONT_MAX_PX))
+    # Рассчитываем размер шрифта
+    if grid_font_size_m is not None and ppm > 0:
+        font_size = max(10, round(grid_font_size_m * ppm))
+    else:
+        font_size = int(legend_height * LEGEND_LABEL_FONT_RATIO)
+        font_size = max(
+            LEGEND_LABEL_FONT_MIN_PX, min(font_size, LEGEND_LABEL_FONT_MAX_PX)
+        )
 
     # Загружаем шрифт для подписей и заголовка
     try:

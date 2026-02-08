@@ -36,6 +36,7 @@ from imaging import (
 )
 from imaging.io import build_save_kwargs as _build_save_kwargs
 from imaging.io import save_jpeg as _save_jpeg
+from imaging.transforms import ROTATE_ANGLE_EPS
 from infrastructure.http.client import cleanup_sqlite_cache as _cleanup_sqlite_cache
 from infrastructure.http.client import make_http_session as _make_http_session
 from infrastructure.http.client import resolve_cache_dir as _resolve_cache_dir
@@ -61,7 +62,6 @@ from shared.constants import (
     ASYNC_MAX_CONCURRENCY,
     CONTROL_POINT_LABEL_GAP_MIN_PX,
     CONTROL_POINT_LABEL_GAP_RATIO,
-    CONTROL_POINT_SIZE_M,
     DOWNLOAD_CONCURRENCY,
     ELEVATION_LEGEND_STEP_M,
     ELEVATION_USE_RETINA,
@@ -425,7 +425,21 @@ class MapDownloadService:
 
         # Overlay contours if enabled
         if ctx.overlay_contours and not ctx.is_elev_contours:
-            result = await self._apply_overlay_contours(ctx, result)
+            if ctx.is_radio_horizon:
+                # For RH: draw contours on a separate transparent layer
+                # for inclusion in the cached overlay (interactive recompute)
+                contour_layer = Image.new('RGBA', result.size, (0, 0, 0, 0))
+                contour_layer = await self._apply_overlay_contours(ctx, contour_layer)
+                # Composite onto result
+                result_rgba = result.convert('RGBA')
+                result = Image.alpha_composite(result_rgba, contour_layer)
+                result = result.convert('RGB')
+                with contextlib.suppress(Exception):
+                    result_rgba.close()
+                ctx.rh_contour_layer = contour_layer
+                logger.info('Contour layer created for RH overlay cache')
+            else:
+                result = await self._apply_overlay_contours(ctx, result)
             ctx.result = result
 
         # Rotation
@@ -440,6 +454,24 @@ class MapDownloadService:
             )
             with contextlib.suppress(Exception):
                 prev_result.close()
+            # Also rotate contour layer for RH overlay cache
+            if (
+                ctx.rh_contour_layer is not None
+                and abs(ctx.rotation_deg) > ROTATE_ANGLE_EPS
+            ):
+                cl_arr = np.array(ctx.rh_contour_layer)
+                cl_h, cl_w = cl_arr.shape[:2]
+                cl_center = (cl_w / 2, cl_h / 2)
+                cl_rot_mat = cv2.getRotationMatrix2D(cl_center, ctx.rotation_deg, 1.0)
+                cl_rotated = cv2.warpAffine(
+                    cl_arr,
+                    cl_rot_mat,
+                    (cl_w, cl_h),
+                    flags=cv2.INTER_LINEAR,
+                    borderMode=cv2.BORDER_CONSTANT,
+                    borderValue=(0, 0, 0, 0),
+                )
+                ctx.rh_contour_layer = Image.fromarray(cl_rotated)
         finally:
             sp.stop('Поворот карты завершён')
         rotation_elapsed = time.monotonic() - rotation_start_time
@@ -453,6 +485,11 @@ class MapDownloadService:
         result = center_crop(prev_result, ctx.target_w_px, ctx.target_h_px)
         with contextlib.suppress(Exception):
             prev_result.close()
+        # Also crop contour layer for RH overlay cache
+        if ctx.rh_contour_layer is not None:
+            ctx.rh_contour_layer = center_crop(
+                ctx.rh_contour_layer, ctx.target_w_px, ctx.target_h_px
+            )
         crop_elapsed = time.monotonic() - crop_start_time
         logger.info('Обрезка к целевому размеру — завершена (%.2fs)', crop_elapsed)
         log_memory_usage('after cropping')
@@ -636,6 +673,10 @@ class MapDownloadService:
                 crs_sk42_gk=coord_result.crs_sk42_gk,
                 t_sk42_to_wgs=ctx.t_sk42_to_wgs,
                 scale=ctx.eff_scale,
+                width_m=ctx.settings.grid_width_m,
+                grid_font_size_m=ctx.settings.grid_font_size_m,
+                grid_text_margin_m=ctx.settings.grid_text_margin_m,
+                grid_label_bg_padding_m=ctx.settings.grid_label_bg_padding_m,
                 display_grid=ctx.settings.display_grid,
                 rotation_deg=ctx.rotation_deg,
             )
@@ -676,6 +717,7 @@ class MapDownloadService:
                 scale=ctx.eff_scale,
                 title=title,
                 label_step_m=ELEVATION_LEGEND_STEP_M,
+                grid_font_size_m=ctx.settings.grid_font_size_m,
             )
             legend_elapsed = time.monotonic() - legend_start_time
             logger.info('Рисование легенды высот — завершено (%.2fs)', legend_elapsed)
@@ -723,7 +765,12 @@ class MapDownloadService:
                     ctx.center_lat_wgs, ctx.zoom, scale=ctx.eff_scale
                 )
                 draw_control_point_triangle(
-                    result, cx_img, cy_img, mpp, ctx.rotation_deg
+                    result,
+                    cx_img,
+                    cy_img,
+                    mpp,
+                    ctx.rotation_deg,
+                    size_m=ctx.settings.grid_font_size_m,
                 )
 
                 # Draw label
@@ -749,6 +796,14 @@ class MapDownloadService:
             # Create transparent layer same size as result
             overlay = Image.new('RGBA', result.size, (0, 0, 0, 0))
 
+            # Include contours if available (rotated/cropped contour layer)
+            has_contours = False
+            if ctx.rh_contour_layer is not None:
+                overlay = Image.alpha_composite(overlay, ctx.rh_contour_layer)
+                has_contours = True
+                # Free memory - no longer needed after inclusion in overlay
+                ctx.rh_contour_layer = None
+
             # Draw grid on overlay
             self._draw_grid(ctx, overlay)
 
@@ -758,7 +813,10 @@ class MapDownloadService:
 
             # Save to cache
             ctx.rh_cache_overlay = overlay.copy()
-            logger.info('Created radio horizon overlay layer for caching')
+            logger.info(
+                'Created radio horizon overlay layer for caching (contours=%s)',
+                has_contours,
+            )
 
         except Exception as e:
             logger.warning('Failed to create radio horizon overlay layer: %s', e)
@@ -788,11 +846,9 @@ class MapDownloadService:
             draw = ImageDraw.Draw(result)
             antenna_h = ctx.settings.antenna_height_m
 
-            # Position below triangle
-            tri_size_px = max(5, round(CONTROL_POINT_SIZE_M * ppm))
+            # Position below triangle (triangle size matches font size)
+            tri_size_px = font_size_px
             label_x = int(cx_img)
-            # Отступ от нижней вершины треугольника: половина размера
-            # + дополнительный зазор
             label_gap_px = max(
                 CONTROL_POINT_LABEL_GAP_MIN_PX,
                 round(tri_size_px * CONTROL_POINT_LABEL_GAP_RATIO),
@@ -904,7 +960,7 @@ class MapDownloadService:
                     ),  # Финальный размер для масштабирования
                     # Кэшированный слой с сеткой/легендой/изолиниями
                     'overlay_layer': ctx.rh_cache_overlay,
-                    # Параметры постобработки (на всякий случай, если overlay_layer не создался)
+                    # Параметры постобработки (fallback)
                     'settings': ctx.settings,
                 }
 

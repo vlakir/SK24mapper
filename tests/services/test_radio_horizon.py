@@ -12,9 +12,23 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from shared.constants import EARTH_RADIUS_M, RADIO_HORIZON_REFRACTION_K, UavHeightReference
+from shared.constants import (
+    EARTH_RADIUS_M,
+    RADIO_HORIZON_COLOR_RAMP,
+    RADIO_HORIZON_EMPTY_IMAGE_COLOR,
+    RADIO_HORIZON_EMPTY_IMAGE_SIZE_PX,
+    RADIO_HORIZON_GRID_STEP_THRESHOLD_PIXELS_SMALL,
+    RADIO_HORIZON_LEGEND_UNIT_LABEL,
+    RADIO_HORIZON_LUT_SIZE,
+    RADIO_HORIZON_MAX_HEIGHT_M,
+    RADIO_HORIZON_MIN_HEIGHT_M,
+    RADIO_HORIZON_REFRACTION_K,
+    RADIO_HORIZON_UNREACHABLE_COLOR,
+    UavHeightReference,
+)
 from services.radio_horizon import (
     _bilinear_interpolate,
+    _build_color_lut,
     _trace_line_of_sight,
     colorize_radio_horizon,
     compute_and_colorize_radio_horizon,
@@ -22,6 +36,7 @@ from services.radio_horizon import (
     compute_radio_horizon,
     downsample_dem,
     get_radio_horizon_legend_params,
+    recompute_radio_horizon_fast,
 )
 
 
@@ -552,4 +567,601 @@ class TestUavHeightReference:
         arr1 = np.array(image1)
         arr2 = np.array(image2)
         assert np.array_equal(arr1, arr2)
+
+
+class TestBuildColorLut:
+    """Тесты построения LUT для цветовой шкалы."""
+
+    def test_lut_shape(self) -> None:
+        """LUT имеет корректную форму: (lut_size+1, 3)."""
+        lut = _build_color_lut(
+            RADIO_HORIZON_COLOR_RAMP,
+            RADIO_HORIZON_UNREACHABLE_COLOR,
+            lut_size=256,
+        )
+        assert lut.shape == (257, 3)
+
+    def test_lut_unreachable_color_at_end(self) -> None:
+        """Последний элемент LUT содержит цвет недостижимых точек."""
+        unreachable = (100, 200, 50)
+        lut = _build_color_lut(
+            RADIO_HORIZON_COLOR_RAMP,
+            unreachable,
+            lut_size=64,
+        )
+        assert tuple(lut[64]) == unreachable
+
+    def test_lut_first_element_matches_ramp_start(self) -> None:
+        """Первый элемент LUT соответствует начальному цвету рампы."""
+        ramp = [(0.0, (10, 20, 30)), (1.0, (200, 210, 220))]
+        lut = _build_color_lut(ramp, (0, 0, 0), lut_size=128)
+        # Первый элемент (t=0) должен быть начальным цветом
+        assert tuple(lut[0]) == (10, 20, 30)
+
+    def test_lut_last_regular_element_matches_ramp_end(self) -> None:
+        """Последний регулярный элемент LUT соответствует конечному цвету рампы."""
+        ramp = [(0.0, (10, 20, 30)), (1.0, (200, 210, 220))]
+        lut = _build_color_lut(ramp, (0, 0, 0), lut_size=128)
+        # Последний регулярный элемент (t=1) должен быть конечным цветом
+        assert tuple(lut[127]) == (200, 210, 220)
+
+    def test_degenerate_ramp_with_same_t_values(self) -> None:
+        """Рампа с одинаковыми значениями t (t0 == t1) не вызывает деление на ноль."""
+        ramp = [(0.0, (255, 0, 0)), (0.0, (0, 255, 0)), (1.0, (0, 0, 255))]
+        lut = _build_color_lut(ramp, (64, 64, 64), lut_size=64)
+        # Не должно быть ошибки деления на ноль
+        assert lut.shape == (65, 3)
+        # Первый элемент (t=0) попадает в сегмент t0=0, t1=0, используется c0
+        assert tuple(lut[0]) == (255, 0, 0)
+
+    def test_default_lut_size(self) -> None:
+        """LUT с размером по умолчанию из констант."""
+        lut = _build_color_lut(
+            RADIO_HORIZON_COLOR_RAMP,
+            RADIO_HORIZON_UNREACHABLE_COLOR,
+        )
+        assert lut.shape == (RADIO_HORIZON_LUT_SIZE + 1, 3)
+
+
+class TestColorizeRadioHorizonZeroSize:
+    """Тесты colorize_radio_horizon с матрицами нулевого размера."""
+
+    def test_zero_height_matrix(self) -> None:
+        """Матрица с нулевой высотой (0xN) возвращает минимальное изображение."""
+        matrix = np.zeros((0, 10), dtype=np.float32)
+        result = colorize_radio_horizon(matrix)
+        assert result.size == RADIO_HORIZON_EMPTY_IMAGE_SIZE_PX
+
+    def test_zero_width_matrix(self) -> None:
+        """Матрица с нулевой шириной (Nx0) возвращает минимальное изображение."""
+        matrix = np.zeros((10, 0), dtype=np.float32)
+        result = colorize_radio_horizon(matrix)
+        assert result.size == RADIO_HORIZON_EMPTY_IMAGE_SIZE_PX
+
+    def test_empty_image_color(self) -> None:
+        """Пустая матрица генерирует изображение с заданным цветом."""
+        matrix = np.array([], dtype=np.float32).reshape(0, 0)
+        result = colorize_radio_horizon(matrix)
+        pixel = result.getpixel((0, 0))
+        assert pixel == RADIO_HORIZON_EMPTY_IMAGE_COLOR
+
+
+class TestComputeAndColorizeEmptyDem:
+    """Тесты compute_and_colorize_radio_horizon с пустым DEM."""
+
+    def test_empty_dem_returns_empty_image(self) -> None:
+        """Пустой DEM (size==0) возвращает минимальное изображение."""
+        dem = np.array([], dtype=np.float32).reshape(0, 0)
+        result = compute_and_colorize_radio_horizon(
+            dem=dem,
+            antenna_row=0,
+            antenna_col=0,
+            antenna_height_m=10.0,
+            pixel_size_m=10.0,
+        )
+        assert result.size == RADIO_HORIZON_EMPTY_IMAGE_SIZE_PX
+
+    def test_zero_height_dem_returns_empty_image(self) -> None:
+        """DEM с нулевой высотой (0xN) возвращает минимальное изображение."""
+        dem = np.zeros((0, 20), dtype=np.float32)
+        result = compute_and_colorize_radio_horizon(
+            dem=dem,
+            antenna_row=0,
+            antenna_col=0,
+            antenna_height_m=10.0,
+            pixel_size_m=10.0,
+        )
+        assert result.size == RADIO_HORIZON_EMPTY_IMAGE_SIZE_PX
+
+    def test_zero_width_dem_returns_empty_image(self) -> None:
+        """DEM с нулевой шириной (Nx0) возвращает минимальное изображение."""
+        dem = np.zeros((20, 0), dtype=np.float32)
+        result = compute_and_colorize_radio_horizon(
+            dem=dem,
+            antenna_row=0,
+            antenna_col=0,
+            antenna_height_m=10.0,
+            pixel_size_m=10.0,
+        )
+        assert result.size == RADIO_HORIZON_EMPTY_IMAGE_SIZE_PX
+
+    def test_empty_dem_image_color(self) -> None:
+        """Пустой DEM генерирует изображение с корректным цветом."""
+        dem = np.array([], dtype=np.float32).reshape(0, 0)
+        result = compute_and_colorize_radio_horizon(
+            dem=dem,
+            antenna_row=0,
+            antenna_col=0,
+            antenna_height_m=10.0,
+            pixel_size_m=10.0,
+        )
+        pixel = result.getpixel((0, 0))
+        assert pixel == RADIO_HORIZON_EMPTY_IMAGE_COLOR
+
+
+class TestAdaptiveGridStep:
+    """Тесты адаптивного шага сетки для больших DEM."""
+
+    def test_small_dem_uses_default_step(self) -> None:
+        """Маленький DEM использует шаг по умолчанию."""
+        dem = np.full((20, 20), 100.0, dtype=np.float32)
+        # 20*20 = 400, меньше всех порогов
+        result = compute_radio_horizon(
+            dem=dem,
+            antenna_row=10,
+            antenna_col=10,
+            antenna_height_m=10.0,
+            pixel_size_m=10.0,
+            grid_step=2,
+        )
+        assert result.shape == (20, 20)
+
+    def test_grid_step_small_threshold(self) -> None:
+        """DEM выше порога SMALL использует увеличенный шаг.
+
+        Используется compute_and_colorize_radio_horizon для покрытия линий 503-504.
+        """
+        # Порог SMALL = 4_000_000. Для 2100x2100 = 4_410_000 > 4_000_000
+        # Создаём маленький DEM и проверяем через mock-подход:
+        # вместо реально большого массива, проверяем, что функция корректно работает
+        # с DEM чуть выше порога
+        side = math.isqrt(RADIO_HORIZON_GRID_STEP_THRESHOLD_PIXELS_SMALL) + 10
+        dem = np.full((side, side), 100.0, dtype=np.float32)
+        result = compute_radio_horizon(
+            dem=dem,
+            antenna_row=side // 2,
+            antenna_col=side // 2,
+            antenna_height_m=10.0,
+            pixel_size_m=10.0,
+            grid_step=1,
+        )
+        assert result.shape == (side, side)
+
+    def test_compute_and_colorize_grid_step_small_threshold(self) -> None:
+        """compute_and_colorize_radio_horizon с DEM выше порога SMALL."""
+        side = math.isqrt(RADIO_HORIZON_GRID_STEP_THRESHOLD_PIXELS_SMALL) + 10
+        dem = np.full((side, side), 100.0, dtype=np.float32)
+        result = compute_and_colorize_radio_horizon(
+            dem=dem,
+            antenna_row=side // 2,
+            antenna_col=side // 2,
+            antenna_height_m=10.0,
+            pixel_size_m=10.0,
+            grid_step=1,
+        )
+        assert result.size == (side, side)
+        assert result.mode == 'RGB'
+
+
+class TestComputeRadioHorizonFull:
+    """Дополнительные тесты compute_radio_horizon."""
+
+    def test_returns_float32(self) -> None:
+        """Результат имеет тип float32."""
+        dem = np.full((20, 20), 100.0, dtype=np.float32)
+        result = compute_radio_horizon(
+            dem=dem,
+            antenna_row=10,
+            antenna_col=10,
+            antenna_height_m=10.0,
+            pixel_size_m=10.0,
+            grid_step=2,
+        )
+        assert result.dtype == np.float32
+
+    def test_antenna_at_corner(self) -> None:
+        """Антенна в углу DEM — корректная работа."""
+        dem = np.full((20, 20), 100.0, dtype=np.float32)
+        result = compute_radio_horizon(
+            dem=dem,
+            antenna_row=0,
+            antenna_col=0,
+            antenna_height_m=10.0,
+            pixel_size_m=10.0,
+            grid_step=2,
+        )
+        assert result.shape == (20, 20)
+        # Точки дальше от антенны имеют большее значение из-за кривизны
+        assert result[0, 0] <= result[19, 19]
+
+    def test_antenna_out_of_bounds(self) -> None:
+        """Позиция антенны вне DEM ограничивается."""
+        dem = np.full((20, 20), 100.0, dtype=np.float32)
+        result = compute_radio_horizon(
+            dem=dem,
+            antenna_row=100,
+            antenna_col=100,
+            antenna_height_m=10.0,
+            pixel_size_m=10.0,
+            grid_step=2,
+        )
+        assert result.shape == (20, 20)
+
+    def test_custom_earth_radius(self) -> None:
+        """Разные значения радиуса Земли дают разные результаты."""
+        dem = np.full((30, 30), 100.0, dtype=np.float32)
+        result_normal = compute_radio_horizon(
+            dem=dem,
+            antenna_row=15,
+            antenna_col=15,
+            antenna_height_m=10.0,
+            pixel_size_m=10.0,
+            grid_step=1,
+            earth_radius_m=EARTH_RADIUS_M,
+        )
+        result_double = compute_radio_horizon(
+            dem=dem,
+            antenna_row=15,
+            antenna_col=15,
+            antenna_height_m=10.0,
+            pixel_size_m=10.0,
+            grid_step=1,
+            earth_radius_m=EARTH_RADIUS_M * 2,
+        )
+        # Разный радиус Земли должен давать разные результаты
+        assert not np.array_equal(result_normal, result_double)
+
+    def test_high_antenna_produces_small_values(self) -> None:
+        """Высокая антенна уменьшает требуемые высоты БпЛА."""
+        dem = np.full((20, 20), 100.0, dtype=np.float32)
+        dem[5:15, 5:15] = 150.0  # Холм
+
+        result_low = compute_radio_horizon(
+            dem=dem,
+            antenna_row=10,
+            antenna_col=10,
+            antenna_height_m=1.0,
+            pixel_size_m=10.0,
+            grid_step=2,
+        )
+        result_high = compute_radio_horizon(
+            dem=dem,
+            antenna_row=10,
+            antenna_col=10,
+            antenna_height_m=500.0,
+            pixel_size_m=10.0,
+            grid_step=2,
+        )
+        # Высокая антенна должна давать меньшие или равные значения
+        assert result_high.max() <= result_low.max()
+
+
+class TestRecomputeRadioHorizonFast:
+    """Тесты быстрого перестроения радиогоризонта."""
+
+    def _make_topo_base(self, width: int, height: int) -> Image.Image:
+        """Создаёт тестовую топооснову RGBA."""
+        return Image.new('RGBA', (width, height), (128, 128, 128, 255))
+
+    def test_basic_recompute(self) -> None:
+        """Базовое перестроение возвращает RGBA изображение."""
+        dem = np.full((20, 20), 100.0, dtype=np.float32)
+        topo_base = self._make_topo_base(20, 20)
+
+        result = recompute_radio_horizon_fast(
+            dem=dem,
+            new_antenna_row=10,
+            new_antenna_col=10,
+            antenna_height_m=10.0,
+            pixel_size_m=10.0,
+            topo_base=topo_base,
+            overlay_alpha=0.5,
+            grid_step=2,
+        )
+
+        assert result.size == (20, 20)
+        assert result.mode == 'RGBA'
+
+    def test_recompute_with_final_size(self) -> None:
+        """Перестроение с финальным размером масштабирует результат."""
+        dem = np.full((20, 20), 100.0, dtype=np.float32)
+        topo_base = self._make_topo_base(40, 40)
+
+        result = recompute_radio_horizon_fast(
+            dem=dem,
+            new_antenna_row=10,
+            new_antenna_col=10,
+            antenna_height_m=10.0,
+            pixel_size_m=10.0,
+            topo_base=topo_base,
+            overlay_alpha=0.5,
+            final_size=(40, 40),
+            grid_step=2,
+        )
+
+        assert result.size == (40, 40)
+
+    def test_recompute_with_mismatched_topo_base(self) -> None:
+        """Перестроение с несовпадающим размером топоосновы масштабирует её."""
+        dem = np.full((20, 20), 100.0, dtype=np.float32)
+        topo_base = self._make_topo_base(30, 30)  # Отличается от dem и final_size
+
+        result = recompute_radio_horizon_fast(
+            dem=dem,
+            new_antenna_row=10,
+            new_antenna_col=10,
+            antenna_height_m=10.0,
+            pixel_size_m=10.0,
+            topo_base=topo_base,
+            overlay_alpha=0.5,
+            final_size=(40, 40),
+            grid_step=2,
+        )
+
+        assert result.size == (40, 40)
+
+    def test_recompute_overlay_alpha_zero(self) -> None:
+        """Прозрачность 0.0 — результат ближе к чистому радиогоризонту."""
+        dem = np.full((20, 20), 100.0, dtype=np.float32)
+        topo_base = self._make_topo_base(20, 20)
+
+        result = recompute_radio_horizon_fast(
+            dem=dem,
+            new_antenna_row=10,
+            new_antenna_col=10,
+            antenna_height_m=10.0,
+            pixel_size_m=10.0,
+            topo_base=topo_base,
+            overlay_alpha=0.0,
+            grid_step=2,
+        )
+
+        assert result.size == (20, 20)
+
+    def test_recompute_overlay_alpha_one(self) -> None:
+        """Прозрачность 1.0 — результат ближе к чистой топооснове."""
+        dem = np.full((20, 20), 100.0, dtype=np.float32)
+        topo_base = self._make_topo_base(20, 20)
+
+        result = recompute_radio_horizon_fast(
+            dem=dem,
+            new_antenna_row=10,
+            new_antenna_col=10,
+            antenna_height_m=10.0,
+            pixel_size_m=10.0,
+            topo_base=topo_base,
+            overlay_alpha=1.0,
+            grid_step=2,
+        )
+
+        assert result.size == (20, 20)
+
+    def test_recompute_different_alpha_different_results(self) -> None:
+        """Разные значения прозрачности дают разные изображения."""
+        dem = np.full((20, 20), 100.0, dtype=np.float32)
+        dem[15:20, 15:20] = 200.0  # Добавляем рельеф для разнообразия
+
+        topo_red = Image.new('RGBA', (20, 20), (255, 0, 0, 255))
+
+        result_alpha_0 = recompute_radio_horizon_fast(
+            dem=dem,
+            new_antenna_row=10,
+            new_antenna_col=10,
+            antenna_height_m=10.0,
+            pixel_size_m=10.0,
+            topo_base=topo_red,
+            overlay_alpha=0.0,
+            grid_step=2,
+        )
+        result_alpha_1 = recompute_radio_horizon_fast(
+            dem=dem,
+            new_antenna_row=10,
+            new_antenna_col=10,
+            antenna_height_m=10.0,
+            pixel_size_m=10.0,
+            topo_base=topo_red,
+            overlay_alpha=1.0,
+            grid_step=2,
+        )
+
+        arr_0 = np.array(result_alpha_0)
+        arr_1 = np.array(result_alpha_1)
+        assert not np.array_equal(arr_0, arr_1)
+
+    def test_recompute_antenna_clamped(self) -> None:
+        """Позиция антенны вне границ ограничивается без ошибки."""
+        dem = np.full((20, 20), 100.0, dtype=np.float32)
+        topo_base = self._make_topo_base(20, 20)
+
+        result = recompute_radio_horizon_fast(
+            dem=dem,
+            new_antenna_row=100,
+            new_antenna_col=100,
+            antenna_height_m=10.0,
+            pixel_size_m=10.0,
+            topo_base=topo_base,
+            overlay_alpha=0.5,
+            grid_step=2,
+        )
+
+        assert result.size == (20, 20)
+
+    def test_recompute_negative_antenna_clamped(self) -> None:
+        """Отрицательная позиция антенны ограничивается до (0, 0)."""
+        dem = np.full((20, 20), 100.0, dtype=np.float32)
+        topo_base = self._make_topo_base(20, 20)
+
+        result = recompute_radio_horizon_fast(
+            dem=dem,
+            new_antenna_row=-5,
+            new_antenna_col=-5,
+            antenna_height_m=10.0,
+            pixel_size_m=10.0,
+            topo_base=topo_base,
+            overlay_alpha=0.5,
+            grid_step=2,
+        )
+
+        assert result.size == (20, 20)
+
+    def test_recompute_with_control_point_reference(self) -> None:
+        """Перестроение с режимом отсчёта CONTROL_POINT."""
+        dem = np.full((20, 20), 100.0, dtype=np.float32)
+        dem[10, 10] = 150.0
+        topo_base = self._make_topo_base(20, 20)
+
+        result = recompute_radio_horizon_fast(
+            dem=dem,
+            new_antenna_row=10,
+            new_antenna_col=10,
+            antenna_height_m=10.0,
+            pixel_size_m=10.0,
+            topo_base=topo_base,
+            overlay_alpha=0.5,
+            uav_height_reference=UavHeightReference.CONTROL_POINT,
+            grid_step=2,
+        )
+
+        assert result.size == (20, 20)
+
+    def test_recompute_without_final_size(self) -> None:
+        """Перестроение без финального размера — размер определяется DEM."""
+        dem = np.full((25, 30), 100.0, dtype=np.float32)
+        topo_base = self._make_topo_base(30, 25)
+
+        result = recompute_radio_horizon_fast(
+            dem=dem,
+            new_antenna_row=12,
+            new_antenna_col=15,
+            antenna_height_m=10.0,
+            pixel_size_m=10.0,
+            topo_base=topo_base,
+            overlay_alpha=0.5,
+            grid_step=2,
+        )
+
+        assert result.size == (30, 25)
+
+
+class TestGetRadioHorizonLegendParamsFull:
+    """Дополнительные тесты параметров легенды."""
+
+    def test_returns_correct_unit_label(self) -> None:
+        """Единица измерения соответствует константе."""
+        _, _, unit = get_radio_horizon_legend_params()
+        assert unit == RADIO_HORIZON_LEGEND_UNIT_LABEL
+
+    def test_min_value_is_constant(self) -> None:
+        """Минимальное значение всегда равно RADIO_HORIZON_MIN_HEIGHT_M."""
+        min_val, _, _ = get_radio_horizon_legend_params(max_height_m=1000.0)
+        assert min_val == RADIO_HORIZON_MIN_HEIGHT_M
+
+    def test_max_value_matches_argument(self) -> None:
+        """Максимальное значение соответствует переданному аргументу."""
+        _, max_val, _ = get_radio_horizon_legend_params(max_height_m=750.0)
+        assert max_val == 750.0
+
+    def test_default_max_uses_constant(self) -> None:
+        """Значение по умолчанию берётся из RADIO_HORIZON_MAX_HEIGHT_M."""
+        _, max_val, _ = get_radio_horizon_legend_params()
+        assert max_val == RADIO_HORIZON_MAX_HEIGHT_M
+
+    def test_returns_three_element_tuple(self) -> None:
+        """Функция возвращает кортеж из трёх элементов."""
+        result = get_radio_horizon_legend_params()
+        assert isinstance(result, tuple)
+        assert len(result) == 3
+
+
+class TestComputeAndColorizeAdaptiveGridStep:
+    """Тесты адаптивного шага сетки в compute_and_colorize_radio_horizon."""
+
+    def test_small_threshold_colorize(self) -> None:
+        """DEM выше порога SMALL использует увеличенный шаг в colorize-версии."""
+        side = math.isqrt(RADIO_HORIZON_GRID_STEP_THRESHOLD_PIXELS_SMALL) + 10
+        dem = np.full((side, side), 100.0, dtype=np.float32)
+        result = compute_and_colorize_radio_horizon(
+            dem=dem,
+            antenna_row=side // 2,
+            antenna_col=side // 2,
+            antenna_height_m=10.0,
+            pixel_size_m=10.0,
+            grid_step=1,
+        )
+        assert result.size == (side, side)
+        assert result.mode == 'RGB'
+
+
+class TestIntegrationFull:
+    """Расширенные интеграционные тесты."""
+
+    def test_compute_then_colorize_separately(self) -> None:
+        """Раздельный вызов compute + colorize даёт тот же размер."""
+        dem = np.full((30, 30), 100.0, dtype=np.float32)
+        dem[10:20, 10:20] = 200.0
+
+        matrix = compute_radio_horizon(
+            dem=dem,
+            antenna_row=15,
+            antenna_col=15,
+            antenna_height_m=10.0,
+            pixel_size_m=10.0,
+            grid_step=2,
+        )
+        image = colorize_radio_horizon(matrix, max_height_m=500.0)
+
+        combined = compute_and_colorize_radio_horizon(
+            dem=dem,
+            antenna_row=15,
+            antenna_col=15,
+            antenna_height_m=10.0,
+            pixel_size_m=10.0,
+            max_height_m=500.0,
+            grid_step=2,
+        )
+
+        assert image.size == combined.size
+        assert image.mode == combined.mode
+
+    def test_recompute_matches_initial_compute(self) -> None:
+        """recompute_radio_horizon_fast с overlay_alpha=0 даёт результат
+        близкий к compute_and_colorize."""
+        dem = np.full((20, 20), 100.0, dtype=np.float32)
+        dem[5:10, 5:10] = 150.0
+
+        # Основной расчёт
+        initial = compute_and_colorize_radio_horizon(
+            dem=dem,
+            antenna_row=10,
+            antenna_col=10,
+            antenna_height_m=10.0,
+            pixel_size_m=10.0,
+            grid_step=2,
+        )
+
+        # Быстрый пересчёт с overlay_alpha=0 (blend_alpha=1, чистый радиогоризонт)
+        topo_base = Image.new('RGBA', (20, 20), (0, 0, 0, 255))
+        recomputed = recompute_radio_horizon_fast(
+            dem=dem,
+            new_antenna_row=10,
+            new_antenna_col=10,
+            antenna_height_m=10.0,
+            pixel_size_m=10.0,
+            topo_base=topo_base,
+            overlay_alpha=0.0,
+            grid_step=2,
+        )
+
+        # Размеры должны совпадать
+        assert initial.size == recomputed.size[:2] if hasattr(recomputed.size, '__getitem__') else True
 

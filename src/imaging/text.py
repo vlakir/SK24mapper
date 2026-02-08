@@ -6,13 +6,9 @@ import math
 from PIL import ImageDraw, ImageFont
 
 from shared.constants import (
-    GRID_FONT_BOLD,
     GRID_FONT_PATH,
     GRID_FONT_PATH_BOLD,
     GRID_LABEL_BG_COLOR,
-    GRID_LABEL_FONT_M,
-    GRID_LABEL_FONT_MAX_PX,
-    GRID_LABEL_FONT_MIN_PX,
     GRID_TEXT_COLOR,
     GRID_TEXT_OUTLINE_COLOR,
     GRID_TEXT_OUTLINE_WIDTH,
@@ -192,7 +188,7 @@ def load_grid_font(font_size: int = 86) -> ImageFont.FreeTypeFont | ImageFont.Im
     Порядок:
       1) GRID_FONT_PATH_BOLD (если задан) — жирный шрифт.
       2) GRID_FONT_PATH (если задан) — обычный шрифт.
-      3) DejaVuSans-Bold.ttf, если GRID_FONT_BOLD=True, иначе DejaVuSans.ttf.
+      3) Системные шрифты Windows (Arial Bold, Segoe UI Bold и др.).
       4) Резерв: встроенный маленький шрифт PIL.
     """
     if GRID_FONT_PATH_BOLD:
@@ -205,46 +201,24 @@ def load_grid_font(font_size: int = 86) -> ImageFont.FreeTypeFont | ImageFont.Im
             return ImageFont.truetype(GRID_FONT_PATH, font_size)
         except Exception:
             logger.debug('Failed to load grid font from %s', GRID_FONT_PATH)
-    if GRID_FONT_BOLD:
-        try:
-            return ImageFont.truetype('DejaVuSans-Bold.ttf', font_size)
-        except Exception:
-            logger.debug('Failed to load DejaVuSans-Bold.ttf, will try regular')
-    try:
-        return ImageFont.truetype('DejaVuSans.ttf', font_size)
-    except Exception:
-        logger.debug('Failed to load DejaVuSans.ttf, using default font')
-    return ImageFont.load_default()
 
-
-def calculate_adaptive_grid_font_size(mpp: float) -> int:
-    """
-    Вычисляет адаптивный размер шрифта для подписей сетки.
-
-    Args:
-        mpp: meters per pixel (масштаб карты)
-
-    Returns:
-        Размер шрифта в пикселях, ограниченный диапазоном
-
-    """
-    try:
-        # Целевой физический размер в метрах → размер в пикселях
-        px = round(GRID_LABEL_FONT_M / max(1e-9, mpp))
-    except Exception:
-        px = 86  # Fallback на старое значение по умолчанию
-
-    # Ограничиваем диапазон для читаемости
-    px = max(GRID_LABEL_FONT_MIN_PX, min(px, GRID_LABEL_FONT_MAX_PX))
-
-    logger.info(
-        'Адаптивный размер шрифта сетки: %d px (mpp=%.6f, target=%.1f м, '
-        'range=[%d,%d])',
-        px,
-        mpp,
-        GRID_LABEL_FONT_M,
-        GRID_LABEL_FONT_MIN_PX,
-        GRID_LABEL_FONT_MAX_PX,
+    _system_fonts = (
+        'arialbd.ttf',  # Arial Bold
+        'arial.ttf',  # Arial
+        'segoeuib.ttf',  # Segoe UI Bold
+        'segoeui.ttf',  # Segoe UI
+        'tahomabd.ttf',  # Tahoma Bold
+        'tahoma.ttf',  # Tahoma
     )
-
-    return px
+    for name in _system_fonts:
+        try:
+            return ImageFont.truetype(name, font_size)
+        except Exception:
+            logger.debug('Шрифт %s не найден, пробуем следующий', name)
+            continue
+    logger.warning(
+        'Не удалось загрузить ни один масштабируемый шрифт, '
+        'подписи будут мелкими (запрошено %d px)',
+        font_size,
+    )
+    return ImageFont.load_default()

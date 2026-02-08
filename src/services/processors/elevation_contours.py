@@ -186,7 +186,10 @@ async def process_elevation_contours(ctx: MapDownloadContext) -> Image.Image:
     )
 
     map_size_m = max(float(ctx.width_m), float(ctx.height_m))
-    adaptive_params = compute_contour_adaptive_params(map_size_m)
+    adaptive_params = compute_contour_adaptive_params(
+        map_size_m,
+        ctx.settings.grid_font_size_m,
+    )
     logger.info(
         'Адаптация изолиний: map_size=%.1f м, scale=%.3f, interval=%.2f м',
         map_size_m,
@@ -296,6 +299,7 @@ def _add_contour_labels(
     is_overlay: bool = False,
     overlay_retina_factor: int | None = None,
     label_params: ContourAdaptiveParams | None = None,
+    grid_font_size_m: float = 100.0,
 ) -> Image.Image:
     """Add labels to contour lines."""
     try:
@@ -326,7 +330,10 @@ def _add_contour_labels(
 
         if label_params is None:
             map_size_m = max(float(crop_rect[2]), float(crop_rect[3])) * mpp
-            label_params = compute_contour_adaptive_params(map_size_m)
+            label_params = compute_contour_adaptive_params(
+                map_size_m,
+                grid_font_size_m,
+            )
             logger.info(
                 'Адаптация подписей: map_size=%.1f м, scale=%.3f, spacing=%.1f м, '
                 'font=%.1f м',
@@ -659,7 +666,10 @@ async def apply_contours_to_image(
     logger.info('Диапазон высот для изолиний: %.1f – %.1f м', mn, mx)
 
     map_size_m = max(float(ctx.width_m), float(ctx.height_m))
-    adaptive_params = compute_contour_adaptive_params(map_size_m)
+    adaptive_params = compute_contour_adaptive_params(
+        map_size_m,
+        ctx.settings.grid_font_size_m,
+    )
     logger.info(
         'Overlay адаптация изолиний: map_size=%.1f м, scale=%.3f, interval=%.2f м',
         map_size_m,

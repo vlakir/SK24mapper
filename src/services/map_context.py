@@ -92,6 +92,8 @@ class MapDownloadContext:
     rh_cache_overlay: Image.Image | None = (
         None  # PIL Image - слой с сеткой/легендой/изолиниями
     )
+    # Temporary: contour layer (RGBA) after rotation/crop, for inclusion in overlay
+    rh_contour_layer: Image.Image | None = None
 
     # Internal coordinate storage (set by service)
     coord_result: Any | None = None

@@ -8,7 +8,6 @@ from pyproj import CRS, Transformer
 
 from geo.topography import crs_sk42_geog, latlng_to_pixel_xy, meters_per_pixel
 from imaging.text import (
-    calculate_adaptive_grid_font_size,
     draw_label_with_bg,
     load_grid_font,
 )
@@ -102,11 +101,7 @@ def draw_axis_aligned_km_grid(
     grid_text_margin = max(0, round(grid_text_margin_m * ppm))
     grid_label_bg_padding = max(0, round(grid_label_bg_padding_m * ppm))
 
-    # Вычисляем адаптивный размер шрифта на основе масштаба карты
-    adaptive_font_size = calculate_adaptive_grid_font_size(mpp)
-    # Используем заданный размер шрифта, если он больше адаптивного
-    final_font_size = max(adaptive_font_size, grid_font_size)
-    font = load_grid_font(final_font_size)
+    font = load_grid_font(grid_font_size)
 
     cx, cy = w / 2.0, h / 2.0
 

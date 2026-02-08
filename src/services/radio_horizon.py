@@ -659,7 +659,7 @@ def recompute_radio_horizon_fast(
         step_elapsed = time.monotonic() - step_start
         logger.info('    └─ Resize result to final size: %.3f sec', step_elapsed)
 
-    # Resize topo_base if it doesn't match final_size (cached with old code or wrong size)
+    # Resize topo_base if it doesn't match final_size
     if final_size and topo_base.size != final_size:
         step_start = time.monotonic()
         logger.warning(

@@ -7,16 +7,15 @@ from typing import TYPE_CHECKING
 
 from PIL import Image, ImageDraw, ImageFont
 
+from imaging.text import load_grid_font
 from shared.constants import (
+    CONTOUR_FONT_SIZE_RATIO,
     CONTOUR_INDEX_EVERY,
     CONTOUR_LABEL_BG_PADDING,
     CONTOUR_LABEL_BG_RGBA,
     CONTOUR_LABEL_EDGE_MARGIN_M,
-    CONTOUR_LABEL_FONT_BOLD,
-    CONTOUR_LABEL_FONT_M,
     CONTOUR_LABEL_FONT_MAX_PX,
     CONTOUR_LABEL_FONT_MIN_PX,
-    CONTOUR_LABEL_FONT_PATH,
     CONTOUR_LABEL_FONT_SIZE,
     CONTOUR_LABEL_FORMAT,
     CONTOUR_LABEL_INDEX_ONLY,
@@ -26,8 +25,6 @@ from shared.constants import (
     CONTOUR_LABEL_SPACING_M,
     CONTOUR_LABEL_TEXT_COLOR,
     CONTOUR_LABELS_ENABLED,
-    GRID_FONT_PATH,
-    GRID_FONT_PATH_BOLD,
     MIN_POLYLINE_POINTS,
 )
 
@@ -98,7 +95,9 @@ def resolve_label_settings(
         if label_edge_margin_m is not None
         else CONTOUR_LABEL_EDGE_MARGIN_M
     )
-    font_m = label_font_m if label_font_m is not None else CONTOUR_LABEL_FONT_M
+    font_m = (
+        label_font_m if label_font_m is not None else 100.0 * CONTOUR_FONT_SIZE_RATIO
+    )
     return spacing, min_seg, edge_margin, font_m
 
 
@@ -106,10 +105,6 @@ def build_font_getter(
     mpp: float,
     label_font_m: float,
 ) -> Callable[[], ImageFont.FreeTypeFont | ImageFont.ImageFont]:
-    fp = CONTOUR_LABEL_FONT_PATH or (
-        GRID_FONT_PATH_BOLD if CONTOUR_LABEL_FONT_BOLD else GRID_FONT_PATH
-    )
-    name = 'DejaVuSans-Bold.ttf' if CONTOUR_LABEL_FONT_BOLD else 'DejaVuSans.ttf'
     font_cache: dict[int, ImageFont.FreeTypeFont | ImageFont.ImageFont] = {}
     font_reported = False
 
@@ -129,32 +124,18 @@ def build_font_getter(
         size = get_font_px()
         if size in font_cache:
             return font_cache[size]
-        try:
-            f: ImageFont.FreeTypeFont | ImageFont.ImageFont = (
-                ImageFont.truetype(fp, size) if fp else ImageFont.truetype(name, size)
-            )
-        except Exception as ex:
-            logger.warning(
-                'Не удалось загрузить шрифт "%s" size=%d: %s',
-                fp or name,
-                size,
-                ex,
-            )
-            f = ImageFont.load_default()
+        f = load_grid_font(size)
         font_cache[size] = f
         if not font_reported:
             font_reported = True
             logger.info(
-                'Настройки шрифта подписей: size_px=%d '
-                '(mpp=%.6f, target=%.1f м, clamp=[%d,%d]), bold=%s, '
-                'path=%s',
+                'Настройки шрифта подписей изолиний: size_px=%d '
+                '(mpp=%.6f, target=%.1f м, clamp=[%d,%d])',
                 size,
                 mpp,
                 label_font_m,
                 int(CONTOUR_LABEL_FONT_MIN_PX),
                 int(CONTOUR_LABEL_FONT_MAX_PX),
-                CONTOUR_LABEL_FONT_BOLD,
-                fp or name,
             )
         return f
 

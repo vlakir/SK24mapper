@@ -77,7 +77,7 @@ def set_spinner_callbacks(
 def set_preview_image_callback(
     cb: Callable[[object, object, object, object], None] | None,
 ) -> None:
-    """Устанавливает колбэк предпросмотра (PIL.Image, MapMetadata, dem_grid, rh_cache)."""
+    """Устанавливает колбэк предпросмотра."""
     _CbStore.preview_image = cb
 
 

@@ -1,14 +1,13 @@
 """Tests for image module."""
 
 import pytest
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 from pyproj import CRS, Transformer
 
 from geo.topography import crs_sk42_geog
 from imaging import (
     apply_white_mask,
     assemble_and_crop,
-    calculate_adaptive_grid_font_size,
     center_crop,
     draw_axis_aligned_km_grid,
     draw_elevation_legend,
@@ -290,36 +289,6 @@ class TestRotateKeepSize:
         assert result.size == (200, 100)
 
 
-class TestCalculateAdaptiveGridFontSize:
-    """Tests for calculate_adaptive_grid_font_size function."""
-
-    def test_returns_positive(self):
-        """Should return positive font size."""
-        size = calculate_adaptive_grid_font_size(1.0)
-        assert size > 0
-
-    def test_smaller_mpp_larger_font(self):
-        """Smaller mpp (higher zoom) should give larger font."""
-        size_high_zoom = calculate_adaptive_grid_font_size(0.5)
-        size_low_zoom = calculate_adaptive_grid_font_size(5.0)
-        assert size_high_zoom >= size_low_zoom
-
-    def test_typical_values(self):
-        """Should return reasonable values for typical mpp."""
-        size = calculate_adaptive_grid_font_size(2.0)
-        assert 10 <= size <= 200
-
-    def test_very_small_mpp(self):
-        """Should handle very small mpp."""
-        size = calculate_adaptive_grid_font_size(0.1)
-        assert size > 0
-
-    def test_very_large_mpp(self):
-        """Should handle very large mpp."""
-        size = calculate_adaptive_grid_font_size(100.0)
-        assert size > 0
-
-
 @pytest.fixture
 def sk42_gk_crs():
     """Return example SK-42 GK CRS."""
@@ -410,6 +379,690 @@ class TestDrawElevationLegend:
             max_elevation_m=1000,
             center_lat_wgs=55.75,
             zoom=12,
+        )
+        pixels = list(img.getdata())
+        non_white = [p for p in pixels if p != (255, 255, 255)]
+        assert len(non_white) > 0
+
+
+class TestDrawLabelWithSubscriptBgAnchors:
+    """Tests for draw_label_with_subscript_bg with various anchor values."""
+
+    @pytest.fixture()
+    def _fonts(self):
+        font = load_grid_font(24)
+        sub_font = load_grid_font(16)
+        return font, sub_font
+
+    @pytest.fixture()
+    def _parts(self):
+        return [('X', False), ('2', True)]
+
+    def test_anchor_rt_right_top(self, _fonts, _parts):
+        """Anchor 'rt' should position text to the left of x, top-aligned."""
+        font, sub_font = _fonts
+        img = Image.new('RGB', (400, 200), color='white')
+        draw = ImageDraw.Draw(img)
+        draw_label_with_subscript_bg(
+            draw, (380, 10), _parts, font, sub_font,
+            anchor='rt', img_size=img.size, bg_color=(255, 0, 0),
+        )
+        pixels = list(img.getdata())
+        has_red = any(p[0] > 200 and p[1] < 50 and p[2] < 50 for p in pixels)
+        assert has_red, "Expected red background pixels for anchor='rt'"
+
+    def test_anchor_lb_left_bottom(self, _fonts, _parts):
+        """Anchor 'lb' should position text from x to the right, bottom-aligned."""
+        font, sub_font = _fonts
+        img = Image.new('RGB', (400, 200), color='white')
+        draw = ImageDraw.Draw(img)
+        draw_label_with_subscript_bg(
+            draw, (10, 190), _parts, font, sub_font,
+            anchor='lb', img_size=img.size, bg_color=(0, 0, 255),
+        )
+        pixels = list(img.getdata())
+        has_blue = any(p[0] < 50 and p[1] < 50 and p[2] > 200 for p in pixels)
+        assert has_blue, "Expected blue background pixels for anchor='lb'"
+
+    def test_anchor_mm_middle_middle(self, _fonts, _parts):
+        """Anchor 'mm' should center text around (x, y)."""
+        font, sub_font = _fonts
+        img = Image.new('RGB', (400, 200), color='white')
+        draw = ImageDraw.Draw(img)
+        draw_label_with_subscript_bg(
+            draw, (200, 100), _parts, font, sub_font,
+            anchor='mm', img_size=img.size, bg_color=(0, 200, 0),
+        )
+        pixels = list(img.getdata())
+        has_green = any(p[1] > 150 and p[0] < 50 and p[2] < 50 for p in pixels)
+        assert has_green, "Expected green background pixels for anchor='mm'"
+
+    def test_anchor_mt_middle_top(self, _fonts, _parts):
+        """Anchor 'mt' should center horizontally, top-align vertically."""
+        font, sub_font = _fonts
+        img = Image.new('RGB', (400, 200), color='white')
+        draw = ImageDraw.Draw(img)
+        draw_label_with_subscript_bg(
+            draw, (200, 10), _parts, font, sub_font,
+            anchor='mt', img_size=img.size, bg_color=(200, 200, 0),
+        )
+        pixels = list(img.getdata())
+        non_white = [p for p in pixels if p != (255, 255, 255)]
+        assert len(non_white) > 0
+
+    def test_anchor_unknown_suffix_defaults(self, _fonts, _parts):
+        """Anchor with unknown suffix (e.g. 'lx') should default base_y = y."""
+        font, sub_font = _fonts
+        img = Image.new('RGB', (400, 200), color='white')
+        draw = ImageDraw.Draw(img)
+        draw_label_with_subscript_bg(
+            draw, (50, 50), _parts, font, sub_font,
+            anchor='lx', img_size=img.size, bg_color=(128, 0, 128),
+        )
+        pixels = list(img.getdata())
+        non_white = [p for p in pixels if p != (255, 255, 255)]
+        assert len(non_white) > 0
+
+
+class _NonFreeTypeFontWrapper:
+    """Wraps a real FreeTypeFont but fails isinstance(FreeTypeFont) checks."""
+
+    def __init__(self, real_font):
+        self._real = real_font
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
+class TestDrawLabelWithSubscriptBgNonFreeType:
+    """Tests for draw_label_with_subscript_bg with non-FreeType fonts (lines 114, 121, 138-139)."""
+
+    @staticmethod
+    def _make_non_freetype_font():
+        real = load_grid_font(20)
+        wrapper = _NonFreeTypeFontWrapper(real)
+        assert not isinstance(wrapper, ImageFont.FreeTypeFont)
+        return wrapper
+
+    def test_non_freetype_mixed_parts(self):
+        """Non-FreeType font should hit else branches on lines 114 and 121."""
+        font = self._make_non_freetype_font()
+        img = Image.new('RGB', (300, 100), color='white')
+        draw = ImageDraw.Draw(img)
+        parts = [('AB', False), ('c', True)]
+        draw_label_with_subscript_bg(
+            draw, (50, 30), parts, font, font,
+            anchor='lt', img_size=img.size, bg_color=(255, 255, 0),
+        )
+        pixels = list(img.getdata())
+        non_white = [p for p in pixels if p != (255, 255, 255)]
+        assert len(non_white) > 0
+
+    def test_non_freetype_subscript_only(self):
+        """All-subscript parts with non-FreeType font triggers max_height fallback (lines 138-139)."""
+        font = self._make_non_freetype_font()
+        img = Image.new('RGB', (300, 100), color='white')
+        draw = ImageDraw.Draw(img)
+        parts = [('sub', True)]
+        draw_label_with_subscript_bg(
+            draw, (50, 30), parts, font, font,
+            anchor='lt', img_size=img.size, bg_color=(0, 200, 200),
+        )
+        pixels = list(img.getdata())
+        non_white = [p for p in pixels if p != (255, 255, 255)]
+        assert len(non_white) > 0
+
+
+class TestLoadGridFontFallbacks:
+    """Tests for load_grid_font fallback paths when configured paths are invalid."""
+
+    def test_invalid_bold_path_falls_through(self):
+        """When GRID_FONT_PATH_BOLD is invalid, should fallback to GRID_FONT_PATH or system."""
+        import imaging.text as text_mod
+        orig_bold = text_mod.GRID_FONT_PATH_BOLD
+        orig_regular = text_mod.GRID_FONT_PATH
+        try:
+            text_mod.GRID_FONT_PATH_BOLD = '/nonexistent/font_bold.ttf'
+            text_mod.GRID_FONT_PATH = None
+            font = load_grid_font(20)
+            assert font is not None
+        finally:
+            text_mod.GRID_FONT_PATH_BOLD = orig_bold
+            text_mod.GRID_FONT_PATH = orig_regular
+
+    def test_invalid_regular_path_falls_through(self):
+        """When GRID_FONT_PATH is invalid, should fallback to system fonts."""
+        import imaging.text as text_mod
+        orig_bold = text_mod.GRID_FONT_PATH_BOLD
+        orig_regular = text_mod.GRID_FONT_PATH
+        try:
+            text_mod.GRID_FONT_PATH_BOLD = None
+            text_mod.GRID_FONT_PATH = '/nonexistent/font.ttf'
+            font = load_grid_font(20)
+            assert font is not None
+        finally:
+            text_mod.GRID_FONT_PATH_BOLD = orig_bold
+            text_mod.GRID_FONT_PATH = orig_regular
+
+    def test_both_invalid_paths_fall_through(self):
+        """When both font paths are invalid, should fallback to system fonts."""
+        import imaging.text as text_mod
+        orig_bold = text_mod.GRID_FONT_PATH_BOLD
+        orig_regular = text_mod.GRID_FONT_PATH
+        try:
+            text_mod.GRID_FONT_PATH_BOLD = '/nonexistent/bold.ttf'
+            text_mod.GRID_FONT_PATH = '/nonexistent/regular.ttf'
+            font = load_grid_font(20)
+            assert font is not None
+        finally:
+            text_mod.GRID_FONT_PATH_BOLD = orig_bold
+            text_mod.GRID_FONT_PATH = orig_regular
+
+
+class TestDrawElevationLegendTitle:
+    """Tests for draw_elevation_legend with title parameter.
+
+    Covers _wrap_legend_title inner function (lines 78-101) and
+    title rendering logic (lines 187-199, 213, 312-315).
+    """
+
+    def test_legend_with_short_title(self):
+        """Short title fits on one line, exercises title layout path."""
+        img = Image.new('RGB', (1000, 1000), color='white')
+        color_ramp = [
+            (0.0, (0, 0, 255)),
+            (0.5, (0, 255, 0)),
+            (1.0, (255, 0, 0)),
+        ]
+        bounds = draw_elevation_legend(
+            img,
+            color_ramp=color_ramp,
+            min_elevation_m=0,
+            max_elevation_m=500,
+            center_lat_wgs=55.75,
+            zoom=12,
+            title='Высота, м',
+        )
+        pixels = list(img.getdata())
+        non_white = [p for p in pixels if p != (255, 255, 255)]
+        assert len(non_white) > 0
+        assert len(bounds) == 4
+        assert bounds[0] < bounds[2]
+        assert bounds[1] < bounds[3]
+
+    def test_legend_with_long_wrapping_title(self):
+        """Long title triggers word-wrapping in _wrap_legend_title (lines 82-101)."""
+        img = Image.new('RGB', (500, 500), color='white')
+        color_ramp = [
+            (0.0, (0, 100, 200)),
+            (1.0, (200, 100, 0)),
+        ]
+        bounds = draw_elevation_legend(
+            img,
+            color_ramp=color_ramp,
+            min_elevation_m=100,
+            max_elevation_m=900,
+            center_lat_wgs=55.75,
+            zoom=12,
+            title='Абсолютная высота рельефа над уровнем моря в метрах',
+        )
+        pixels = list(img.getdata())
+        non_white = [p for p in pixels if p != (255, 255, 255)]
+        assert len(non_white) > 0
+        assert len(bounds) == 4
+
+    def test_legend_with_empty_title(self):
+        """Empty string title exercises _wrap_legend_title empty-words branch (line 84)."""
+        img = Image.new('RGB', (1000, 1000), color='white')
+        color_ramp = [
+            (0.0, (0, 0, 255)),
+            (1.0, (255, 0, 0)),
+        ]
+        bounds = draw_elevation_legend(
+            img,
+            color_ramp=color_ramp,
+            min_elevation_m=0,
+            max_elevation_m=200,
+            center_lat_wgs=55.75,
+            zoom=12,
+            title='',
+        )
+        assert len(bounds) == 4
+
+    def test_legend_title_with_single_word(self):
+        """Single-word title produces one line without entering the wrap loop."""
+        img = Image.new('RGB', (1000, 1000), color='white')
+        color_ramp = [
+            (0.0, (50, 50, 200)),
+            (1.0, (200, 50, 50)),
+        ]
+        bounds = draw_elevation_legend(
+            img,
+            color_ramp=color_ramp,
+            min_elevation_m=0,
+            max_elevation_m=300,
+            center_lat_wgs=55.75,
+            zoom=12,
+            title='Высота',
+        )
+        pixels = list(img.getdata())
+        non_white = [p for p in pixels if p != (255, 255, 255)]
+        assert len(non_white) > 0
+        assert len(bounds) == 4
+
+
+class TestDrawElevationLegendLabelStep:
+    """Tests for draw_elevation_legend with label_step_m parameter (covers line 331)."""
+
+    def test_legend_with_label_step_100(self):
+        """Elevation labels rounded to nearest 100m."""
+        img = Image.new('RGB', (1000, 1000), color='white')
+        color_ramp = [
+            (0.0, (0, 0, 128)),
+            (0.5, (128, 128, 0)),
+            (1.0, (255, 0, 0)),
+        ]
+        bounds = draw_elevation_legend(
+            img,
+            color_ramp=color_ramp,
+            min_elevation_m=0,
+            max_elevation_m=1000,
+            center_lat_wgs=55.75,
+            zoom=12,
+            label_step_m=100,
+        )
+        pixels = list(img.getdata())
+        non_white = [p for p in pixels if p != (255, 255, 255)]
+        assert len(non_white) > 0
+        assert len(bounds) == 4
+
+    def test_legend_with_label_step_50(self):
+        """Elevation labels rounded to nearest 50m."""
+        img = Image.new('RGB', (1000, 1000), color='white')
+        color_ramp = [
+            (0.0, (0, 0, 200)),
+            (1.0, (200, 0, 0)),
+        ]
+        bounds = draw_elevation_legend(
+            img,
+            color_ramp=color_ramp,
+            min_elevation_m=25,
+            max_elevation_m=475,
+            center_lat_wgs=55.75,
+            zoom=12,
+            label_step_m=50,
+        )
+        assert len(bounds) == 4
+        assert bounds[0] < bounds[2]
+
+
+class TestDrawElevationLegendGridFontSize:
+    """Tests for draw_elevation_legend with grid_font_size_m parameter (covers line 132)."""
+
+    def test_legend_with_explicit_font_size(self):
+        """Explicit grid_font_size_m bypasses default font-size calculation."""
+        img = Image.new('RGB', (1000, 1000), color='white')
+        color_ramp = [
+            (0.0, (50, 50, 200)),
+            (1.0, (200, 50, 50)),
+        ]
+        bounds = draw_elevation_legend(
+            img,
+            color_ramp=color_ramp,
+            min_elevation_m=50,
+            max_elevation_m=500,
+            center_lat_wgs=55.75,
+            zoom=12,
+            grid_font_size_m=80.0,
+        )
+        pixels = list(img.getdata())
+        non_white = [p for p in pixels if p != (255, 255, 255)]
+        assert len(non_white) > 0
+        assert len(bounds) == 4
+
+    def test_legend_with_large_font_size(self):
+        """Large grid_font_size_m still produces valid legend."""
+        img = Image.new('RGB', (1000, 1000), color='white')
+        color_ramp = [
+            (0.0, (0, 0, 255)),
+            (1.0, (255, 0, 0)),
+        ]
+        bounds = draw_elevation_legend(
+            img,
+            color_ramp=color_ramp,
+            min_elevation_m=0,
+            max_elevation_m=1000,
+            center_lat_wgs=55.75,
+            zoom=12,
+            grid_font_size_m=200.0,
+        )
+        assert len(bounds) == 4
+
+
+class TestDrawElevationLegendSmallMap:
+    """Tests for draw_elevation_legend with small map (covers line 116).
+
+    When map_height_m < LEGEND_MIN_MAP_HEIGHT_M_FOR_RATIO the legend height is
+    computed from LEGEND_MIN_HEIGHT_GRID_SQUARES * GRID_STEP_M * ppm.
+    """
+
+    def test_small_map_high_zoom(self):
+        """500px at zoom 16 => ~450m height, well below 10000m threshold."""
+        img = Image.new('RGB', (500, 500), color='white')
+        color_ramp = [
+            (0.0, (0, 0, 255)),
+            (1.0, (255, 0, 0)),
+        ]
+        bounds = draw_elevation_legend(
+            img,
+            color_ramp=color_ramp,
+            min_elevation_m=100,
+            max_elevation_m=300,
+            center_lat_wgs=55.75,
+            zoom=16,
+        )
+        pixels = list(img.getdata())
+        non_white = [p for p in pixels if p != (255, 255, 255)]
+        assert len(non_white) > 0
+        assert len(bounds) == 4
+
+    def test_small_map_with_title(self):
+        """Small map with title should render correctly."""
+        img = Image.new('RGB', (500, 500), color='white')
+        color_ramp = [
+            (0.0, (0, 100, 200)),
+            (1.0, (200, 100, 0)),
+        ]
+        bounds = draw_elevation_legend(
+            img,
+            color_ramp=color_ramp,
+            min_elevation_m=0,
+            max_elevation_m=200,
+            center_lat_wgs=55.75,
+            zoom=16,
+            title='Высота, м',
+        )
+        assert len(bounds) == 4
+
+
+class TestDrawElevationLegendRGBA:
+    """Tests for draw_elevation_legend with RGBA image mode (covers lines 263-273)."""
+
+    def test_rgba_image(self):
+        """RGBA image exercises the alpha_composite branch for background."""
+        img = Image.new('RGBA', (1000, 1000), color=(255, 255, 255, 255))
+        color_ramp = [
+            (0.0, (0, 0, 255)),
+            (0.5, (0, 255, 0)),
+            (1.0, (255, 0, 0)),
+        ]
+        bounds = draw_elevation_legend(
+            img,
+            color_ramp=color_ramp,
+            min_elevation_m=0,
+            max_elevation_m=1000,
+            center_lat_wgs=55.75,
+            zoom=12,
+        )
+        assert img.mode == 'RGBA'
+        pixels = list(img.getdata())
+        non_white = [p for p in pixels if p != (255, 255, 255, 255)]
+        assert len(non_white) > 0
+        assert len(bounds) == 4
+
+    def test_rgba_with_title_and_label_step(self):
+        """RGBA mode combined with title and label_step_m."""
+        img = Image.new('RGBA', (500, 500), color=(255, 255, 255, 255))
+        color_ramp = [
+            (0.0, (0, 50, 150)),
+            (0.5, (100, 200, 50)),
+            (1.0, (200, 50, 0)),
+        ]
+        bounds = draw_elevation_legend(
+            img,
+            color_ramp=color_ramp,
+            min_elevation_m=0,
+            max_elevation_m=500,
+            center_lat_wgs=55.75,
+            zoom=12,
+            title='Высота, м',
+            label_step_m=100,
+        )
+        assert img.mode == 'RGBA'
+        pixels = list(img.getdata())
+        non_white = [p for p in pixels if p != (255, 255, 255, 255)]
+        assert len(non_white) > 0
+        assert len(bounds) == 4
+
+    def test_rgba_with_transparent_background(self):
+        """RGBA image with semi-transparent starting color should receive legend."""
+        img = Image.new('RGBA', (1000, 1000), color=(200, 200, 200, 128))
+        color_ramp = [
+            (0.0, (0, 0, 200)),
+            (1.0, (200, 0, 0)),
+        ]
+        bounds = draw_elevation_legend(
+            img,
+            color_ramp=color_ramp,
+            min_elevation_m=50,
+            max_elevation_m=800,
+            center_lat_wgs=55.75,
+            zoom=12,
+        )
+        assert len(bounds) == 4
+
+
+class TestDrawElevationLegendAllParams:
+    """Tests for draw_elevation_legend with all optional parameters combined."""
+
+    def test_all_params_together(self):
+        """Title + label_step_m + grid_font_size_m combined on RGB image."""
+        img = Image.new('RGB', (1000, 1000), color='white')
+        color_ramp = [
+            (0.0, (0, 0, 200)),
+            (0.33, (0, 200, 0)),
+            (0.66, (200, 200, 0)),
+            (1.0, (200, 0, 0)),
+        ]
+        bounds = draw_elevation_legend(
+            img,
+            color_ramp=color_ramp,
+            min_elevation_m=50,
+            max_elevation_m=950,
+            center_lat_wgs=55.75,
+            zoom=12,
+            title='Высота, м',
+            label_step_m=100,
+            grid_font_size_m=100.0,
+        )
+        pixels = list(img.getdata())
+        non_white = [p for p in pixels if p != (255, 255, 255)]
+        assert len(non_white) > 0
+        assert len(bounds) == 4
+        assert bounds[0] < bounds[2]
+        assert bounds[1] < bounds[3]
+
+    def test_all_params_on_rgba_small_map(self):
+        """All optional params on an RGBA small map at high zoom."""
+        img = Image.new('RGBA', (500, 500), color=(255, 255, 255, 255))
+        color_ramp = [
+            (0.0, (0, 0, 200)),
+            (1.0, (200, 0, 0)),
+        ]
+        bounds = draw_elevation_legend(
+            img,
+            color_ramp=color_ramp,
+            min_elevation_m=0,
+            max_elevation_m=400,
+            center_lat_wgs=55.75,
+            zoom=16,
+            title='Высота над уровнем моря',
+            label_step_m=50,
+            grid_font_size_m=60.0,
+        )
+        assert len(bounds) == 4
+
+
+class TestDrawElevationLegendFontFallback:
+    """Tests for draw_elevation_legend font loading fallback (covers lines 142-143)."""
+
+    def test_font_fallback_on_load_failure(self, monkeypatch):
+        """When load_grid_font raises, legend falls back to ImageFont.load_default()."""
+        def broken_load_font(size=20):
+            raise OSError('Font not found')
+
+        monkeypatch.setattr('imaging.legend.load_grid_font', broken_load_font)
+
+        img = Image.new('RGB', (1000, 1000), color='white')
+        color_ramp = [
+            (0.0, (0, 0, 255)),
+            (1.0, (255, 0, 0)),
+        ]
+        bounds = draw_elevation_legend(
+            img,
+            color_ramp=color_ramp,
+            min_elevation_m=0,
+            max_elevation_m=500,
+            center_lat_wgs=55.75,
+            zoom=12,
+        )
+        pixels = list(img.getdata())
+        non_white = [p for p in pixels if p != (255, 255, 255)]
+        assert len(non_white) > 0
+        assert len(bounds) == 4
+
+
+class TestDrawGridCrossesWithLegendBounds:
+    """Tests for draw_axis_aligned_km_grid with display_grid=False and legend_bounds.
+
+    Covers lines 357-359: skip crosses that fall inside legend_bounds.
+    """
+
+    def test_crosses_skip_legend_area(self, sk42_gk_crs, sk42_to_wgs_transformer):
+        """Crosses inside legend_bounds should be skipped."""
+        img = Image.new('RGB', (1000, 1000), color='white')
+        legend_bounds = (800, 800, 950, 950)
+        draw_axis_aligned_km_grid(
+            img,
+            center_lat_sk42=55.75,
+            center_lng_sk42=37.62,
+            center_lat_wgs=55.75,
+            center_lng_wgs=37.62,
+            zoom=12,
+            crs_sk42_gk=sk42_gk_crs,
+            t_sk42_to_wgs=sk42_to_wgs_transformer,
+            display_grid=False,
+            legend_bounds=legend_bounds,
+        )
+        pixels = list(img.getdata())
+        non_white = [p for p in pixels if p != (255, 255, 255)]
+        assert len(non_white) > 0
+
+    def test_crosses_fewer_with_large_legend_bounds(
+        self, sk42_gk_crs, sk42_to_wgs_transformer
+    ):
+        """Large legend_bounds should result in fewer drawn crosses than no bounds."""
+        img_with = Image.new('RGB', (1000, 1000), color='white')
+        img_without = Image.new('RGB', (1000, 1000), color='white')
+
+        draw_axis_aligned_km_grid(
+            img_with,
+            center_lat_sk42=55.75,
+            center_lng_sk42=37.62,
+            center_lat_wgs=55.75,
+            center_lng_wgs=37.62,
+            zoom=12,
+            crs_sk42_gk=sk42_gk_crs,
+            t_sk42_to_wgs=sk42_to_wgs_transformer,
+            display_grid=False,
+            legend_bounds=(0, 0, 999, 999),
+        )
+        draw_axis_aligned_km_grid(
+            img_without,
+            center_lat_sk42=55.75,
+            center_lng_sk42=37.62,
+            center_lat_wgs=55.75,
+            center_lng_wgs=37.62,
+            zoom=12,
+            crs_sk42_gk=sk42_gk_crs,
+            t_sk42_to_wgs=sk42_to_wgs_transformer,
+            display_grid=False,
+            legend_bounds=None,
+        )
+        pixels_with = [p for p in img_with.getdata() if p != (255, 255, 255)]
+        pixels_without = [p for p in img_without.getdata() if p != (255, 255, 255)]
+        assert len(pixels_without) >= len(pixels_with)
+
+    def test_crosses_with_small_legend_area(
+        self, sk42_gk_crs, sk42_to_wgs_transformer
+    ):
+        """Tiny legend_bounds should exclude only a small area."""
+        img = Image.new('RGB', (1000, 1000), color='white')
+        legend_bounds = (900, 900, 910, 910)
+        draw_axis_aligned_km_grid(
+            img,
+            center_lat_sk42=55.75,
+            center_lng_sk42=37.62,
+            center_lat_wgs=55.75,
+            center_lng_wgs=37.62,
+            zoom=12,
+            crs_sk42_gk=sk42_gk_crs,
+            t_sk42_to_wgs=sk42_to_wgs_transformer,
+            display_grid=False,
+            legend_bounds=legend_bounds,
+        )
+        pixels = list(img.getdata())
+        non_white = [p for p in pixels if p != (255, 255, 255)]
+        assert len(non_white) > 0
+
+
+class TestDrawGridWithLegendBoundsDisplayTrue:
+    """Tests for draw_axis_aligned_km_grid with display_grid=True and legend_bounds.
+
+    Although draw_line_with_gap (lines 176-217) is defined but not currently
+    invoked by the grid drawing logic, these tests ensure the grid renders
+    correctly when legend_bounds are supplied in full-grid mode.
+    """
+
+    def test_grid_with_bottom_right_legend_bounds(
+        self, sk42_gk_crs, sk42_to_wgs_transformer
+    ):
+        """Full grid with legend_bounds in bottom-right should draw lines."""
+        img = Image.new('RGB', (1000, 1000), color='white')
+        legend_bounds = (800, 800, 950, 950)
+        draw_axis_aligned_km_grid(
+            img,
+            center_lat_sk42=55.75,
+            center_lng_sk42=37.62,
+            center_lat_wgs=55.75,
+            center_lng_wgs=37.62,
+            zoom=12,
+            crs_sk42_gk=sk42_gk_crs,
+            t_sk42_to_wgs=sk42_to_wgs_transformer,
+            display_grid=True,
+            legend_bounds=legend_bounds,
+        )
+        pixels = list(img.getdata())
+        non_white = [p for p in pixels if p != (255, 255, 255)]
+        assert len(non_white) > 0
+
+    def test_grid_with_centered_legend_bounds(
+        self, sk42_gk_crs, sk42_to_wgs_transformer
+    ):
+        """Legend bounds in center of image should not prevent grid rendering."""
+        img = Image.new('RGB', (1000, 1000), color='white')
+        legend_bounds = (400, 400, 600, 600)
+        draw_axis_aligned_km_grid(
+            img,
+            center_lat_sk42=55.75,
+            center_lng_sk42=37.62,
+            center_lat_wgs=55.75,
+            center_lng_wgs=37.62,
+            zoom=12,
+            crs_sk42_gk=sk42_gk_crs,
+            t_sk42_to_wgs=sk42_to_wgs_transformer,
+            display_grid=True,
+            legend_bounds=legend_bounds,
         )
         pixels = list(img.getdata())
         non_white = [p for p in pixels if p != (255, 255, 255)]

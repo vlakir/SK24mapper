@@ -48,6 +48,7 @@ def draw_control_point_triangle(
     cy_img: float,
     meters_per_px: float,
     rotation_deg: float = 0.0,
+    size_m: float | None = None,
 ) -> None:
     """
     Draw a triangular control point marker at specified position.
@@ -58,13 +59,15 @@ def draw_control_point_triangle(
         cy_img: Y coordinate in image pixels
         meters_per_px: Meters per pixel
         rotation_deg: Image rotation in degrees (for marker orientation)
+        size_m: Marker size in meters (defaults to CONTROL_POINT_SIZE_M)
 
     """
     if meters_per_px <= 0:
         return
 
     ppm = 1.0 / meters_per_px
-    size_px = max(5, round(CONTROL_POINT_SIZE_M * ppm))
+    effective_size_m = size_m if size_m is not None else CONTROL_POINT_SIZE_M
+    size_px = max(5, round(effective_size_m * ppm))
     half = size_px / 2.0
 
     # Triangle pointing up (before rotation)

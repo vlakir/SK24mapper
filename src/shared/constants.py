@@ -76,20 +76,12 @@ GRID_TEXT_OUTLINE_COLOR = (255, 255, 255)
 # Цвет жёлтой подложки под подписью (RGB)
 GRID_LABEL_BG_COLOR = (255, 255, 0)
 
-# Использовать жирный шрифт для подписей (если доступен)
-GRID_FONT_BOLD = True
-
-# Путь к шрифту TTF/OTF (если None — DejaVuSans.ttf)
+# Путь к шрифту TTF/OTF (если None — системный Arial Bold)
 GRID_FONT_PATH = None
 
-# Путь к жирному шрифту TTF/OTF (если None — DejaVuSans-Bold.ttf)
+# Путь к жирному шрифту TTF/OTF (если None — системный Arial Bold)
 GRID_FONT_PATH_BOLD = None
 
-# Адаптивный размер шрифта подписей сетки (в метрах)
-GRID_LABEL_FONT_M = 50.0
-# Диапазон клампа в пикселях для подписей сетки
-GRID_LABEL_FONT_MIN_PX = 12
-GRID_LABEL_FONT_MAX_PX = 120
 
 # Включить наложение белой маски поверх карты
 
@@ -324,14 +316,11 @@ CONTOUR_LABEL_GAP_PADDING_M = 5
 
 # Старый фиксированный размер (для бэкапа/совместимости)
 CONTOUR_LABEL_FONT_SIZE = 18
-# Новый масштабируемый размер шрифта в метрах
-# Одинаковый размер для всех изолиний (обычных и индексных)
-CONTOUR_LABEL_FONT_M = 60.0
+# Множитель размера шрифта изолиний относительно grid_font_size_m
+CONTOUR_FONT_SIZE_RATIO = 0.5
 # Диапазон клампа в пикселях, чтобы подписи оставались читаемыми
 CONTOUR_LABEL_FONT_MIN_PX = 16
 CONTOUR_LABEL_FONT_MAX_PX = 128
-CONTOUR_LABEL_FONT_PATH = None
-CONTOUR_LABEL_FONT_BOLD = True
 CONTOUR_LABEL_FORMAT = '{:.0f}'
 # Минимальная длина полилинии для размещения подписи
 MIN_POLYLINE_POINTS = 10

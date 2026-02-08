@@ -270,7 +270,7 @@ async def process_radio_horizon(ctx: MapDownloadContext) -> Image.Image:
     ctx.rh_cache_topo_base = topo_for_cache.convert('L').convert('RGBA')
 
     logger.info(
-        'Топооснова сохранена в кэш с размером: %s в RGBA формате (финальный размер после поворота)',
+        'Топооснова в кэше: %s, RGBA (финальный размер)',
         ctx.rh_cache_topo_base.size,
     )
 
