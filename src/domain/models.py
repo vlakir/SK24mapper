@@ -109,6 +109,15 @@ class MapSettings(BaseModel):
     # 0.0 = топооснова не видна, 1.0 = чистая топооснова
     radio_horizon_overlay_alpha: float = 0.3
 
+    # Параметры РЛС (для карты зоны обнаружения)
+    radar_azimuth_deg: float = 0.0  # Азимут направления РЛС (градусы, 0=север)
+    radar_sector_width_deg: float = 90.0  # Ширина сектора обзора (градусы)
+    radar_elevation_min_deg: float = 0.5  # Минимальный угол места (градусы)
+    radar_elevation_max_deg: float = 30.0  # Максимальный угол места (градусы)
+    radar_max_range_km: float = 15.0  # Максимальная дальность обнаружения (км)
+    radar_target_height_min_m: float = 30.0   # Минимальная высота цели (м)
+    radar_target_height_max_m: float = 5000.0  # Максимальная высота цели (м)
+
     # Валидации через Pydantic validators
     @field_validator('mask_opacity', 'radio_horizon_overlay_alpha')
     @classmethod

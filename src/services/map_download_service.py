@@ -68,6 +68,7 @@ from shared.constants import (
     MAX_OUTPUT_PIXELS,
     MAX_ZOOM,
     PIL_DISABLE_LIMIT,
+    RADAR_COVERAGE_USE_RETINA,
     RADIO_HORIZON_COLOR_RAMP,
     RADIO_HORIZON_USE_RETINA,
     ROTATION_EPSILON,
@@ -215,6 +216,7 @@ class MapDownloadService:
             is_elev_color,
             is_elev_contours,
             is_radio_horizon,
+            is_radar_coverage,
         ) = await self._determine_map_type(mt_enum, settings)
 
         # Determine scale
@@ -223,6 +225,10 @@ class MapDownloadService:
         elif is_radio_horizon:
             eff_scale = effective_scale_for_xyz(
                 256, use_retina=RADIO_HORIZON_USE_RETINA
+            )
+        elif is_radar_coverage:
+            eff_scale = effective_scale_for_xyz(
+                256, use_retina=RADAR_COVERAGE_USE_RETINA
             )
         else:
             eff_scale = effective_scale_for_xyz(
@@ -294,6 +300,8 @@ class MapDownloadService:
             full_eff_tile_px = 256 * (2 if ELEVATION_USE_RETINA else 1)
         elif is_radio_horizon:
             full_eff_tile_px = 256 * (2 if RADIO_HORIZON_USE_RETINA else 1)
+        elif is_radar_coverage:
+            full_eff_tile_px = 256 * (2 if RADAR_COVERAGE_USE_RETINA else 1)
         else:
             full_eff_tile_px = XYZ_TILE_SIZE * (2 if XYZ_USE_RETINA else 1)
 
@@ -326,6 +334,7 @@ class MapDownloadService:
             is_elev_color=is_elev_color,
             is_elev_contours=is_elev_contours,
             is_radio_horizon=is_radio_horizon,
+            is_radar_coverage=is_radar_coverage,
             overlay_contours=bool(getattr(settings, 'overlay_contours', False)),
             full_eff_tile_px=full_eff_tile_px,
         )
@@ -338,12 +347,13 @@ class MapDownloadService:
 
     async def _determine_map_type(
         self, mt_enum: MapType, settings: MapSettings
-    ) -> tuple[str | None, bool, bool, bool]:
+    ) -> tuple[str | None, bool, bool, bool, bool]:
         """Determine map type and validate API access."""
         style_id = None
         is_elev_color = False
         is_elev_contours = False
         is_radio_horizon = False
+        is_radar_coverage = False
 
         if mt_enum in (
             MapType.SATELLITE,
@@ -388,6 +398,20 @@ class MapDownloadService:
             )
             is_radio_horizon = True
             await _validate_terrain_api(self.api_key)
+        elif mt_enum == MapType.RADAR_COVERAGE:
+            if not settings.control_point_enabled:
+                msg = 'Для карты зоны обнаружения РЛС необходимо включить контрольную точку'
+                raise ValueError(msg)
+            logger.info(
+                'Тип карты: %s (зона обнаружения РЛС); дальность=%s км; '
+                'сектор=%s°; retina=%s',
+                mt_enum,
+                settings.radar_max_range_km,
+                settings.radar_sector_width_deg,
+                RADAR_COVERAGE_USE_RETINA,
+            )
+            is_radar_coverage = True
+            await _validate_terrain_api(self.api_key)
         else:
             logger.warning(
                 'Выбран режим высот (%s), пока не реализовано. Используется Спутник.',
@@ -396,7 +420,7 @@ class MapDownloadService:
             style_id = map_type_to_style_id(default_map_type())
             await _validate_api_and_connectivity(self.api_key, style_id)
 
-        return style_id, is_elev_color, is_elev_contours, is_radio_horizon
+        return style_id, is_elev_color, is_elev_contours, is_radio_horizon, is_radar_coverage
 
     async def _run_processor(self, ctx: MapDownloadContext) -> Image.Image:
         """Run appropriate processor based on map type."""
@@ -409,6 +433,9 @@ class MapDownloadService:
         if ctx.is_radio_horizon:
             module = importlib.import_module('services.processors.radio_horizon')
             return await module.process_radio_horizon(ctx)
+        if ctx.is_radar_coverage:
+            module = importlib.import_module('services.processors.radar_coverage')
+            return await module.process_radar_coverage(ctx)
 
         module = importlib.import_module('services.processors.xyz_tiles')
         return await module.process_xyz_tiles(ctx)
@@ -425,7 +452,7 @@ class MapDownloadService:
 
         # Overlay contours if enabled
         if ctx.overlay_contours and not ctx.is_elev_contours:
-            if ctx.is_radio_horizon:
+            if ctx.is_radio_horizon or ctx.is_radar_coverage:
                 # For RH: draw contours on a separate transparent layer
                 # for inclusion in the cached overlay (interactive recompute)
                 contour_layer = Image.new('RGBA', result.size, (0, 0, 0, 0))
@@ -503,12 +530,16 @@ class MapDownloadService:
         log_memory_usage('after grid')
 
         # Legend
-        if ctx.is_elev_color or ctx.is_radio_horizon:
+        if ctx.is_elev_color or ctx.is_radio_horizon or ctx.is_radar_coverage:
             self._draw_legend(ctx, result)
 
-        # For radio horizon: create and cache overlay layer with grid/legend/contours
-        if ctx.is_radio_horizon:
+        # For radio horizon / radar coverage: create and cache overlay layer
+        if ctx.is_radio_horizon or ctx.is_radar_coverage:
             self._create_rh_overlay_layer(ctx, result)
+
+        # For radar coverage: draw sector overlay after grid/legend
+        if ctx.is_radar_coverage:
+            self._draw_radar_sector_overlay(ctx, result)
 
         # Center cross
         self._draw_center_cross(ctx, result)
@@ -693,6 +724,11 @@ class MapDownloadService:
                 min_elev = ctx.elev_min_m or 0.0
                 max_elev = ctx.elev_max_m or 1000.0
                 title = 'Высота, м'
+            elif ctx.is_radar_coverage:
+                color_ramp = RADIO_HORIZON_COLOR_RAMP
+                min_elev = ctx.settings.radar_target_height_min_m
+                max_elev = ctx.settings.radar_target_height_max_m
+                title = 'Мин. высота обнаружения РЛС, м'
             else:  # radio horizon
                 color_ramp = RADIO_HORIZON_COLOR_RAMP
                 min_elev = 0.0
@@ -808,7 +844,7 @@ class MapDownloadService:
             self._draw_grid(ctx, overlay)
 
             # Draw legend on overlay
-            if ctx.is_radio_horizon:
+            if ctx.is_radio_horizon or ctx.is_radar_coverage:
                 self._draw_legend(ctx, overlay)
 
             # Save to cache
@@ -821,6 +857,83 @@ class MapDownloadService:
         except Exception as e:
             logger.warning('Failed to create radio horizon overlay layer: %s', e)
 
+    def _draw_radar_sector_overlay(
+        self, ctx: MapDownloadContext, result: Image.Image
+    ) -> None:
+        """Draw radar sector overlay (shadow, borders, ceiling arcs) on result."""
+        try:
+            from services.map_postprocessing import draw_radar_marker
+            from services.radar_coverage import draw_sector_overlay
+
+            mpp = ctx.get_meters_per_pixel()
+            if mpp <= 0:
+                return
+
+            # Compute radar position in image coordinates
+            cp_lng_sk42, cp_lat_sk42 = ctx.t_sk42_from_gk.transform(
+                ctx.settings.control_point_x_sk42_gk,
+                ctx.settings.control_point_y_sk42_gk,
+            )
+            cp_lng_wgs, cp_lat_wgs = ctx.t_sk42_to_wgs.transform(
+                cp_lng_sk42, cp_lat_sk42
+            )
+            cx_img, cy_img = compute_control_point_image_coords(
+                cp_lat_wgs=cp_lat_wgs,
+                cp_lng_wgs=cp_lng_wgs,
+                center_lat_wgs=ctx.center_lat_wgs,
+                center_lng_wgs=ctx.center_lng_wgs,
+                zoom=ctx.zoom,
+                eff_scale=ctx.eff_scale,
+                img_width=result.width,
+                img_height=result.height,
+                rotation_deg=ctx.rotation_deg,
+                latlng_to_pixel_xy_func=latlng_to_pixel_xy,
+            )
+
+            max_range_px = (ctx.settings.radar_max_range_km * 1000.0) / mpp
+
+            # Convert to RGBA for overlay drawing
+            if result.mode != 'RGBA':
+                result_rgba = result.convert('RGBA')
+            else:
+                result_rgba = result
+
+            ppm = 1.0 / mpp
+            font_size_px = max(10, round(ctx.settings.grid_font_size_m * ppm * 0.4))
+            try:
+                arc_font = load_grid_font(font_size_px)
+            except Exception:
+                arc_font = None
+
+            draw_sector_overlay(
+                img=result_rgba,
+                cx=cx_img,
+                cy=cy_img,
+                azimuth_deg=ctx.settings.radar_azimuth_deg,
+                sector_width_deg=ctx.settings.radar_sector_width_deg,
+                max_range_px=max_range_px,
+                pixel_size_m=mpp,
+                elevation_max_deg=ctx.settings.radar_elevation_max_deg,
+                font=arc_font,
+                rotation_deg=ctx.rotation_deg,
+            )
+
+            # Draw radar marker (diamond with direction)
+            draw_radar_marker(
+                result_rgba, cx_img, cy_img, mpp,
+                azimuth_deg=ctx.settings.radar_azimuth_deg,
+                rotation_deg=ctx.rotation_deg,
+            )
+
+            # Copy back to result if it was converted
+            if result.mode != 'RGBA':
+                result.paste(result_rgba.convert('RGB'))
+            else:
+                result.paste(result_rgba)
+
+        except Exception as e:
+            logger.warning('Не удалось нарисовать сектор РЛС: %s', e)
+
     def _draw_control_point_label(
         self,
         ctx: MapDownloadContext,
@@ -831,9 +944,9 @@ class MapDownloadService:
     ) -> None:
         """Draw control point label for maps."""
         # Always draw name if provided.
-        # Detailed label (height) is only for radio horizon maps.
+        # Detailed label (height) is for radio horizon / radar coverage maps.
         cp_name = getattr(ctx.settings, 'control_point_name', None)
-        if not cp_name and not ctx.is_radio_horizon:
+        if not cp_name and not ctx.is_radio_horizon and not ctx.is_radar_coverage:
             return
 
         try:
@@ -870,8 +983,8 @@ class MapDownloadService:
                 name_height = name_bbox[3] - name_bbox[1]
                 current_y += name_height + bg_padding_px * 2
 
-            # Height line with subscript (Radio Horizon only)
-            if ctx.is_radio_horizon:
+            # Height line with subscript (Radio Horizon / Radar Coverage)
+            if ctx.is_radio_horizon or ctx.is_radar_coverage:
                 cp_elev = ctx.control_point_elevation
                 if cp_elev is not None:
                     height_parts = [
@@ -943,7 +1056,7 @@ class MapDownloadService:
 
             # Collect radio horizon cache if available
             rh_cache = None
-            if ctx.is_radio_horizon and ctx.rh_cache_dem is not None:
+            if (ctx.is_radio_horizon or ctx.is_radar_coverage) and ctx.rh_cache_dem is not None:
                 rh_cache = {
                     'dem': ctx.rh_cache_dem,
                     'topo_base': ctx.rh_cache_topo_base,
@@ -952,7 +1065,11 @@ class MapDownloadService:
                     'pixel_size_m': ctx.rh_cache_pixel_size_m,
                     'antenna_height_m': ctx.settings.antenna_height_m,
                     'overlay_alpha': ctx.settings.radio_horizon_overlay_alpha,
-                    'max_height_m': ctx.settings.max_flight_height_m,
+                    'max_height_m': (ctx.settings.radar_target_height_max_m
+                                     if ctx.is_radar_coverage
+                                     else ctx.settings.max_flight_height_m),
+                    'radar_target_height_min_m': ctx.settings.radar_target_height_min_m,
+                    'radar_target_height_max_m': ctx.settings.radar_target_height_max_m,
                     'uav_height_reference': ctx.settings.uav_height_reference,
                     'final_size': (
                         ctx.target_w_px,
@@ -962,6 +1079,16 @@ class MapDownloadService:
                     'overlay_layer': ctx.rh_cache_overlay,
                     # Параметры постобработки (fallback)
                     'settings': ctx.settings,
+                    # Флаг типа карты
+                    'is_radar_coverage': ctx.is_radar_coverage,
+                    # Параметры РЛС (для пересчёта)
+                    'radar_azimuth_deg': ctx.settings.radar_azimuth_deg,
+                    'radar_sector_width_deg': ctx.settings.radar_sector_width_deg,
+                    'radar_elevation_min_deg': ctx.settings.radar_elevation_min_deg,
+                    'radar_elevation_max_deg': ctx.settings.radar_elevation_max_deg,
+                    'radar_max_range_km': ctx.settings.radar_max_range_km,
+                    # Угол поворота карты (для компенсации в overlay)
+                    'rotation_deg': ctx.rotation_deg,
                 }
 
             if gui_image is not None:

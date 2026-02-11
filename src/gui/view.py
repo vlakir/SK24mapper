@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from PIL import Image, ImageDraw
-from PySide6.QtCore import QObject, QSignalBlocker, Qt, QThread, Signal, Slot
+from PySide6.QtCore import QObject, QSignalBlocker, Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import (
     QAction,
     QCloseEvent,
@@ -67,8 +67,10 @@ from services.coordinate_transformer import CoordinateTransformer
 from services.map_postprocessing import (
     compute_control_point_image_coords,
     draw_control_point_triangle,
+    draw_radar_marker,
 )
-from services.radio_horizon import recompute_radio_horizon_fast
+from services.radar_coverage import draw_sector_overlay
+from services.radio_horizon import recompute_coverage_fast, recompute_radio_horizon_fast
 from shared.constants import (
     CONTROL_POINT_LABEL_GAP_MIN_PX,
     CONTROL_POINT_LABEL_GAP_RATIO,
@@ -184,6 +186,87 @@ class RadioHorizonRecomputeWorker(QThread):
 
         except Exception as e:
             logger.exception('RadioHorizonRecomputeWorker failed')
+            self.error.emit(str(e))
+
+
+class CoverageRecomputeWorker(QThread):
+    """Обобщённый worker для пересчёта покрытия (НСУ 360° или РЛС с сектором)."""
+
+    finished = Signal(
+        Image.Image, int, int
+    )  # result_image, new_antenna_row, new_antenna_col
+    error = Signal(str)
+
+    def __init__(
+        self,
+        rh_cache: dict[str, Any],
+        new_antenna_row: int,
+        new_antenna_col: int,
+        sector_params: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__()
+        self._rh_cache = rh_cache
+        self._new_antenna_row = new_antenna_row
+        self._new_antenna_col = new_antenna_col
+        self._sector_params = sector_params  # None = НСУ (360°), dict = РЛС
+
+    def run(self) -> None:
+        """Execute recomputation in background thread."""
+        try:
+            start_time = time.monotonic()
+            mode = 'radar coverage' if self._sector_params else 'radio horizon'
+            logger.info(
+                'CoverageRecomputeWorker: recomputing %s with antenna at (%d, %d)',
+                mode, self._new_antenna_col, self._new_antenna_row,
+            )
+
+            step_start = time.monotonic()
+            final_size = self._rh_cache.get('final_size')
+
+            sector_kwargs = {}
+            if self._sector_params:
+                max_h = self._sector_params.get('radar_target_height_max_m', self._rh_cache['max_height_m'])
+                sector_kwargs = {
+                    'sector_enabled': True,
+                    'radar_azimuth_deg': self._sector_params.get('radar_azimuth_deg', 0.0),
+                    'radar_sector_width_deg': self._sector_params.get('radar_sector_width_deg', 90.0),
+                    'elevation_min_deg': self._sector_params.get('radar_elevation_min_deg', 0.5),
+                    'elevation_max_deg': self._sector_params.get('radar_elevation_max_deg', 30.0),
+                    'max_range_m': self._sector_params.get('radar_max_range_km', 15.0) * 1000.0,
+                    'target_height_min_m': self._sector_params.get('radar_target_height_min_m', 0.0),
+                }
+            else:
+                max_h = self._rh_cache['max_height_m']
+
+            result_image = recompute_coverage_fast(
+                dem=self._rh_cache['dem'],
+                new_antenna_row=self._new_antenna_row,
+                new_antenna_col=self._new_antenna_col,
+                antenna_height_m=self._rh_cache['antenna_height_m'],
+                pixel_size_m=self._rh_cache['pixel_size_m'],
+                topo_base=self._rh_cache['topo_base'],
+                overlay_alpha=self._rh_cache['overlay_alpha'],
+                max_height_m=max_h,
+                uav_height_reference=self._rh_cache['uav_height_reference'],
+                final_size=final_size,
+                **sector_kwargs,
+            )
+            step_elapsed = time.monotonic() - step_start
+            logger.info(
+                '  └─ Recompute coverage (with resize): %.3f sec', step_elapsed
+            )
+
+            total_elapsed = time.monotonic() - start_time
+            logger.info(
+                'CoverageRecomputeWorker: recomputation completed in %.3f sec',
+                total_elapsed,
+            )
+            self.finished.emit(
+                result_image, self._new_antenna_row, self._new_antenna_col
+            )
+
+        except Exception as e:
+            logger.exception('CoverageRecomputeWorker failed')
             self.error.emit(str(e))
 
 
@@ -610,6 +693,12 @@ class MainWindow(QMainWindow):
         self._rh_click_pos: tuple[float, float] | None = (
             None  # Store click position for marker
         )
+        # Pending recompute: if worker is busy when debounce fires,
+        # store params and trigger recompute when current worker finishes.
+        self._pending_recompute_pos: tuple[float, float] | None = None
+
+        # True when azimuth was changed and recompute hasn't fired yet
+        self._azimuth_needs_recompute: bool = False
 
         # Guard flag to prevent model updates while UI is being populated
         # programmatically
@@ -885,6 +974,7 @@ class MainWindow(QMainWindow):
             MapType.ELEVATION_COLOR,
             # MapType.ELEVATION_HILLSHADE,
             MapType.RADIO_HORIZON,
+            MapType.RADAR_COVERAGE,
         ]
         for mt in self._maptype_order:
             self.map_type_combo.addItem(MAP_TYPE_LABELS_RU[mt], userData=mt.value)
@@ -971,7 +1061,96 @@ class MainWindow(QMainWindow):
         radio_horizon_layout.addLayout(alpha_row)
 
         radio_horizon_group.setLayout(radio_horizon_layout)
+        self._radio_horizon_group = radio_horizon_group
         options_tab_layout.addWidget(radio_horizon_group)
+
+        # Настройки РЛС (Зона обнаружения)
+        radar_group = QGroupBox('Параметры РЛС')
+        radar_layout = QVBoxLayout()
+
+        # Азимут и ширина сектора
+        radar_row1 = QHBoxLayout()
+        radar_row1.addWidget(QLabel('Азимут (°):'))
+        self.radar_azimuth_spin = QDoubleSpinBox()
+        self.radar_azimuth_spin.setRange(0.0, 359.9)
+        self.radar_azimuth_spin.setDecimals(1)
+        self.radar_azimuth_spin.setValue(0.0)
+        self.radar_azimuth_spin.setSingleStep(5.0)
+        self.radar_azimuth_spin.setWrapping(True)
+        self.radar_azimuth_spin.setToolTip('Азимут направления РЛС (0°=север, по часовой)')
+        radar_row1.addWidget(self.radar_azimuth_spin)
+
+        radar_row1.addWidget(QLabel('Сектор (°):'))
+        self.radar_sector_spin = QDoubleSpinBox()
+        self.radar_sector_spin.setRange(1.0, 360.0)
+        self.radar_sector_spin.setDecimals(0)
+        self.radar_sector_spin.setValue(90.0)
+        self.radar_sector_spin.setSingleStep(5.0)
+        self.radar_sector_spin.setToolTip('Ширина сектора обзора РЛС (градусы)')
+        radar_row1.addWidget(self.radar_sector_spin)
+        radar_layout.addLayout(radar_row1)
+
+        # Углы места мин/макс
+        radar_row2 = QHBoxLayout()
+        radar_row2.addWidget(QLabel('Угол места мин (°):'))
+        self.radar_elev_min_spin = QDoubleSpinBox()
+        self.radar_elev_min_spin.setRange(0.0, 89.0)
+        self.radar_elev_min_spin.setDecimals(1)
+        self.radar_elev_min_spin.setValue(0.5)
+        self.radar_elev_min_spin.setSingleStep(0.5)
+        self.radar_elev_min_spin.setToolTip('Минимальный угол места (мёртвая воронка)')
+        radar_row2.addWidget(self.radar_elev_min_spin)
+
+        radar_row2.addWidget(QLabel('макс (°):'))
+        self.radar_elev_max_spin = QDoubleSpinBox()
+        self.radar_elev_max_spin.setRange(1.0, 90.0)
+        self.radar_elev_max_spin.setDecimals(1)
+        self.radar_elev_max_spin.setValue(30.0)
+        self.radar_elev_max_spin.setSingleStep(1.0)
+        self.radar_elev_max_spin.setToolTip('Максимальный угол места РЛС')
+        radar_row2.addWidget(self.radar_elev_max_spin)
+        radar_layout.addLayout(radar_row2)
+
+        # Дальность
+        radar_row3 = QHBoxLayout()
+        radar_row3.addWidget(QLabel('Дальность (км):'))
+        self.radar_range_spin = QDoubleSpinBox()
+        self.radar_range_spin.setRange(0.5, 200.0)
+        self.radar_range_spin.setDecimals(1)
+        self.radar_range_spin.setValue(15.0)
+        self.radar_range_spin.setSingleStep(1.0)
+        self.radar_range_spin.setToolTip('Максимальная дальность обнаружения РЛС (км)')
+        radar_row3.addWidget(self.radar_range_spin)
+        radar_row3.addStretch()
+        radar_layout.addLayout(radar_row3)
+
+        # Высота целей от/до
+        radar_row4 = QHBoxLayout()
+        radar_row4.addWidget(QLabel('Высота целей от (м):'))
+        self.radar_target_h_min_spin = QDoubleSpinBox()
+        self.radar_target_h_min_spin.setRange(0.0, 50000.0)
+        self.radar_target_h_min_spin.setDecimals(0)
+        self.radar_target_h_min_spin.setValue(30.0)
+        self.radar_target_h_min_spin.setSingleStep(10.0)
+        self.radar_target_h_min_spin.setToolTip('Минимальная высота цели для цветовой шкалы (м)')
+        radar_row4.addWidget(self.radar_target_h_min_spin)
+
+        radar_row4.addWidget(QLabel('до (м):'))
+        self.radar_target_h_max_spin = QDoubleSpinBox()
+        self.radar_target_h_max_spin.setRange(10.0, 50000.0)
+        self.radar_target_h_max_spin.setDecimals(0)
+        self.radar_target_h_max_spin.setValue(5000.0)
+        self.radar_target_h_max_spin.setSingleStep(100.0)
+        self.radar_target_h_max_spin.setToolTip('Максимальная высота цели для цветовой шкалы (м)')
+        radar_row4.addWidget(self.radar_target_h_max_spin)
+        radar_row4.addStretch()
+        radar_layout.addLayout(radar_row4)
+
+        radar_group.setLayout(radar_layout)
+        self._radar_group = radar_group
+        # По умолчанию скрыта (видна только для RADAR_COVERAGE)
+        radar_group.setVisible(False)
+        options_tab_layout.addWidget(radar_group)
 
         # Датум-трансформация
         self.helmert_group = QGroupBox('Датум-трансформация СК-42 → WGS84 (Helmert)')
@@ -1129,6 +1308,8 @@ class MainWindow(QMainWindow):
         # Preview mouse tracking
         self._preview_area.mouse_moved_on_map.connect(self._on_mouse_moved_on_map)
         self._preview_area.map_right_clicked.connect(self._on_map_right_clicked)
+        self._preview_area.shift_wheel_rotated.connect(self._rotate_radar_azimuth)
+        self._preview_area.shift_key_released.connect(self._on_shift_released_recompute)
 
         # Profile management
         # Подключение сигнала выбора профиля произойдет после первичной инициализации
@@ -1192,6 +1373,15 @@ class MainWindow(QMainWindow):
         self.max_flight_height_spin.valueChanged.connect(self._on_settings_changed)
         # UAV height reference radios
         self.height_ref_group.buttonClicked.connect(self._on_settings_changed)
+
+        # Radar coverage settings
+        self.radar_azimuth_spin.valueChanged.connect(self._on_settings_changed)
+        self.radar_sector_spin.valueChanged.connect(self._on_settings_changed)
+        self.radar_elev_min_spin.valueChanged.connect(self._on_settings_changed)
+        self.radar_elev_max_spin.valueChanged.connect(self._on_settings_changed)
+        self.radar_range_spin.valueChanged.connect(self._on_settings_changed)
+        self.radar_target_h_min_spin.valueChanged.connect(self._on_settings_changed)
+        self.radar_target_h_max_spin.valueChanged.connect(self._on_settings_changed)
 
         # Grid settings
         self.grid_widget.width_spin.valueChanged.connect(self._on_settings_changed)
@@ -1277,10 +1467,25 @@ class MainWindow(QMainWindow):
             idx = max(0, self.map_type_combo.currentIndex())
             map_type_value = self.map_type_combo.itemData(idx)
             is_radio_horizon = map_type_value == MapType.RADIO_HORIZON.value
+            is_radar_coverage = map_type_value == MapType.RADAR_COVERAGE.value
         except Exception:
             is_radio_horizon = False
+            is_radar_coverage = False
 
-        if is_radio_horizon:
+        # Управление видимостью групп настроек
+        if hasattr(self, '_radar_group'):
+            self._radar_group.setVisible(is_radar_coverage)
+
+        # Видимость НСУ-специфичных виджетов (потолок БпЛА, отсчёт высоты)
+        nsu_visible = is_radio_horizon and not is_radar_coverage
+        self.max_flight_height_label.setVisible(nsu_visible)
+        self.max_flight_height_spin.setVisible(nsu_visible)
+        self.height_ref_label.setVisible(nsu_visible)
+        self.height_ref_cp_radio.setVisible(nsu_visible)
+        self.height_ref_ground_radio.setVisible(nsu_visible)
+        self.height_ref_sea_radio.setVisible(nsu_visible)
+
+        if is_radio_horizon or is_radar_coverage:
             # Принудительно включаем контрольную точку
             # и блокируем возможность отключения
             self.control_point_checkbox.setChecked(True)
@@ -1327,6 +1532,14 @@ class MainWindow(QMainWindow):
         payload['map_type'] = map_type_value
         payload['overlay_contours'] = overlay_checked
         payload['radio_horizon_overlay_alpha'] = self.radio_horizon_alpha_spin.value()
+        # Radar coverage parameters
+        payload['radar_azimuth_deg'] = self.radar_azimuth_spin.value()
+        payload['radar_sector_width_deg'] = self.radar_sector_spin.value()
+        payload['radar_elevation_min_deg'] = self.radar_elev_min_spin.value()
+        payload['radar_elevation_max_deg'] = self.radar_elev_max_spin.value()
+        payload['radar_max_range_km'] = self.radar_range_spin.value()
+        payload['radar_target_height_min_m'] = self.radar_target_h_min_spin.value()
+        payload['radar_target_height_max_m'] = self.radar_target_h_max_spin.value()
         self._controller.update_settings_bulk(**payload)
 
     def _get_current_coordinates(self) -> dict[str, int | bool | float | str]:
@@ -1620,16 +1833,16 @@ class MainWindow(QMainWindow):
         if not metadata:
             return
 
-        # Check if this is a radio horizon map with cache available
-        is_radio_horizon = (
-            metadata.map_type == MapType.RADIO_HORIZON
+        # Check if this is a coverage map with cache available
+        is_coverage_map = (
+            metadata.map_type in (MapType.RADIO_HORIZON, MapType.RADAR_COVERAGE)
             and self._rh_cache
             and 'dem' in self._rh_cache
         )
 
-        if is_radio_horizon:
-            # Interactive radio horizon rebuilding
-            self._recompute_radio_horizon_at_click(px, py)
+        if is_coverage_map:
+            # Interactive coverage rebuilding (НСУ or РЛС)
+            self._recompute_coverage_at_click(px, py)
         elif metadata.control_point_enabled:
             # Standard behavior: update control point coordinates
             coords = self._calculate_sk42_from_scene_pos(px, py)
@@ -1656,17 +1869,19 @@ class MainWindow(QMainWindow):
             )
 
     def _recompute_radio_horizon_at_click(self, px: float, py: float) -> None:
-        """Recompute radio horizon with new control point at clicked position."""
-        # Stop any running recompute worker
-        if self._rh_worker is not None and self._rh_worker.isRunning():
-            logger.info('Stopping previous radio horizon recompute worker')
-            self._rh_worker.quit()
-            self._rh_worker.wait(1000)
-            self._rh_worker = None
+        """Legacy wrapper — delegates to _recompute_coverage_at_click."""
+        self._recompute_coverage_at_click(px, py)
 
-        # Convert pixel coordinates to DEM coordinates
-        # px, py are in scene (final image) coordinates
-        # We need to convert to DEM row/col considering downsampling
+    def _recompute_coverage_at_click(self, px: float, py: float) -> None:
+        """Recompute coverage (НСУ or РЛС) with new position at clicked point."""
+        # If worker is still running, defer this recompute until it finishes
+        if self._rh_worker is not None and self._rh_worker.isRunning():
+            logger.info('Worker busy — deferring recompute to pending queue')
+            self._pending_recompute_pos = (px, py)
+            return
+
+        self._pending_recompute_pos = None
+
         dem = self._rh_cache.get('dem')
         final_size = self._rh_cache.get('final_size')
         if dem is None:
@@ -1675,41 +1890,49 @@ class MainWindow(QMainWindow):
 
         dem_h, dem_w = dem.shape
 
-        # Calculate downsampling factor from DEM size and final size
         if final_size:
             final_w, final_h = final_size
             scale_x = dem_w / final_w
             scale_y = dem_h / final_h
-            # Convert final image coordinates to DEM coordinates
             new_antenna_col = int(px * scale_x)
             new_antenna_row = int(py * scale_y)
         else:
-            # No downsampling, coordinates are the same
             new_antenna_col = int(px)
             new_antenna_row = int(py)
 
-        # Clamp to DEM bounds
         new_antenna_row = max(0, min(new_antenna_row, dem_h - 1))
         new_antenna_col = max(0, min(new_antenna_col, dem_w - 1))
 
         logger.info(
-            'RH recompute: scene (%.1f, %.1f) -> DEM (%d, %d)',
-            px,
-            py,
-            new_antenna_col,
-            new_antenna_row,
+            'Coverage recompute: scene (%.1f, %.1f) -> DEM (%d, %d)',
+            px, py, new_antenna_col, new_antenna_row,
         )
 
-        # Show wait cursor and status message
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        self._status_proxy.show_message('Пересчет радиогоризонта...', 0)
 
-        # Store click position for later use (marker and coordinates update)
+        # Determine if this is a radar coverage map
+        is_radar = self._rh_cache.get('is_radar_coverage', False)
+        sector_params = None
+        if is_radar:
+            sector_params = {
+                'radar_azimuth_deg': self._rh_cache.get('radar_azimuth_deg', 0.0),
+                'radar_sector_width_deg': self._rh_cache.get('radar_sector_width_deg', 90.0),
+                'radar_elevation_min_deg': self._rh_cache.get('radar_elevation_min_deg', 0.5),
+                'radar_elevation_max_deg': self._rh_cache.get('radar_elevation_max_deg', 30.0),
+                'radar_max_range_km': self._rh_cache.get('radar_max_range_km', 15.0),
+                'radar_target_height_min_m': self._rh_cache.get('radar_target_height_min_m', 0.0),
+                'radar_target_height_max_m': self._rh_cache.get('radar_target_height_max_m', 5000.0),
+            }
+            self._status_proxy.show_message('Пересчет зоны обнаружения РЛС...', 0)
+        else:
+            self._status_proxy.show_message('Пересчет радиогоризонта...', 0)
+
         self._rh_click_pos = (px, py)
 
-        # Create and start worker
-        self._rh_worker = RadioHorizonRecomputeWorker(
-            self._rh_cache, new_antenna_row, new_antenna_col
+        # Use generalized CoverageRecomputeWorker
+        self._rh_worker = CoverageRecomputeWorker(
+            self._rh_cache, new_antenna_row, new_antenna_col,
+            sector_params=sector_params,
         )
         self._rh_worker.finished.connect(self._on_radio_horizon_recompute_finished)
         self._rh_worker.error.connect(self._on_radio_horizon_recompute_error)
@@ -1727,6 +1950,8 @@ class MainWindow(QMainWindow):
             # Update cache with new antenna position
             self._rh_cache['antenna_row'] = new_antenna_row
             self._rh_cache['antenna_col'] = new_antenna_col
+            # Recompute result is NOT rotated — reset rotation for overlays
+            self._rh_cache['rotation_deg'] = 0.0
 
             # Apply postprocessing (grid, legend, contours)
             metadata = self._model.state.last_map_metadata
@@ -1785,6 +2010,59 @@ class MainWindow(QMainWindow):
             step_elapsed = time.monotonic() - step_start
             logger.info('  └─ Draw control point marker: %.3f sec', step_elapsed)
 
+            # Draw radar sector overlay + marker if this is RADAR_COVERAGE
+            if self._rh_cache.get('is_radar_coverage', False):
+                step_start = time.monotonic()
+                try:
+                    result_image = result_image.convert('RGBA')
+                    radar_az = self._rh_cache.get('radar_azimuth_deg', 0.0)
+                    radar_sw = self._rh_cache.get('radar_sector_width_deg', 90.0)
+                    radar_range_km = self._rh_cache.get('radar_max_range_km', 15.0)
+                    radar_elev_max = self._rh_cache.get('radar_elevation_max_deg', 30.0)
+
+                    # pixel_size_m in cache is DEM pixel size; overlay is drawn
+                    # on the final (resized) image, so compute effective pixel size.
+                    pixel_size_final = self._get_final_pixel_size_m()
+                    max_range_px = (radar_range_km * 1000.0) / pixel_size_final
+
+                    # Radar position = control point position (click pos)
+                    radar_cx, radar_cy = self._rh_click_pos if self._rh_click_pos else (
+                        result_image.width / 2, result_image.height / 2
+                    )
+
+                    # Font for ceiling arc labels
+                    ppm = 1.0 / pixel_size_final if pixel_size_final > 0 else 1.0
+                    settings = self._rh_cache.get('settings')
+                    font_size_m = settings.grid_font_size_m if settings else 100.0
+                    font_size_px = max(10, round(font_size_m * ppm * 0.4))
+                    try:
+                        arc_font = load_grid_font(font_size_px)
+                    except Exception:
+                        arc_font = None
+
+                    draw_sector_overlay(
+                        img=result_image,
+                        cx=radar_cx,
+                        cy=radar_cy,
+                        azimuth_deg=radar_az,
+                        sector_width_deg=radar_sw,
+                        max_range_px=max_range_px,
+                        pixel_size_m=pixel_size_final,
+                        elevation_max_deg=radar_elev_max,
+                        font=arc_font,
+                    )
+
+                    draw_radar_marker(
+                        result_image, radar_cx, radar_cy, pixel_size_final,
+                        azimuth_deg=radar_az,
+                        rotation_deg=0.0,
+                    )
+
+                    step_elapsed = time.monotonic() - step_start
+                    logger.info('  └─ Draw radar sector overlay: %.3f sec', step_elapsed)
+                except Exception as e:
+                    logger.warning('Failed to draw radar sector overlay: %s', e)
+
             # Update display
             step_start = time.monotonic()
             self._base_image = (
@@ -1800,12 +2078,20 @@ class MainWindow(QMainWindow):
             step_elapsed = time.monotonic() - step_start
             logger.info('  └─ Update display: %.3f sec', step_elapsed)
 
+            # Redraw persistent azimuth indicator after set_image clears the scene
+            if self._rh_cache.get('is_radar_coverage', False):
+                az = self._rh_cache.get('radar_azimuth_deg', 0.0)
+                self._update_azimuth_indicator(az)
+
             # Restore cursor and show success message
             QApplication.restoreOverrideCursor()
 
             gui_total_elapsed = time.monotonic() - gui_start_time
             logger.info('GUI postprocessing total: %.3f sec', gui_total_elapsed)
-            self._status_proxy.show_message('Радиогоризонт пересчитан', 2000)
+            if self._rh_cache.get('is_radar_coverage', False):
+                self._status_proxy.show_message('Зона обнаружения РЛС пересчитана', 2000)
+            else:
+                self._status_proxy.show_message('Радиогоризонт пересчитан', 2000)
 
         except Exception as e:
             logger.exception('Failed to update preview after radio horizon recompute')
@@ -1816,6 +2102,17 @@ class MainWindow(QMainWindow):
             if self._rh_worker is not None:
                 self._rh_worker.deleteLater()
                 self._rh_worker = None
+
+            # If a recompute was requested while worker was busy, run it now
+            self._flush_pending_recompute()
+
+    def _flush_pending_recompute(self) -> None:
+        """If a recompute was deferred while worker was busy, start it now."""
+        if self._pending_recompute_pos is not None:
+            px, py = self._pending_recompute_pos
+            self._pending_recompute_pos = None
+            logger.info('Flushing pending recompute at (%.1f, %.1f)', px, py)
+            self._recompute_coverage_at_click(px, py)
 
     def _draw_rh_grid(
         self,
@@ -1867,15 +2164,21 @@ class MainWindow(QMainWindow):
             if not settings:
                 return
 
-            max_height_m = settings.max_flight_height_m
+            is_radar = self._rh_cache.get('is_radar_coverage', False)
+            if is_radar:
+                min_value = settings.radar_target_height_min_m
+                max_value = settings.radar_target_height_max_m
+            else:
+                min_value = 0.0
+                max_value = settings.max_flight_height_m
             ppm = 1.0 / mpp
             font_size_px = max(12, round(settings.grid_font_size_m * ppm))
             label_bg_padding_px = max(2, round(settings.grid_label_bg_padding_m * ppm))
 
             draw_elevation_legend(
                 result,
-                min_value=0.0,
-                max_value=max_height_m,
+                min_value=min_value,
+                max_value=max_value,
                 color_ramp=RADIO_HORIZON_COLOR_RAMP,
                 unit_label='м',
                 step=ELEVATION_LEGEND_STEP_M,
@@ -1980,6 +2283,157 @@ class MainWindow(QMainWindow):
         if self._rh_worker is not None:
             self._rh_worker.deleteLater()
             self._rh_worker = None
+
+        # If a recompute was deferred, run it now
+        self._flush_pending_recompute()
+
+    @Slot(float)
+    def _rotate_radar_azimuth(self, delta_deg: float) -> None:
+        """Rotate radar azimuth visually (instant) and mark for recompute.
+
+        Called from Shift+wheel and [ ] keys.
+        - Shift+wheel: recompute fires on Shift release.
+        - [ ] keys: recompute fires via debounce timer (400 ms).
+        """
+        metadata = self._model.state.last_map_metadata
+        if not metadata or metadata.map_type != MapType.RADAR_COVERAGE:
+            return
+        if not self._rh_cache or 'dem' not in self._rh_cache:
+            return
+
+        # Update azimuth in cache and UI immediately
+        current_az = self._rh_cache.get('radar_azimuth_deg', 0.0)
+        new_az = (current_az + delta_deg) % 360.0
+        self._rh_cache['radar_azimuth_deg'] = new_az
+
+        with QSignalBlocker(self.radar_azimuth_spin):
+            self.radar_azimuth_spin.setValue(new_az)
+
+        self._status_proxy.show_message(f'Азимут РЛС: {new_az:.0f}°', 1000)
+
+        # Draw azimuth indicator line instantly (lightweight scene overlay)
+        self._update_azimuth_indicator(new_az)
+
+        self._azimuth_needs_recompute = True
+
+    @Slot()
+    def _on_shift_released_recompute(self) -> None:
+        """Shift key released after Shift+wheel rotation — trigger recompute."""
+        if not self._azimuth_needs_recompute:
+            return
+        self._trigger_azimuth_recompute()
+
+    def _trigger_azimuth_recompute(self) -> None:
+        """Common method: trigger coverage recompute with current azimuth."""
+        if not self._azimuth_needs_recompute:
+            return
+        self._azimuth_needs_recompute = False
+
+        if not self._rh_cache or 'dem' not in self._rh_cache:
+            return
+
+        ant_row = self._rh_cache.get('antenna_row', 0)
+        ant_col = self._rh_cache.get('antenna_col', 0)
+
+        # Convert DEM coords back to final-image coordinates
+        dem = self._rh_cache.get('dem')
+        final_size = self._rh_cache.get('final_size')
+        if dem is not None and final_size:
+            dem_h, dem_w = dem.shape
+            final_w, final_h = final_size
+            px = ant_col * final_w / dem_w
+            py = ant_row * final_h / dem_h
+        else:
+            px = float(ant_col)
+            py = float(ant_row)
+
+        self._rh_click_pos = (px, py)
+        self._recompute_coverage_at_click(px, py)
+
+    def _compute_cp_image_pos(
+        self, metadata: MapMetadata | None = None,
+    ) -> tuple[float, float] | None:
+        """Compute control point position on the final image using precise coords.
+
+        Uses the same WGS84→pixel transform as _draw_radar_sector_overlay,
+        so the azimuth line origin matches the control point marker exactly.
+        Falls back to DEM→final linear scaling if metadata is unavailable.
+        """
+        if metadata is None:
+            metadata = self._model.state.last_map_metadata
+        settings = self._model.settings
+
+        if metadata and settings and settings.control_point_enabled:
+            try:
+                transformer = CoordinateTransformer(
+                    settings.control_point_x_sk42_gk,
+                    settings.control_point_y_sk42_gk,
+                    helmert_params=metadata.helmert_params,
+                )
+                lat_wgs, lng_wgs = transformer.get_wgs84_center()
+                px, py = compute_control_point_image_coords(
+                    lat_wgs, lng_wgs,
+                    metadata.center_lat_wgs, metadata.center_lng_wgs,
+                    metadata.zoom, metadata.scale,
+                    metadata.width_px, metadata.height_px,
+                    metadata.rotation_deg, latlng_to_pixel_xy,
+                )
+                return (px, py)
+            except Exception:
+                logger.debug('Failed to compute CP image pos via coords, falling back')
+
+        # Fallback: linear DEM→final scaling
+        if self._rh_cache:
+            ant_row = self._rh_cache.get('antenna_row', 0)
+            ant_col = self._rh_cache.get('antenna_col', 0)
+            dem = self._rh_cache.get('dem')
+            final_size = self._rh_cache.get('final_size')
+            if dem is not None and final_size:
+                dem_h, dem_w = dem.shape
+                final_w, final_h = final_size
+                return (ant_col * final_w / dem_w, ant_row * final_h / dem_h)
+            return (float(ant_col), float(ant_row))
+        return None
+
+    def _get_final_pixel_size_m(self) -> float:
+        """Get effective pixel size for the final (displayed) image.
+
+        Cache stores DEM pixel_size_m which is coarser than the final image
+        (DEM is downsampled). Scale by DEM→final ratio for overlay drawing.
+        """
+        dem_px = self._rh_cache.get('pixel_size_m', 1.0)
+        dem = self._rh_cache.get('dem')
+        final_size = self._rh_cache.get('final_size')
+        if dem is not None and final_size:
+            dem_w = dem.shape[1]
+            final_w = final_size[0]
+            if final_w > 0 and dem_w > 0:
+                return dem_px * dem_w / final_w
+        return dem_px
+
+    def _update_azimuth_indicator(self, azimuth_deg: float) -> None:
+        """Draw/update the dashed azimuth line on the preview scene.
+
+        This is a lightweight scene overlay that provides instant visual
+        feedback while rotating, before the heavy recompute finishes.
+        """
+        if not self._rh_cache or not self._rh_click_pos:
+            return
+
+        cx, cy = self._rh_click_pos
+        pixel_size = self._get_final_pixel_size_m()
+        radar_range_km = self._rh_cache.get('radar_max_range_km', 15.0)
+        sector_width = self._rh_cache.get('radar_sector_width_deg', 90.0)
+        rot_deg = self._rh_cache.get('rotation_deg', 0.0)
+
+        # Length in final-image pixels
+        length_px = (radar_range_km * 1000.0) / pixel_size if pixel_size > 0 else 200.0
+
+        self._preview_area.set_azimuth_line(
+            cx, cy, azimuth_deg, length_px,
+            sector_width_deg=sector_width,
+            rotation_deg=rot_deg,
+        )
 
     @Slot(bool, str)
     def _on_download_finished(
@@ -2264,8 +2718,9 @@ class MainWindow(QMainWindow):
         with QSignalBlocker(self.contours_checkbox):
             self.contours_checkbox.setChecked(overlay_flag)
 
-        # Проверяем, является ли текущий тип карты "Радиогоризонт"
+        # Проверяем, является ли текущий тип карты "Радиогоризонт" или "РЛС"
         is_radio_horizon = current_mt == MapType.RADIO_HORIZON
+        is_radar_coverage = current_mt == MapType.RADAR_COVERAGE
 
         # Update Helmert settings
         self.helmert_widget.set_values(
@@ -2286,15 +2741,17 @@ class MainWindow(QMainWindow):
         # Update control point settings
         control_point_enabled = getattr(settings, 'control_point_enabled', False)
 
-        # Для радиогоризонта принудительно включаем контрольную точку
-        if is_radio_horizon:
+        # Для радиогоризонта/РЛС принудительно включаем контрольную точку
+        if is_radio_horizon or is_radar_coverage:
             control_point_enabled = True
 
         with QSignalBlocker(self.control_point_checkbox):
             self.control_point_checkbox.setChecked(control_point_enabled)
 
         # Блокируем/разблокируем чекбокс в зависимости от типа карты
-        self.control_point_checkbox.setEnabled(not is_radio_horizon)
+        self.control_point_checkbox.setEnabled(
+            not is_radio_horizon and not is_radar_coverage
+        )
 
         # Programmatically set full control point coordinates without splitting
         # to high/low
@@ -2327,6 +2784,49 @@ class MainWindow(QMainWindow):
             settings, 'uav_height_reference', UavHeightReference.CONTROL_POINT
         )
         self._set_uav_height_reference(uav_height_ref)
+
+        # Radar coverage parameters
+        with QSignalBlocker(self.radar_azimuth_spin):
+            self.radar_azimuth_spin.setValue(
+                float(getattr(settings, 'radar_azimuth_deg', 0.0))
+            )
+        with QSignalBlocker(self.radar_sector_spin):
+            self.radar_sector_spin.setValue(
+                float(getattr(settings, 'radar_sector_width_deg', 90.0))
+            )
+        with QSignalBlocker(self.radar_elev_min_spin):
+            self.radar_elev_min_spin.setValue(
+                float(getattr(settings, 'radar_elevation_min_deg', 0.5))
+            )
+        with QSignalBlocker(self.radar_elev_max_spin):
+            self.radar_elev_max_spin.setValue(
+                float(getattr(settings, 'radar_elevation_max_deg', 30.0))
+            )
+        with QSignalBlocker(self.radar_range_spin):
+            self.radar_range_spin.setValue(
+                float(getattr(settings, 'radar_max_range_km', 15.0))
+            )
+        with QSignalBlocker(self.radar_target_h_min_spin):
+            self.radar_target_h_min_spin.setValue(
+                float(getattr(settings, 'radar_target_height_min_m', 30.0))
+            )
+        with QSignalBlocker(self.radar_target_h_max_spin):
+            self.radar_target_h_max_spin.setValue(
+                float(getattr(settings, 'radar_target_height_max_m', 5000.0))
+            )
+
+        # Управление видимостью группы РЛС
+        if hasattr(self, '_radar_group'):
+            self._radar_group.setVisible(is_radar_coverage)
+
+        # Видимость НСУ-специфичных виджетов
+        nsu_visible = is_radio_horizon and not is_radar_coverage
+        self.max_flight_height_label.setVisible(nsu_visible)
+        self.max_flight_height_spin.setVisible(nsu_visible)
+        self.height_ref_label.setVisible(nsu_visible)
+        self.height_ref_cp_radio.setVisible(nsu_visible)
+        self.height_ref_ground_radio.setVisible(nsu_visible)
+        self.height_ref_sea_radio.setVisible(nsu_visible)
 
         # Log the values to ensure no truncation occurs during UI update
         try:
@@ -2423,6 +2923,9 @@ class MainWindow(QMainWindow):
             if rh_cache is not None:
                 self._rh_cache = rh_cache
                 logger.info('Radio horizon cache saved for interactive rebuilding')
+                # Compute initial click position using precise coordinate transform
+                # (same method as _update_cp_marker_from_settings / _draw_radar_sector_overlay)
+                self._rh_click_pos = self._compute_cp_image_pos(metadata)
             else:
                 self._rh_cache = {}  # Clear cache for non-RH maps
 
@@ -2436,6 +2939,11 @@ class MainWindow(QMainWindow):
             self._current_image = self._base_image
             mpp = metadata.meters_per_pixel if metadata else 0.0
             self._preview_area.set_image(self._current_image, meters_per_px=mpp)
+
+            # Draw persistent azimuth indicator for RADAR_COVERAGE maps
+            if self._rh_cache.get('is_radar_coverage', False):
+                az = self._rh_cache.get('radar_azimuth_deg', 0.0)
+                self._update_azimuth_indicator(az)
 
             # Update control point markers from settings (e.g. if loaded from profile)
             self._update_cp_marker_from_settings(self._model.settings)
