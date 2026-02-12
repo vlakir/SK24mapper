@@ -915,7 +915,6 @@ class MainWindow(QMainWindow):
         heights_row.addLayout(max_flight_row)
 
         # Режим отсчёта высоты БпЛА (для карты радиогоризонта)
-        height_ref_row = QHBoxLayout()
         self.height_ref_label = QLabel('Отсчёт высоты БпЛА:')
         self.height_ref_group = QButtonGroup(self)
 
@@ -935,12 +934,6 @@ class MainWindow(QMainWindow):
         self.height_ref_group.addButton(self.height_ref_cp_radio, 0)
         self.height_ref_group.addButton(self.height_ref_ground_radio, 1)
         self.height_ref_group.addButton(self.height_ref_sea_radio, 2)
-
-        height_ref_row.addWidget(self.height_ref_label)
-        height_ref_row.addWidget(self.height_ref_cp_radio)
-        height_ref_row.addWidget(self.height_ref_ground_radio)
-        height_ref_row.addWidget(self.height_ref_sea_radio)
-        height_ref_row.addStretch()
 
         control_point_layout.addLayout(name_row)
         control_point_layout.addLayout(coords_row)
@@ -1034,19 +1027,18 @@ class MainWindow(QMainWindow):
         options_tab = QWidget()
         options_tab_layout = QVBoxLayout()
 
-        # Настройки радиогоризонта
+        # Настройки радиогоризонта (единая панель для НСУ и РЛС)
         radio_horizon_group = QGroupBox('Радиогоризонт')
         radio_horizon_layout = QVBoxLayout()
+
+        # === Общие установки (видны в обоих режимах) ===
 
         # Высота антенны и практический потолок
         radio_horizon_layout.addLayout(heights_row)
 
-        # Режим отсчёта высоты БпЛА
-        radio_horizon_layout.addLayout(height_ref_row)
-
         # Прозрачность слоя
         alpha_row = QHBoxLayout()
-        alpha_row.addWidget(QLabel('Прозрачность слоя радиогоризонта:'))
+        alpha_row.addWidget(QLabel('Прозрачность топоосновы:'))
         self.radio_horizon_alpha_spin = QDoubleSpinBox()
         self.radio_horizon_alpha_spin.setRange(0.0, 1.0)
         self.radio_horizon_alpha_spin.setSingleStep(0.05)
@@ -1060,13 +1052,26 @@ class MainWindow(QMainWindow):
         alpha_row.addStretch()
         radio_horizon_layout.addLayout(alpha_row)
 
-        radio_horizon_group.setLayout(radio_horizon_layout)
-        self._radio_horizon_group = radio_horizon_group
-        options_tab_layout.addWidget(radio_horizon_group)
+        # === НСУ-специфичные установки (скрываются при РЛС) ===
 
-        # Настройки РЛС (Зона обнаружения)
-        radar_group = QGroupBox('Параметры РЛС')
+        # Режим отсчёта высоты БпЛА — обёрнут в QWidget для управления видимостью
+        self._nsu_height_ref_widget = QWidget()
+        nsu_ref_layout = QHBoxLayout()
+        nsu_ref_layout.setContentsMargins(0, 0, 0, 0)
+        nsu_ref_layout.addWidget(self.height_ref_label)
+        nsu_ref_layout.addWidget(self.height_ref_cp_radio)
+        nsu_ref_layout.addWidget(self.height_ref_ground_radio)
+        nsu_ref_layout.addWidget(self.height_ref_sea_radio)
+        nsu_ref_layout.addStretch()
+        self._nsu_height_ref_widget.setLayout(nsu_ref_layout)
+        radio_horizon_layout.addWidget(self._nsu_height_ref_widget)
+
+        # === РЛС-специфичные установки (скрываются при НСУ) ===
+
+        # Все РЛС-строки обёрнуты в один QWidget для единого управления видимостью
+        self._radar_settings_widget = QWidget()
         radar_layout = QVBoxLayout()
+        radar_layout.setContentsMargins(0, 0, 0, 0)
 
         # Азимут и ширина сектора
         radar_row1 = QHBoxLayout()
@@ -1146,11 +1151,14 @@ class MainWindow(QMainWindow):
         radar_row4.addStretch()
         radar_layout.addLayout(radar_row4)
 
-        radar_group.setLayout(radar_layout)
-        self._radar_group = radar_group
-        # По умолчанию скрыта (видна только для RADAR_COVERAGE)
-        radar_group.setVisible(False)
-        options_tab_layout.addWidget(radar_group)
+        self._radar_settings_widget.setLayout(radar_layout)
+        self._radar_settings_widget.setVisible(False)
+        radio_horizon_layout.addWidget(self._radar_settings_widget)
+
+        radio_horizon_group.setLayout(radio_horizon_layout)
+        radio_horizon_group.setVisible(False)  # Видна только при НСУ/РЛС
+        self._radio_horizon_group = radio_horizon_group
+        options_tab_layout.addWidget(radio_horizon_group)
 
         # Датум-трансформация
         self.helmert_group = QGroupBox('Датум-трансформация СК-42 → WGS84 (Helmert)')
@@ -1472,18 +1480,15 @@ class MainWindow(QMainWindow):
             is_radio_horizon = False
             is_radar_coverage = False
 
-        # Управление видимостью групп настроек
-        if hasattr(self, '_radar_group'):
-            self._radar_group.setVisible(is_radar_coverage)
+        # Панель «Радиогоризонт» видна только в режимах НСУ/РЛС
+        self._radio_horizon_group.setVisible(is_radio_horizon or is_radar_coverage)
 
-        # Видимость НСУ-специфичных виджетов (потолок БпЛА, отсчёт высоты)
+        # Управление видимостью НСУ/РЛС-специфичных виджетов внутри единой панели
         nsu_visible = is_radio_horizon and not is_radar_coverage
         self.max_flight_height_label.setVisible(nsu_visible)
         self.max_flight_height_spin.setVisible(nsu_visible)
-        self.height_ref_label.setVisible(nsu_visible)
-        self.height_ref_cp_radio.setVisible(nsu_visible)
-        self.height_ref_ground_radio.setVisible(nsu_visible)
-        self.height_ref_sea_radio.setVisible(nsu_visible)
+        self._nsu_height_ref_widget.setVisible(nsu_visible)
+        self._radar_settings_widget.setVisible(is_radar_coverage)
 
         if is_radio_horizon or is_radar_coverage:
             # Принудительно включаем контрольную точку
@@ -2815,18 +2820,15 @@ class MainWindow(QMainWindow):
                 float(getattr(settings, 'radar_target_height_max_m', 5000.0))
             )
 
-        # Управление видимостью группы РЛС
-        if hasattr(self, '_radar_group'):
-            self._radar_group.setVisible(is_radar_coverage)
+        # Панель «Радиогоризонт» видна только в режимах НСУ/РЛС
+        self._radio_horizon_group.setVisible(is_radio_horizon or is_radar_coverage)
 
-        # Видимость НСУ-специфичных виджетов
+        # Управление видимостью НСУ/РЛС-специфичных виджетов внутри единой панели
         nsu_visible = is_radio_horizon and not is_radar_coverage
         self.max_flight_height_label.setVisible(nsu_visible)
         self.max_flight_height_spin.setVisible(nsu_visible)
-        self.height_ref_label.setVisible(nsu_visible)
-        self.height_ref_cp_radio.setVisible(nsu_visible)
-        self.height_ref_ground_radio.setVisible(nsu_visible)
-        self.height_ref_sea_radio.setVisible(nsu_visible)
+        self._nsu_height_ref_widget.setVisible(nsu_visible)
+        self._radar_settings_widget.setVisible(is_radar_coverage)
 
         # Log the values to ensure no truncation occurs during UI update
         try:
