@@ -19,6 +19,7 @@ import numpy as np
 from numba import njit, prange
 from PIL import Image
 
+from imaging.transforms import center_crop, rotate_keep_size
 from shared.constants import (
     EARTH_RADIUS_M,
     RADIO_HORIZON_COLOR_RAMP,
@@ -38,6 +39,7 @@ from shared.constants import (
     RADIO_HORIZON_MIN_HEIGHT_M,
     RADIO_HORIZON_REFRACTION_K,
     RADIO_HORIZON_UNREACHABLE_COLOR,
+    ROTATION_EPSILON,
     UavHeightReference,
 )
 
@@ -288,14 +290,15 @@ def _compute_coverage_grid_parallel(
     grid_step: int,
     h: int,
     w: int,
-    sector_enabled: bool = False,
+    sector_enabled: int = 0,
     radar_azimuth_rad: float = 0.0,
     radar_half_sector_rad: float = math.pi,
     elevation_min_rad: float = 0.0,
     elevation_max_rad: float = 1.5707963,
     max_range_px: float = 1e9,
 ) -> np.ndarray:
-    """Обобщённый Numba-kernel для расчёта покрытия (360° или сектор).
+    """
+    Обобщённый Numba-kernel для расчёта покрытия (360° или сектор).
 
     При sector_enabled=False поведение идентично _compute_grid_values_parallel.
     При sector_enabled=True добавляются проверки: азимут, дальность, углы места.
@@ -341,8 +344,16 @@ def _compute_coverage_grid_parallel(
 
                 # LOS-трассировка
                 los_val = _trace_line_of_sight_numba(
-                    dem, antenna_row, antenna_col, antenna_abs_height,
-                    row, col, pixel_size_m, effective_earth_radius, h, w,
+                    dem,
+                    antenna_row,
+                    antenna_col,
+                    antenna_abs_height,
+                    row,
+                    col,
+                    pixel_size_m,
+                    effective_earth_radius,
+                    h,
+                    w,
                 )
 
                 # Проверка угла места
@@ -364,8 +375,16 @@ def _compute_coverage_grid_parallel(
             else:
                 # Стандартный режим 360° (НСУ)
                 grid_values[gr, gc] = _trace_line_of_sight_numba(
-                    dem, antenna_row, antenna_col, antenna_abs_height,
-                    row, col, pixel_size_m, effective_earth_radius, h, w,
+                    dem,
+                    antenna_row,
+                    antenna_col,
+                    antenna_abs_height,
+                    row,
+                    col,
+                    pixel_size_m,
+                    effective_earth_radius,
+                    h,
+                    w,
                 )
 
     return grid_values
@@ -501,11 +520,6 @@ def colorize_radio_horizon(
 
     h, w = horizon_matrix.shape
 
-    if h == 0 or w == 0:
-        return Image.new(
-            'RGB', RADIO_HORIZON_EMPTY_IMAGE_SIZE_PX, RADIO_HORIZON_EMPTY_IMAGE_COLOR
-        )
-
     # Строим LUT
     lut_size = RADIO_HORIZON_LUT_SIZE
     lut = _build_color_lut(color_ramp, unreachable_color, lut_size)
@@ -532,256 +546,6 @@ def colorize_radio_horizon(
     rgb = lut[indices]
 
     return Image.fromarray(rgb)
-
-
-def compute_and_colorize_radio_horizon(
-    dem: np.ndarray,
-    antenna_row: int,
-    antenna_col: int,
-    antenna_height_m: float,
-    pixel_size_m: float,
-    earth_radius_m: float = EARTH_RADIUS_M,
-    refraction_k: float = RADIO_HORIZON_REFRACTION_K,
-    grid_step: int = RADIO_HORIZON_GRID_STEP,
-    max_height_m: float = RADIO_HORIZON_MAX_HEIGHT_M,
-    color_ramp: list[tuple[float, tuple[int, int, int]]] | None = None,
-    unreachable_color: tuple[int, int, int] = RADIO_HORIZON_UNREACHABLE_COLOR,
-    uav_height_reference: UavHeightReference = UavHeightReference.GROUND,
-    cp_elevation: float | None = None,
-) -> Image.Image:
-    """
-    Оптимизированная функция: вычисляет и раскрашивает радиогоризонт.
-
-    Numpy версия с оптимизированным использованием памяти.
-
-    Args:
-        dem: Цифровая модель рельефа (массив высот).
-        antenna_row: Индекс строки установки антенны в DEM.
-        antenna_col: Индекс столбца установки антенны в DEM.
-        antenna_height_m: Высота антенны над поверхностью земли (метры).
-        pixel_size_m: Размер пикселя DEM (метры на пиксель).
-        earth_radius_m: Радиус Земли (метры).
-        refraction_k: Коэффициент атмосферной рефракции.
-        grid_step: Шаг расчетной сетки.
-        max_height_m: Максимальная высота шкалы (метры).
-        color_ramp: Цветовая палитра (список кортежей).
-        unreachable_color: Цвет для недостижимых зон (RGB).
-        uav_height_reference: Режим отсчёта высоты БпЛА:
-            - GROUND: от земной поверхности под БпЛА (по умолчанию, текущее поведение)
-            - CONTROL_POINT: от уровня контрольной точки
-            - SEA_LEVEL: от уровня моря (абсолютная высота)
-        cp_elevation: Высота контрольной точки (требуется для CONTROL_POINT режима)
-
-    """
-    if color_ramp is None:
-        color_ramp = RADIO_HORIZON_COLOR_RAMP
-
-    if dem.size == 0:
-        return Image.new(
-            'RGB', RADIO_HORIZON_EMPTY_IMAGE_SIZE_PX, RADIO_HORIZON_EMPTY_IMAGE_COLOR
-        )
-
-    h, w = dem.shape
-
-    if h == 0 or w == 0:
-        return Image.new(
-            'RGB', RADIO_HORIZON_EMPTY_IMAGE_SIZE_PX, RADIO_HORIZON_EMPTY_IMAGE_COLOR
-        )
-
-    # Адаптивный шаг сетки для экономии памяти и ускорения
-    total_pixels = h * w
-    if total_pixels > RADIO_HORIZON_GRID_STEP_THRESHOLD_PIXELS_LARGE:  # > 8000x8000
-        grid_step = max(grid_step, RADIO_HORIZON_GRID_STEP_LARGE)
-    elif total_pixels > RADIO_HORIZON_GRID_STEP_THRESHOLD_PIXELS_MEDIUM:  # > 4000x4000
-        grid_step = max(grid_step, RADIO_HORIZON_GRID_STEP_MEDIUM)
-    elif total_pixels > RADIO_HORIZON_GRID_STEP_THRESHOLD_PIXELS_SMALL:  # > 2000x2000
-        grid_step = max(grid_step, RADIO_HORIZON_GRID_STEP_SMALL)
-
-    # Ограничиваем позицию антенны
-    antenna_row = max(0, min(antenna_row, h - 1))
-    antenna_col = max(0, min(antenna_col, w - 1))
-
-    # Абсолютная высота антенны
-    antenna_abs_height = float(dem[antenna_row, antenna_col]) + antenna_height_m
-    effective_earth_radius = earth_radius_m * refraction_k
-
-    # Вычисляем значения на грубой сетке параллельно (Numba JIT)
-    grid_values = _compute_grid_values_parallel(
-        dem,
-        antenna_row,
-        antenna_col,
-        antenna_abs_height,
-        pixel_size_m,
-        effective_earth_radius,
-        grid_step,
-        h,
-        w,
-    )
-
-    grid_h, grid_w = grid_values.shape
-
-    # Строим LUT
-    lut_size = RADIO_HORIZON_LUT_SIZE
-    lut = _build_color_lut(color_ramp, unreachable_color, lut_size)
-    unreachable_idx = lut_size
-    inv_max = (lut_size - 1) / max_height_m if max_height_m > 0 else 0.0
-    1.0 / grid_step
-
-    # Создаём результирующий массив RGB векторизованно
-    # 1. Аппроксимация сетки до исходного размера через билинейную интерполяцию (OpenCV)
-    # OpenCV resize работает быстрее ручной интерполяции
-    full_values = cv2.resize(
-        grid_values, (w, h), interpolation=cv2.INTER_LINEAR
-    ).astype(np.float32)
-
-    # 1.5. Пересчёт высот в зависимости от режима отсчёта
-    # full_values содержит минимальную высоту БпЛА над землёй под ним
-    if uav_height_reference == UavHeightReference.CONTROL_POINT:
-        # От уровня КТ: высота = результат + высота_земли - высота_КТ
-        if cp_elevation is None:
-            cp_elevation = float(dem[antenna_row, antenna_col])
-        full_values = full_values + dem.astype(np.float32) - cp_elevation
-    elif uav_height_reference == UavHeightReference.SEA_LEVEL:
-        # От уровня моря: высота = результат + высота_земли
-        full_values = full_values + dem.astype(np.float32)
-    # GROUND: без изменений (текущее поведение)
-
-    # 2. Масштабируем значения в индексы LUT
-    # Предотвращаем деление на ноль и NaN
-    inv_max = (lut_size - 1) / max_height_m if max_height_m > 0 else 0.0
-    indices = (full_values * inv_max).astype(np.int32)
-    np.clip(indices, 0, lut_size - 1, out=indices)
-
-    # 3. Помечаем точки за пределами максимальной высоты или NaN как недостижимые
-    unreachable_mask = (full_values > max_height_m) | ~np.isfinite(full_values)
-    indices[unreachable_mask] = unreachable_idx
-
-    # 4. Применяем LUT
-    rgb = lut[indices]
-
-    return Image.fromarray(rgb)
-
-
-def recompute_radio_horizon_fast(
-    dem: np.ndarray,
-    new_antenna_row: int,
-    new_antenna_col: int,
-    antenna_height_m: float,
-    pixel_size_m: float,
-    topo_base: Image.Image,
-    overlay_alpha: float,
-    max_height_m: float = RADIO_HORIZON_MAX_HEIGHT_M,
-    color_ramp: list[tuple[float, tuple[int, int, int]]] | None = None,
-    unreachable_color: tuple[int, int, int] = RADIO_HORIZON_UNREACHABLE_COLOR,
-    uav_height_reference: UavHeightReference = UavHeightReference.GROUND,
-    earth_radius_m: float = EARTH_RADIUS_M,
-    refraction_k: float = RADIO_HORIZON_REFRACTION_K,
-    grid_step: int = RADIO_HORIZON_GRID_STEP,
-    final_size: tuple[int, int] | None = None,
-) -> Image.Image:
-    """
-    Быстрое перестроение радиогоризонта с новой контрольной точкой.
-
-    Использует кэшированный DEM и топооснову для ускорения вычислений.
-    Пересчитывает только матрицу радиогоризонта и цветовую раскраску.
-
-    Args:
-        dem: Кэшированная матрица высот
-        new_antenna_row: Новый индекс строки антенны в DEM
-        new_antenna_col: Новый индекс столбца антенны в DEM
-        antenna_height_m: Высота антенны над поверхностью
-        pixel_size_m: Размер пикселя в метрах
-        topo_base: Кэшированная топографическая основа
-        overlay_alpha: Прозрачность наложения (1.0 = чистая топооснова)
-        max_height_m: Максимальная высота для шкалы
-        color_ramp: Цветовая палитра
-        unreachable_color: Цвет недостижимых зон
-        uav_height_reference: Режим отсчёта высоты БпЛА
-        earth_radius_m: Радиус Земли
-        refraction_k: Коэффициент рефракции
-        grid_step: Шаг сетки для вычислений
-        final_size: Финальный размер результата (width, height) или None
-
-    Returns:
-        Готовое изображение с наложенной топоосновой
-
-    """
-    logger = logging.getLogger(__name__)
-
-    if color_ramp is None:
-        color_ramp = RADIO_HORIZON_COLOR_RAMP
-
-    # Получаем высоту контрольной точки для режима CONTROL_POINT
-    h, w = dem.shape
-    new_antenna_row = max(0, min(new_antenna_row, h - 1))
-    new_antenna_col = max(0, min(new_antenna_col, w - 1))
-    cp_elevation = float(dem[new_antenna_row, new_antenna_col])
-
-    # Debug logging
-    logger.info(
-        '    └─ Input: DEM size=(%d, %d), topo_base size=%s, final_size=%s',
-        w,
-        h,
-        topo_base.size,
-        final_size,
-    )
-
-    # Вычисляем радиогоризонт с раскраской
-    step_start = time.monotonic()
-    result = compute_and_colorize_radio_horizon(
-        dem=dem,
-        antenna_row=new_antenna_row,
-        antenna_col=new_antenna_col,
-        antenna_height_m=antenna_height_m,
-        pixel_size_m=pixel_size_m,
-        earth_radius_m=earth_radius_m,
-        refraction_k=refraction_k,
-        grid_step=grid_step,
-        max_height_m=max_height_m,
-        color_ramp=color_ramp,
-        unreachable_color=unreachable_color,
-        uav_height_reference=uav_height_reference,
-        cp_elevation=cp_elevation,
-    )
-    step_elapsed = time.monotonic() - step_start
-    logger.info('    └─ compute_and_colorize_radio_horizon: %.3f sec', step_elapsed)
-
-    # Resize result to final size if needed (DEM was downsampled)
-    if final_size and result.size != final_size:
-        step_start = time.monotonic()
-        result = result.resize(final_size, Image.Resampling.BILINEAR)
-        step_elapsed = time.monotonic() - step_start
-        logger.info('    └─ Resize result to final size: %.3f sec', step_elapsed)
-
-    # Resize topo_base if it doesn't match final_size
-    if final_size and topo_base.size != final_size:
-        step_start = time.monotonic()
-        logger.warning(
-            '    └─ topo_base size mismatch! Expected %s, got %s. Resizing...',
-            final_size,
-            topo_base.size,
-        )
-        topo_base = topo_base.resize(final_size, Image.Resampling.BILINEAR)
-        step_elapsed = time.monotonic() - step_start
-        logger.info('    └─ Resize topo_base to final size: %.3f sec', step_elapsed)
-
-    # Накладываем на топооснову
-    step_start = time.monotonic()
-    # В настройках хранится "прозрачность слоя" (1 = чистая топооснова),
-    # а blend принимает "непрозрачность" (1 = только радиогоризонт), поэтому инвертируем
-    blend_alpha = 1.0 - overlay_alpha
-
-    # topo_base уже в RGBA формате (предконвертирован при кэшировании)
-    # Это избавляет от конвертации L->RGBA каждый раз
-    result = result.convert('RGBA')
-
-    # Используем PIL Image.blend (numpy оказался медленнее для таких размеров)
-    result = Image.blend(topo_base, result, blend_alpha)
-
-    step_elapsed = time.monotonic() - step_start
-    logger.info('    └─ Blend with topo base: %.3f sec', step_elapsed)
-
-    return result
 
 
 def get_radio_horizon_legend_params(
@@ -814,6 +578,7 @@ def compute_and_colorize_coverage(
     unreachable_color: tuple[int, int, int] = RADIO_HORIZON_UNREACHABLE_COLOR,
     uav_height_reference: UavHeightReference = UavHeightReference.GROUND,
     cp_elevation: float | None = None,
+    *,
     # --- Параметры сектора (для РЛС) ---
     sector_enabled: bool = False,
     radar_azimuth_deg: float = 0.0,
@@ -824,15 +589,37 @@ def compute_and_colorize_coverage(
     target_size: tuple[int, int] | None = None,
     target_height_min_m: float = 0.0,
 ) -> Image.Image:
-    """Обобщённая функция: вычисляет и раскрашивает покрытие (360° или сектор).
+    """
+    Обобщённая функция: вычисляет и раскрашивает покрытие (360° или сектор).
 
-    При sector_enabled=False — идентично compute_and_colorize_radio_horizon.
+    При sector_enabled=False — работает как НСУ 360° (без фильтрации по сектору).
     При sector_enabled=True — добавляется фильтрация по сектору/дальности/углам.
 
     Args:
+        dem: Матрица высот (numpy array, dtype=float32).
+        antenna_row: Индекс строки положения антенны в DEM.
+        antenna_col: Индекс столбца положения антенны в DEM.
+        antenna_height_m: Высота антенны над поверхностью, м.
+        pixel_size_m: Размер пикселя DEM в метрах.
+        earth_radius_m: Радиус Земли в метрах.
+        refraction_k: Коэффициент рефракции.
+        grid_step: Шаг грубой сетки для ускорения расчёта.
+        max_height_m: Максимальная высота для цветовой шкалы.
+        color_ramp: Градиент цветов для раскраски.
+        unreachable_color: Цвет для недостижимых пикселей.
+        uav_height_reference: Режим отсчёта высоты БпЛА.
+        cp_elevation: Высота контрольной точки (для CONTROL_POINT).
+        sector_enabled: Включить фильтрацию по сектору.
+        radar_azimuth_deg: Азимут центра сектора РЛС (градусы).
+        radar_sector_width_deg: Ширина сектора РЛС (градусы).
+        elevation_min_deg: Минимальный угол места (градусы).
+        elevation_max_deg: Максимальный угол места (градусы).
+        max_range_m: Максимальная дальность обнаружения (метры).
         target_size: (width, height) финального изображения после resize.
             Если отличается от размера DEM, угловые границы сектора
             предкомпенсируются для неравномерного масштабирования.
+        target_height_min_m: Минимальная высота цели для шкалы (метры).
+
     """
     if color_ramp is None:
         color_ramp = RADIO_HORIZON_COLOR_RAMP
@@ -843,10 +630,6 @@ def compute_and_colorize_coverage(
         )
 
     h, w = dem.shape
-    if h == 0 or w == 0:
-        return Image.new(
-            'RGB', RADIO_HORIZON_EMPTY_IMAGE_SIZE_PX, RADIO_HORIZON_EMPTY_IMAGE_COLOR
-        )
 
     # Адаптивный шаг сетки
     total_pixels = h * w
@@ -867,8 +650,15 @@ def compute_and_colorize_coverage(
     # Сектор/дальность/углы накладываются ПОСЛЕ интерполяции на полном разрешении,
     # чтобы границы были пиксельно-точными (без блочных артефактов от grid_step).
     grid_values = _compute_grid_values_parallel(
-        dem, antenna_row, antenna_col, antenna_abs_height,
-        pixel_size_m, effective_earth_radius, grid_step, h, w,
+        dem,
+        antenna_row,
+        antenna_col,
+        antenna_abs_height,
+        pixel_size_m,
+        effective_earth_radius,
+        grid_step,
+        h,
+        w,
     )
 
     # Интерполяция до полного размера (чистая, без NaN)
@@ -898,7 +688,7 @@ def compute_and_colorize_coverage(
         cols = np.arange(w, dtype=np.float32)
         col_grid, row_grid = np.meshgrid(cols, rows)
 
-        dy = -(row_grid - antenna_row)   # Y inverted (up = north)
+        dy = -(row_grid - antenna_row)  # Y inverted (up = north)
         dx = col_grid - antenna_col
         dist_px = np.sqrt(dx * dx + dy * dy)
 
@@ -911,8 +701,8 @@ def compute_and_colorize_coverage(
         # so that sector boundaries appear at correct geographic angles
         # in the final image.
         if target_size and (target_size[0] != w or target_size[1] != h):
-            sx = target_size[0] / w   # horizontal scale factor
-            sy = target_size[1] / h   # vertical scale factor
+            sx = target_size[0] / w  # horizontal scale factor
+            sy = target_size[1] / h  # vertical scale factor
             target_az = np.arctan2(dx * sx, dy * sy)
         else:
             target_az = np.arctan2(dx, dy)  # atan2(east, north) = azimuth from north CW
@@ -957,20 +747,23 @@ def compute_and_colorize_coverage(
     unreachable_idx = lut_size
 
     if sector_enabled and target_height_min_m > 0:
-        # РЛС: шкала [h_min, h_max]
+        # Radar mode: scale from min to max height
         h_range = max_height_m - target_height_min_m
         inv_range = (lut_size - 1) / h_range if h_range > 0 else 0.0
         clamped = np.clip(
             np.nan_to_num(full_values, nan=0.0, posinf=max_height_m + 1, neginf=0.0),
-            target_height_min_m, max_height_m + 1,
+            target_height_min_m,
+            max_height_m + 1,
         )
         indices = ((clamped - target_height_min_m) * inv_range).astype(np.int32)
         np.clip(indices, 0, lut_size - 1, out=indices)
     else:
         # НСУ: шкала [0, h_max] (без изменений)
         inv_max = (lut_size - 1) / max_height_m if max_height_m > 0 else 0.0
-        indices = (np.nan_to_num(full_values, nan=0.0, posinf=max_height_m + 1, neginf=0.0)
-                   * inv_max).astype(np.int32)
+        indices = (
+            np.nan_to_num(full_values, nan=0.0, posinf=max_height_m + 1, neginf=0.0)
+            * inv_max
+        ).astype(np.int32)
         np.clip(indices, 0, lut_size - 1, out=indices)
 
     # Недостижимые (>max_height, NaN, inf)
@@ -997,6 +790,9 @@ def recompute_coverage_fast(
     refraction_k: float = RADIO_HORIZON_REFRACTION_K,
     grid_step: int = RADIO_HORIZON_GRID_STEP,
     final_size: tuple[int, int] | None = None,
+    crop_size: tuple[int, int] | None = None,
+    rotation_deg: float = 0.0,
+    *,
     # --- Параметры сектора ---
     sector_enabled: bool = False,
     radar_azimuth_deg: float = 0.0,
@@ -1005,8 +801,40 @@ def recompute_coverage_fast(
     elevation_max_deg: float = 90.0,
     max_range_m: float = float('inf'),
     target_height_min_m: float = 0.0,
-) -> Image.Image:
-    """Быстрое перестроение покрытия с новой позицией (общая для НСУ и РЛС)."""
+) -> Image.Image | tuple[Image.Image, Image.Image]:
+    """
+    Быстрое перестроение покрытия с новой позицией (общая для НСУ и РЛС).
+
+    Args:
+        dem: Матрица высот (numpy array, dtype=float32).
+        new_antenna_row: Индекс строки новой позиции антенны.
+        new_antenna_col: Индекс столбца новой позиции антенны.
+        antenna_height_m: Высота антенны над поверхностью, м.
+        pixel_size_m: Размер пикселя DEM в метрах.
+        topo_base: Базовое топографическое изображение для наложения.
+        overlay_alpha: Прозрачность наложения покрытия.
+        max_height_m: Максимальная высота для цветовой шкалы.
+        color_ramp: Градиент цветов для раскраски.
+        unreachable_color: Цвет для недостижимых пикселей.
+        uav_height_reference: Режим отсчёта высоты БпЛА.
+        earth_radius_m: Радиус Земли в метрах.
+        refraction_k: Коэффициент рефракции.
+        grid_step: Шаг грубой сетки для ускорения расчёта.
+        final_size: (w, h) итогового изображения.
+        crop_size: (w, h) оригинального DEM до даунсэмплинга (= crop_rect px).
+        rotation_deg: Угол поворота карты (градусы, против часовой).
+            Если задан вместе с crop_size, результат реплицирует пайплайн
+            первого построения: resize -> rotate -> center crop, что обеспечивает
+            совпадение системы координат с overlay_layer первого построения.
+        sector_enabled: Включить фильтрацию по сектору.
+        radar_azimuth_deg: Азимут центра сектора РЛС (градусы).
+        radar_sector_width_deg: Ширина сектора РЛС (градусы).
+        elevation_min_deg: Минимальный угол места (градусы).
+        elevation_max_deg: Максимальный угол места (градусы).
+        max_range_m: Максимальная дальность обнаружения (метры).
+        target_height_min_m: Минимальная высота цели для шкалы (метры).
+
+    """
     _logger = logging.getLogger(__name__)
 
     if color_ramp is None:
@@ -1018,9 +846,19 @@ def recompute_coverage_fast(
     cp_elevation = float(dem[new_antenna_row, new_antenna_col])
 
     _logger.info(
-        '    └─ Input: DEM size=(%d, %d), topo_base size=%s, final_size=%s',
-        w, h, topo_base.size, final_size,
+        '    └─ DEM=(%d,%d), topo=%s, final=%s, crop=%s',
+        w,
+        h,
+        topo_base.size,
+        final_size,
+        crop_size,
     )
+
+    # When crop_size is available, skip target_size pre-compensation:
+    # we'll crop the center + uniform resize instead, which preserves
+    # circular sector boundaries and correct antenna position.
+    use_crop = bool(crop_size and final_size)
+    compute_target = None if use_crop else final_size
 
     step_start = time.monotonic()
     result = compute_and_colorize_coverage(
@@ -1043,32 +881,107 @@ def recompute_coverage_fast(
         elevation_min_deg=elevation_min_deg,
         elevation_max_deg=elevation_max_deg,
         max_range_m=max_range_m,
-        target_size=final_size,
+        target_size=compute_target,
         target_height_min_m=target_height_min_m,
     )
     step_elapsed = time.monotonic() - step_start
     _logger.info('    └─ compute_and_colorize_coverage: %.3f sec', step_elapsed)
 
-    if final_size and result.size != final_size:
-        step_start = time.monotonic()
-        result = result.resize(final_size, Image.Resampling.BILINEAR)
-        step_elapsed = time.monotonic() - step_start
-        _logger.info('    └─ Resize result to final size: %.3f sec', step_elapsed)
+    use_rotation = use_crop and abs(rotation_deg) > ROTATION_EPSILON
 
-    if final_size and topo_base.size != final_size:
+    if use_rotation and crop_size is not None and final_size is not None:
+        # Replicate first-build pipeline: resize to crop_size → rotate → center crop.
+        # This keeps the result in the same rotated coordinate system as the first
+        # build, so overlay_layer, _rh_click_pos, and _dem_grid all remain aligned.
         step_start = time.monotonic()
-        topo_base = topo_base.resize(final_size, Image.Resampling.BILINEAR)
+        crop_w, crop_h = crop_size
+        fw, fh = final_size
+
+        # 1. Resize to crop_size (= original DEM before downsampling = crop_rect px)
+        if result.size != (crop_w, crop_h):
+            result = result.resize((crop_w, crop_h), Image.Resampling.BILINEAR)
+        if topo_base.size != (crop_w, crop_h):
+            topo_base = topo_base.resize((crop_w, crop_h), Image.Resampling.BILINEAR)
+
         step_elapsed = time.monotonic() - step_start
-        _logger.info('    └─ Resize topo_base to final size: %.3f sec', step_elapsed)
+        _logger.info(
+            '    └─ Resize to crop_size (%d×%d): %.3f sec', crop_w, crop_h, step_elapsed
+        )
+
+        # Blend and rotate+crop are done below (after converting to RGBA)
+        result = result.convert('RGBA')
+        blend_alpha = 1.0 - overlay_alpha
+        blended = Image.blend(topo_base, result, blend_alpha)
+
+        # 2. Rotate keeping same canvas size (same as rotate_keep_size in first build)
+        step_start = time.monotonic()
+        blended = rotate_keep_size(blended, rotation_deg, fill=(128, 128, 128))
+        coverage_rotated = rotate_keep_size(result, rotation_deg, fill=(0, 0, 0, 0))
+        step_elapsed = time.monotonic() - step_start
+        _logger.info('    └─ Rotate by %.1f°: %.3f sec', rotation_deg, step_elapsed)
+
+        # 3. Center crop to final_size
+        step_start = time.monotonic()
+        blended = center_crop(blended, fw, fh)
+        coverage_rotated = center_crop(coverage_rotated, fw, fh)
+        step_elapsed = time.monotonic() - step_start
+        _logger.info(
+            '    └─ Center crop to final (%d×%d): %.3f sec', fw, fh, step_elapsed
+        )
+
+        return blended, coverage_rotated
+
+    if use_crop and crop_size is not None and final_size is not None:
+        # No rotation but crop_size available: crop center + uniform resize.
+        step_start = time.monotonic()
+        crop_w, crop_h = crop_size
+        fw, fh = final_size
+        vis_w = round(fw * w / crop_w)
+        vis_h = round(fh * h / crop_h)
+        left = (w - vis_w) // 2
+        top = (h - vis_h) // 2
+        left = max(0, left)
+        top = max(0, top)
+        right = min(w, left + vis_w)
+        bottom = min(h, top + vis_h)
+
+        result = result.crop((left, top, right, bottom))
+        if result.size != final_size:
+            result = result.resize(final_size, Image.Resampling.BILINEAR)
+
+        if topo_base.size == (w, h):
+            topo_base = topo_base.crop((left, top, right, bottom))
+            if topo_base.size != final_size:
+                topo_base = topo_base.resize(final_size, Image.Resampling.BILINEAR)
+        elif topo_base.size != final_size:
+            topo_base = topo_base.resize(final_size, Image.Resampling.BILINEAR)
+
+        step_elapsed = time.monotonic() - step_start
+        _logger.info('    └─ Crop center + resize to final: %.3f sec', step_elapsed)
+    else:
+        if final_size and result.size != final_size:
+            step_start = time.monotonic()
+            result = result.resize(final_size, Image.Resampling.BILINEAR)
+            step_elapsed = time.monotonic() - step_start
+            _logger.info('    └─ Resize result to final size: %.3f sec', step_elapsed)
+
+        if final_size and topo_base.size != final_size:
+            step_start = time.monotonic()
+            topo_base = topo_base.resize(final_size, Image.Resampling.BILINEAR)
+            step_elapsed = time.monotonic() - step_start
+            _logger.info(
+                '    └─ Resize topo_base to final size: %.3f sec', step_elapsed
+            )
+
+    result = result.convert('RGBA')
 
     step_start = time.monotonic()
     blend_alpha = 1.0 - overlay_alpha
-    result = result.convert('RGBA')
-    result = Image.blend(topo_base, result, blend_alpha)
+    blended = Image.blend(topo_base, result, blend_alpha)
     step_elapsed = time.monotonic() - step_start
     _logger.info('    └─ Blend with topo base: %.3f sec', step_elapsed)
 
-    return result
+    return blended, result
 
 
 # === Функции совместимости для работы со старым кодом (list[list[float]]) ===
@@ -1077,11 +990,6 @@ def recompute_coverage_fast(
 def _list_to_numpy(dem_list: list[list[float]]) -> np.ndarray:
     """Конвертирует list[list[float]] в numpy array."""
     return np.array(dem_list, dtype=np.float32)
-
-
-def _numpy_to_list(dem_np: np.ndarray) -> list[list[float]]:
-    """Конвертирует numpy array в list[list[float]]."""
-    return dem_np.tolist()
 
 
 # Алиасы для обратной совместимости (принимают list, конвертируют внутри)

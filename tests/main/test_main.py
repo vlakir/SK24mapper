@@ -15,7 +15,7 @@ class TestMain:
         
         appdata_base, local_base = setup_logging()
         
-        assert appdata_base == appdata / "SK42mapper"
-        assert local_base == localappdata / "SK42mapper"
+        assert appdata_base == appdata / "SK42"
+        assert local_base == localappdata / "SK42"
         assert (local_base / "log" / "mil_mapper.log").exists()
 

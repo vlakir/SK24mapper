@@ -40,6 +40,11 @@ class _CbStore:
     preview_image: ClassVar[Callable[[object, object, object, object], None] | None] = (
         None
     )
+    cancel_event: ClassVar[threading.Event | None] = None
+
+
+class CancelledError(Exception):
+    """Raised when an operation is cancelled by the user."""
 
 
 def get_progress_callback() -> Callable[[int, int, str], None] | None:
@@ -81,6 +86,24 @@ def set_preview_image_callback(
     _CbStore.preview_image = cb
 
 
+def set_cancel_event(event: threading.Event | None) -> None:
+    """Устанавливает глобальный Event для отмены текущей операции."""
+    _CbStore.cancel_event = event
+
+
+def clear_cancel_event() -> None:
+    """Очищает глобальный Event отмены."""
+    _CbStore.cancel_event = None
+
+
+def check_cancelled() -> None:
+    """Проверяет, запрошена ли отмена, и если да — бросает CancelledError."""
+    ev = _CbStore.cancel_event
+    if ev is not None and ev.is_set():
+        msg = 'Операция отменена пользователем'
+        raise CancelledError(msg)
+
+
 def publish_preview_image(
     img: object,
     metadata: object | None = None,
@@ -120,6 +143,7 @@ def cleanup_all_progress_resources() -> None:
     set_progress_callback(None)
     set_spinner_callbacks(None, None)
     set_preview_image_callback(None)
+    clear_cancel_event()
 
 
 def force_stop_all_spinners() -> None:
@@ -151,6 +175,10 @@ class LiveSpinner:
         self._writer.clear_line()
         i = 0
         while not self._stop.is_set():
+            # Проверяем отмену на каждой итерации спиннера
+            ev = _CbStore.cancel_event
+            if ev is not None and ev.is_set():
+                break
             msg = f'{self.label}: {self.frames[i % len(self.frames)]}'
             self._writer.write_line(msg)
             time.sleep(self.interval)
@@ -254,6 +282,9 @@ class ConsoleProgress:
         return f'{m:02d}:{s:02d}'
 
     def _render(self) -> None:
+        # Проверяем отмену на каждом шаге прогресса
+        check_cancelled()
+
         elapsed = max(1e-6, time.monotonic() - self.start)
         rps = self.done / elapsed
         remaining = (self.total - self.done) / rps if rps > 0 else float('inf')

@@ -5,12 +5,13 @@ import numpy as np
 from PIL import Image
 
 ROTATE_ANGLE_EPS = 1e-6
+_CV2_DIM_LIMIT = 32767  # SHRT_MAX — лимит cv2.warpAffine
 
 
 def rotate_keep_size(
     img: Image.Image,
     angle_deg: float,
-    fill: tuple[int, int, int] = (255, 255, 255),
+    fill: tuple[int, ...] = (255, 255, 255),
 ) -> Image.Image:
     """
     Поворачивает изображение на заданный угол (против часовой стрелки).
@@ -30,8 +31,13 @@ def rotate_keep_size(
     if abs(angle_deg) < ROTATE_ANGLE_EPS:
         return img.copy()
 
+    w, h = img.size
+
+    # PIL fallback для изображений, превышающих лимит cv2.warpAffine
+    if w >= _CV2_DIM_LIMIT or h >= _CV2_DIM_LIMIT:
+        return img.rotate(angle_deg, resample=Image.Resampling.BICUBIC, fillcolor=fill)
+
     arr = np.array(img)
-    h, w = arr.shape[:2]
     center = (w / 2, h / 2)
 
     rotation_matrix = cv2.getRotationMatrix2D(center, angle_deg, 1.0)

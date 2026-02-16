@@ -288,6 +288,23 @@ class TestRotateKeepSize:
         result = rotate_keep_size(img, 30.0)
         assert result.size == (200, 100)
 
+    def test_pil_fallback_for_large_image(self):
+        """Images exceeding cv2 SHRT_MAX limit should use PIL fallback."""
+        from imaging.transforms import _CV2_DIM_LIMIT
+
+        # Минимальное изображение с одной стороной >= лимита
+        img = Image.new('RGB', (4, _CV2_DIM_LIMIT), color=(100, 150, 200))
+        result = rotate_keep_size(img, 1.5, fill=(255, 255, 255))
+        assert result.size == img.size
+
+    def test_pil_fallback_wide_image(self):
+        """Wide image exceeding limit should rotate without error."""
+        from imaging.transforms import _CV2_DIM_LIMIT
+
+        img = Image.new('RGB', (_CV2_DIM_LIMIT, 4), color=(50, 100, 150))
+        result = rotate_keep_size(img, -2.0, fill=(0, 0, 0))
+        assert result.size == img.size
+
 
 @pytest.fixture
 def sk42_gk_crs():

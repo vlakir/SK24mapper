@@ -182,3 +182,38 @@ class TestMapSettingsExtraFields:
             unknown_field='should_be_ignored',  # Extra field
         )
         assert not hasattr(settings, 'unknown_field')
+
+
+class TestMapSettingsRadarFields:
+    """Tests for radar coverage fields in MapSettings."""
+
+    def test_default_radar_values(self):
+        """Radar fields should have sensible defaults."""
+        settings = create_base_settings()
+        assert settings.radar_azimuth_deg == 0.0
+        assert settings.radar_sector_width_deg == 90.0
+        assert settings.radar_elevation_min_deg == 0.5
+        assert settings.radar_elevation_max_deg == 30.0
+        assert settings.radar_max_range_km == 15.0
+
+    def test_custom_radar_values(self):
+        """Radar fields should accept custom values."""
+        settings = create_base_settings(
+            radar_azimuth_deg=180.0,
+            radar_sector_width_deg=120.0,
+            radar_elevation_min_deg=1.0,
+            radar_elevation_max_deg=45.0,
+            radar_max_range_km=25.0,
+        )
+        assert settings.radar_azimuth_deg == 180.0
+        assert settings.radar_sector_width_deg == 120.0
+        assert settings.radar_elevation_min_deg == 1.0
+        assert settings.radar_elevation_max_deg == 45.0
+        assert settings.radar_max_range_km == 25.0
+
+    def test_radar_fields_serialization(self):
+        """Radar fields should be included in model dump."""
+        settings = create_base_settings(radar_azimuth_deg=45.0)
+        data = settings.model_dump()
+        assert 'radar_azimuth_deg' in data
+        assert data['radar_azimuth_deg'] == 45.0

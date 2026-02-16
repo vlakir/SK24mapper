@@ -1,6 +1,6 @@
-#define MyAppName "SK42mapper"
-#define MyAppExeName "SK42mapper.exe"
-#define MyAppPublisher "SK42mapper"
+#define MyAppName "SK42"
+#define MyAppExeName "SK42.exe"
+#define MyAppPublisher "SK42"
 #define MyAppVersion GetEnv("VERSION")
 
 [Setup]
@@ -16,7 +16,7 @@ UsePreviousAppDir=no
 ; Keep directory page but with correct default
 DisableDirPage=auto
 OutputDir=.
-OutputBaseFilename=SK42mapper-{#MyAppVersion}-setup
+OutputBaseFilename=SK42-{#MyAppVersion}-setup
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
@@ -30,35 +30,37 @@ Name: "en"; MessagesFile: "compiler:Default.isl"
 
 [Files]
 ; Копируем onedir-сборку PyInstaller в каталог установки
-Source: "{#SourcePath}\dist\SK42mapper\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
+Source: "{#SourcePath}\dist\SK42\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
 
 ; Вариант A: копируем конфиги непосредственно в профиль пользователя
-Source: "{#SourcePath}\configs\*"; DestDir: "{userappdata}\SK42mapper\configs"; Flags: recursesubdirs ignoreversion
+Source: "{#SourcePath}\configs\*"; DestDir: "{userappdata}\SK42\configs"; Flags: recursesubdirs ignoreversion
 
 [Dirs]
 ; Создание обязательных директорий в профиле пользователя
-Name: "{userappdata}\\SK42mapper"
-Name: "{userappdata}\\SK42mapper\\configs"
-Name: "{userappdata}\\SK42mapper\\configs\\profiles"
-Name: "{userappdata}\\SK42mapper\\maps"
-Name: "{localappdata}\\SK42mapper"
-Name: "{localappdata}\\SK42mapper\\log"
-Name: "{localappdata}\\SK42mapper\\.cache\\tiles"
+Name: "{userappdata}\\SK42"
+Name: "{userappdata}\\SK42\\configs"
+Name: "{userappdata}\\SK42\\configs\\profiles"
+Name: "{userappdata}\\SK42\\maps"
+Name: "{localappdata}\\SK42"
+Name: "{localappdata}\\SK42\\log"
+Name: "{localappdata}\\SK42\\.cache\\tiles"
 
 [InstallDelete]
 ; Удаляем старые пользовательские профили при обновлении
 ; (избегаем проблем совместимости со старыми версиями)
-Type: files; Name: "{userappdata}\SK42mapper\configs\profiles\*.toml"
+Type: files; Name: "{userappdata}\SK42\configs\profiles\*.toml"
+; Удаляем старый ярлык SK42mapper на рабочем столе
+Type: files; Name: "{userdesktop}\SK42mapper.lnk"
 
 [UninstallDelete]
 ; Удаляем директории при деинсталляции, если пустые
-Type: dirifempty; Name: "{userappdata}\\SK42mapper\\configs\\profiles"
-Type: dirifempty; Name: "{userappdata}\\SK42mapper\\configs"
-Type: dirifempty; Name: "{userappdata}\\SK42mapper\\maps"
-Type: dirifempty; Name: "{userappdata}\\SK42mapper"
-Type: dirifempty; Name: "{localappdata}\\SK42mapper\\.cache\\tiles"
-Type: dirifempty; Name: "{localappdata}\\SK42mapper\\log"
-Type: dirifempty; Name: "{localappdata}\\SK42mapper"
+Type: dirifempty; Name: "{userappdata}\\SK42\\configs\\profiles"
+Type: dirifempty; Name: "{userappdata}\\SK42\\configs"
+Type: dirifempty; Name: "{userappdata}\\SK42\\maps"
+Type: dirifempty; Name: "{userappdata}\\SK42"
+Type: dirifempty; Name: "{localappdata}\\SK42\\.cache\\tiles"
+Type: dirifempty; Name: "{localappdata}\\SK42\\log"
+Type: dirifempty; Name: "{localappdata}\\SK42"
 
 [Icons]
 ; Ярлык на рабочем столе текущего пользователя (per-user установка)
@@ -75,13 +77,105 @@ var
   ExistingKeyFound: Boolean;
   KeyInputPage: TInputQueryWizardPage;
 
+procedure MigrateFromOldName;
+{ Переносит данные из SK42mapper в SK42 (одноразовая миграция при обновлении) }
+var
+  OldAppData, NewAppData, OldLocal, NewLocal: string;
+  OldSecrets, NewSecrets: string;
+  OldInstallDir: string;
+  FindRec: TFindRec;
+  ResultCode: Integer;
+begin
+  OldAppData := AddBackslash(ExpandConstant('{userappdata}')) + 'SK42mapper';
+  NewAppData := AddBackslash(ExpandConstant('{userappdata}')) + 'SK42';
+  OldLocal := AddBackslash(ExpandConstant('{localappdata}')) + 'SK42mapper';
+  NewLocal := AddBackslash(ExpandConstant('{localappdata}')) + 'SK42';
+
+  if not DirExists(OldAppData) then
+    Exit;
+
+  Log('Миграция: обнаружена старая папка ' + OldAppData);
+  ForceDirectories(NewAppData);
+
+  { 1. Перенос .secrets.env (API ключ) }
+  OldSecrets := OldAppData + '\.secrets.env';
+  NewSecrets := NewAppData + '\.secrets.env';
+  if FileExists(OldSecrets) and not FileExists(NewSecrets) then
+  begin
+    Exec(ExpandConstant('{cmd}'), '/c attrib -R -H -S "' + OldSecrets + '"',
+         '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    FileCopy(OldSecrets, NewSecrets, False);
+    Exec(ExpandConstant('{cmd}'), '/c attrib +H "' + NewSecrets + '"',
+         '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    Log('Миграция: скопирован .secrets.env');
+  end;
+
+  { 2. Перенос профилей }
+  ForceDirectories(NewAppData + '\configs\profiles');
+  if FindFirst(OldAppData + '\configs\profiles\*.toml', FindRec) then
+  begin
+    try
+      repeat
+        if not FileExists(NewAppData + '\configs\profiles\' + FindRec.Name) then
+        begin
+          FileCopy(OldAppData + '\configs\profiles\' + FindRec.Name,
+                   NewAppData + '\configs\profiles\' + FindRec.Name, False);
+          Log('Миграция: скопирован профиль ' + FindRec.Name);
+        end;
+      until not FindNext(FindRec);
+    finally
+      FindClose(FindRec);
+    end;
+  end;
+
+  { 3. Перенос сохранённых карт }
+  ForceDirectories(NewAppData + '\maps');
+  if FindFirst(OldAppData + '\maps\*', FindRec) then
+  begin
+    try
+      repeat
+        if (FindRec.Name <> '.') and (FindRec.Name <> '..') then
+        begin
+          if not FileExists(NewAppData + '\maps\' + FindRec.Name) then
+          begin
+            FileCopy(OldAppData + '\maps\' + FindRec.Name,
+                     NewAppData + '\maps\' + FindRec.Name, False);
+            Log('Миграция: скопирована карта ' + FindRec.Name);
+          end;
+        end;
+      until not FindNext(FindRec);
+    finally
+      FindClose(FindRec);
+    end;
+  end;
+
+  { 4. Перенос кэша тайлов (только переименование папки, если новой нет) }
+  if DirExists(OldLocal + '\.cache\tiles') and not DirExists(NewLocal + '\.cache\tiles') then
+  begin
+    ForceDirectories(NewLocal + '\.cache');
+    RenameFile(OldLocal + '\.cache\tiles', NewLocal + '\.cache\tiles');
+    Log('Миграция: перемещён кэш тайлов');
+  end;
+
+  { 5. Удаление старой папки установки }
+  OldInstallDir := AddBackslash(ExpandConstant('{localappdata}')) + 'Programs\SK42mapper';
+  if DirExists(OldInstallDir) then
+  begin
+    DelTree(OldInstallDir, True, True, True);
+    Log('Миграция: удалена старая папка установки ' + OldInstallDir);
+  end;
+end;
+
 procedure InitializeWizard;
 var
   SecretsFile: string;
   InfoLabel: TNewStaticText;
 begin
-  { Проверяем наличие существующего ключа }
-  SecretsFile := AddBackslash(ExpandConstant('{userappdata}')) + 'SK42mapper\.secrets.env';
+  { Миграция данных из SK42mapper → SK42 }
+  MigrateFromOldName;
+
+  { Проверяем наличие существующего ключа (уже после миграции) }
+  SecretsFile := AddBackslash(ExpandConstant('{userappdata}')) + 'SK42\.secrets.env';
   ExistingKeyFound := FileExists(SecretsFile);
 
   { Страница выбора: оставить или заменить ключ }
@@ -119,7 +213,7 @@ begin
     KeyChoicePage.ID,
     'Конфигурация ключа',
     'Введите ключ API',
-    'Ключ будет сохранён в профиле пользователя (%AppData%\SK42mapper).'
+    'Ключ будет сохранён в профиле пользователя (%AppData%\SK42).'
   );
   KeyInputPage.Add('API_KEY:', True);
 end;
@@ -155,7 +249,7 @@ var
 begin
   if CurStep = ssPostInstall then
   begin
-    BaseDir := AddBackslash(ExpandConstant('{userappdata}')) + 'SK42mapper';
+    BaseDir := AddBackslash(ExpandConstant('{userappdata}')) + 'SK42';
     ForceDirectories(BaseDir);
     F := BaseDir + '\.secrets.env';
 
@@ -199,7 +293,7 @@ var
 begin
   if CurUninstallStep = usUninstall then
   begin
-    F := AddBackslash(ExpandConstant('{userappdata}')) + 'SK42mapper' + '\.secrets.env';
+    F := AddBackslash(ExpandConstant('{userappdata}')) + 'SK42' + '\.secrets.env';
     DeleteFile(F);
   end;
 end;

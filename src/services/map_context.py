@@ -84,13 +84,27 @@ class MapDownloadContext:
     control_point_elevation: float | None = None
 
     # Radio horizon cache data (for interactive rebuilding)
-    rh_cache_dem: Any | None = None  # numpy array - DEM
+    rh_cache_dem: Any | None = (
+        None  # numpy array - DEM (даунсэмплированный для расчёта)
+    )
+    rh_cache_dem_full: Any | None = (
+        None  # numpy array - DEM (полное разрешение для курсора)
+    )
     rh_cache_topo_base: Image.Image | None = None  # PIL Image - топооснова
     rh_cache_antenna_row: int | None = None  # позиция антенны в DEM (строка)
     rh_cache_antenna_col: int | None = None  # позиция антенны в DEM (столбец)
     rh_cache_pixel_size_m: float | None = None  # размер пикселя в метрах
+    rh_cache_crop_size: tuple[int, int] | None = (
+        None  # (w, h) DEM до даунсэмплинга = crop_rect px
+    )
+    rh_cache_coverage: Image.Image | None = (
+        None  # PIL Image - слой покрытия (для интерактивной альфы)
+    )
     rh_cache_overlay: Image.Image | None = (
         None  # PIL Image - слой с сеткой/легендой/изолиниями
+    )
+    rh_cache_overlay_base: Image.Image | None = (
+        None  # PIL Image - слой без легенды (сетка + изолинии)
     )
     # Temporary: contour layer (RGBA) after rotation/crop, for inclusion in overlay
     rh_contour_layer: Image.Image | None = None
@@ -104,6 +118,7 @@ class MapDownloadContext:
     is_elev_color: bool = False
     is_elev_contours: bool = False
     is_radio_horizon: bool = False
+    is_radar_coverage: bool = False
     overlay_contours: bool = False
 
     # Tile size settings

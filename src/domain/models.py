@@ -115,7 +115,7 @@ class MapSettings(BaseModel):
     radar_elevation_min_deg: float = 0.5  # Минимальный угол места (градусы)
     radar_elevation_max_deg: float = 30.0  # Максимальный угол места (градусы)
     radar_max_range_km: float = 15.0  # Максимальная дальность обнаружения (км)
-    radar_target_height_min_m: float = 30.0   # Минимальная высота цели (м)
+    radar_target_height_min_m: float = 30.0  # Минимальная высота цели (м)
     radar_target_height_max_m: float = 5000.0  # Максимальная высота цели (м)
 
     # Валидации через Pydantic validators

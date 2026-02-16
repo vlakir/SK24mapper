@@ -2,7 +2,6 @@
 
 from shared.constants import (
     ADDITIVE_RATIO,
-    DESIRED_ZOOM,
     DOWNLOAD_CONCURRENCY,
     EARTH_RADIUS_M,
     EPSG_SK42_GK_BASE,
@@ -15,6 +14,11 @@ from shared.constants import (
     MAPBOX_STYLE_BY_TYPE,
     MAX_GK_ZONE,
     MapType,
+    RADAR_COVERAGE_AZIMUTH_STEP_DEG,
+    RADAR_COVERAGE_CEILING_HEIGHTS_M,
+    RADAR_COVERAGE_MARKER_COLOR,
+    RADAR_COVERAGE_MARKER_SIZE_M,
+    RADAR_COVERAGE_SECTOR_SHADOW_COLOR,
     RETINA_FACTOR,
     SK42_VALID_LAT_MAX,
     SK42_VALID_LAT_MIN,
@@ -41,6 +45,8 @@ class TestMapType:
         assert MapType.ELEVATION_COLOR
         assert MapType.ELEVATION_CONTOURS
         assert MapType.ELEVATION_HILLSHADE
+        assert MapType.RADIO_HORIZON
+        assert MapType.RADAR_COVERAGE
 
     def test_map_type_values(self):
         """Map type values should match names."""
@@ -94,6 +100,14 @@ class TestMapTypeToStyleId:
         assert map_type_to_style_id(MapType.ELEVATION_CONTOURS) is None
         assert map_type_to_style_id(MapType.ELEVATION_HILLSHADE) is None
 
+    def test_radio_horizon_returns_none(self):
+        """RADIO_HORIZON should return None (no tile style)."""
+        assert map_type_to_style_id(MapType.RADIO_HORIZON) is None
+
+    def test_radar_coverage_returns_none(self):
+        """RADAR_COVERAGE should return None (no tile style)."""
+        assert map_type_to_style_id(MapType.RADAR_COVERAGE) is None
+
     def test_string_input(self):
         """Should accept string input."""
         result = map_type_to_style_id('SATELLITE')
@@ -125,10 +139,6 @@ class TestNumericConstants:
     def test_static_scale(self):
         """Static scale should be positive."""
         assert STATIC_SCALE > 0
-
-    def test_desired_zoom(self):
-        """Desired zoom should be reasonable."""
-        assert 0 <= DESIRED_ZOOM <= 24
 
     def test_download_concurrency(self):
         """Download concurrency should be positive."""
@@ -192,4 +202,41 @@ class TestSK42Bounds:
         moscow_lat = 55.75
         assert SK42_VALID_LON_MIN <= moscow_lon <= SK42_VALID_LON_MAX
         assert SK42_VALID_LAT_MIN <= moscow_lat <= SK42_VALID_LAT_MAX
+
+
+class TestRadarCoverageConstants:
+    """Tests for radar coverage constants."""
+
+    def test_radar_coverage_map_type_value(self):
+        """RADAR_COVERAGE value should match name."""
+        assert MapType.RADAR_COVERAGE.value == 'RADAR_COVERAGE'
+
+    def test_radar_coverage_has_label(self):
+        """RADAR_COVERAGE should have a Russian label."""
+        assert MapType.RADAR_COVERAGE in MAP_TYPE_LABELS_RU
+        assert 'РЛС' in MAP_TYPE_LABELS_RU[MapType.RADAR_COVERAGE]
+
+    def test_azimuth_step_positive(self):
+        """Azimuth rotation step should be positive."""
+        assert RADAR_COVERAGE_AZIMUTH_STEP_DEG > 0
+
+    def test_ceiling_heights_ordered(self):
+        """Ceiling heights should be in ascending order."""
+        heights = RADAR_COVERAGE_CEILING_HEIGHTS_M
+        assert len(heights) > 0
+        assert heights == tuple(sorted(heights))
+
+    def test_marker_size_positive(self):
+        """Radar marker size should be positive."""
+        assert RADAR_COVERAGE_MARKER_SIZE_M > 0
+
+    def test_marker_color_is_rgb_tuple(self):
+        """Marker color should be a 3-element RGB tuple."""
+        assert len(RADAR_COVERAGE_MARKER_COLOR) == 3
+        assert all(0 <= c <= 255 for c in RADAR_COVERAGE_MARKER_COLOR)
+
+    def test_shadow_color_is_rgba_tuple(self):
+        """Sector shadow color should be a 4-element RGBA tuple."""
+        assert len(RADAR_COVERAGE_SECTOR_SHADOW_COLOR) == 4
+        assert all(0 <= c <= 255 for c in RADAR_COVERAGE_SECTOR_SHADOW_COLOR)
 

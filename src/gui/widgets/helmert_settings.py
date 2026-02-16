@@ -70,7 +70,7 @@ class HelmertSettingsWidget(QWidget):
 
         # Info label
         info = QLabel('Единицы: dx/dy/dz — метры; rx/ry/rz — угловые секунды; ds — ppm')
-        info.setStyleSheet('color: #555;')
+        info.setObjectName('infoLabel')
         row += 1
         layout.addWidget(info, row, 0, 1, 4)
 

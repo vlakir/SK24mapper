@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import ctypes
 import logging
 import os
 import sys
@@ -20,10 +21,23 @@ from domain.profiles import (
 )
 from gui.model import MilMapperModel, ModelEvent
 from service import download_satellite_rectangle
+from shared.constants import API_KEY_VISIBLE_PREFIX_LEN, WIN32_FILE_ATTRIBUTE_HIDDEN
 from shared.diagnostics import ResourceMonitor, log_memory_usage, run_deep_verification
 from shared.portable import get_app_dir, is_portable_mode
 
 logger = logging.getLogger(__name__)
+
+
+def _set_win32_hidden(path: Path, *, hidden: bool) -> None:
+    """Установка/снятие атрибута Hidden для файла через Win32 API."""
+    attrs = ctypes.windll.kernel32.GetFileAttributesW(str(path))
+    if attrs == -1:
+        return
+    if hidden:
+        attrs |= WIN32_FILE_ATTRIBUTE_HIDDEN
+    else:
+        attrs &= ~WIN32_FILE_ATTRIBUTE_HIDDEN
+    ctypes.windll.kernel32.SetFileAttributesW(str(path), attrs)
 
 
 class MilMapperController:
@@ -86,7 +100,7 @@ class MilMapperController:
 
             # Путь в профиле пользователя (на будущее/альтернатива хранения)
             appdata = os.getenv('APPDATA')
-            appdata_path = Path(appdata) / 'SK42mapper' if appdata else None
+            appdata_path = Path(appdata) / 'SK42' if appdata else None
 
             candidates = [
                 install_dir / '.secrets.env',
@@ -293,12 +307,14 @@ class MilMapperController:
         return self._api_key is not None and len(self._api_key) > 0
 
     def get_masked_api_key(self) -> str:
-        """Возвращает API-ключ с маскировкой (первые 4 символа + звёздочки)."""
+        """Возвращает API-ключ с маскировкой (первые N символов + звёздочки)."""
         if not self._api_key:
             return '(ключ не задан)'
-        if len(self._api_key) <= 4:
+        if len(self._api_key) <= API_KEY_VISIBLE_PREFIX_LEN:
             return self._api_key
-        return self._api_key[:4] + '*' * (len(self._api_key) - 4)
+        return self._api_key[:API_KEY_VISIBLE_PREFIX_LEN] + '*' * (
+            len(self._api_key) - API_KEY_VISIBLE_PREFIX_LEN
+        )
 
     def get_api_key(self) -> str:
         """Возвращает полный API-ключ."""
@@ -320,38 +336,25 @@ class MilMapperController:
                 if not appdata:
                     logger.error('Переменная APPDATA не найдена')
                     return False
-                secrets_dir = Path(appdata) / 'SK42mapper'
+                secrets_dir = Path(appdata) / 'SK42'
                 secrets_dir.mkdir(parents=True, exist_ok=True)
                 secrets_file = secrets_dir / '.secrets.env'
                 # Снимаем Hidden-атрибут перед записью (Windows)
                 if sys.platform == 'win32' and secrets_file.exists():
-                    import subprocess
-
-                    subprocess.run(
-                        ['attrib', '-H', str(secrets_file)],
-                        check=False,
-                        capture_output=True,
-                    )
-                secrets_file.write_text(
-                    f'API_KEY={new_key}\n', encoding='utf-8'
-                )
+                    _set_win32_hidden(secrets_file, hidden=False)
+                secrets_file.write_text(f'API_KEY={new_key}\n', encoding='utf-8')
                 # Возвращаем Hidden-атрибут
                 if sys.platform == 'win32':
-                    import subprocess
-
-                    subprocess.run(
-                        ['attrib', '+H', str(secrets_file)],
-                        check=False,
-                        capture_output=True,
-                    )
+                    _set_win32_hidden(secrets_file, hidden=True)
                 logger.info('API-ключ сохранён в .secrets.env')
 
             self._api_key = new_key
             os.environ['API_KEY'] = new_key
-            return True
-        except Exception as e:
-            logger.exception(f'Не удалось сохранить API-ключ: {e}')
+        except Exception:
+            logger.exception('Не удалось сохранить API-ключ')
             return False
+        else:
+            return True
 
     async def start_map_download(self) -> None:
         """Запуск процесса загрузки карты."""

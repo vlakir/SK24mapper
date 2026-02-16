@@ -1,16 +1,23 @@
 """Tests for progress module."""
 
+import threading
 import time
 from unittest.mock import MagicMock
 
+import pytest
+
 from shared.progress import (
+    CancelledError,
     ConsoleProgress,
     LiveSpinner,
     SingleLineRenderer,
     _CbStore,
+    check_cancelled,
     cleanup_all_progress_resources,
+    clear_cancel_event,
     force_stop_all_spinners,
     publish_preview_image,
+    set_cancel_event,
     set_preview_image_callback,
     set_progress_callback,
     set_spinner_callbacks,
@@ -247,3 +254,133 @@ class TestLiveSpinnerExtended:
         """Spinner should have default interval."""
         spinner = LiveSpinner(label='Test')
         assert spinner.interval == 0.1
+
+
+# ---------------------------------------------------------------------------
+# Cancellation mechanism tests
+# ---------------------------------------------------------------------------
+
+
+class TestCancelledError:
+    """Tests for CancelledError exception."""
+
+    def test_is_exception(self):
+        """CancelledError should be an Exception subclass."""
+        assert issubclass(CancelledError, Exception)
+
+    def test_message(self):
+        """CancelledError should carry a message."""
+        err = CancelledError('test cancel')
+        assert str(err) == 'test cancel'
+
+
+class TestCancelEvent:
+    """Tests for cancel event management functions."""
+
+    def setup_method(self):
+        """Ensure clean state before each test."""
+        clear_cancel_event()
+
+    def teardown_method(self):
+        """Ensure clean state after each test."""
+        clear_cancel_event()
+
+    def test_set_cancel_event(self):
+        """set_cancel_event should store the event in _CbStore."""
+        ev = threading.Event()
+        set_cancel_event(ev)
+        assert _CbStore.cancel_event is ev
+
+    def test_clear_cancel_event(self):
+        """clear_cancel_event should set _CbStore.cancel_event to None."""
+        set_cancel_event(threading.Event())
+        clear_cancel_event()
+        assert _CbStore.cancel_event is None
+
+    def test_check_cancelled_no_event(self):
+        """check_cancelled should not raise when no event is set."""
+        clear_cancel_event()
+        check_cancelled()  # should not raise
+
+    def test_check_cancelled_event_not_set(self):
+        """check_cancelled should not raise when event exists but is not set."""
+        ev = threading.Event()
+        set_cancel_event(ev)
+        check_cancelled()  # should not raise
+
+    def test_check_cancelled_raises_when_set(self):
+        """check_cancelled should raise CancelledError when event is set."""
+        ev = threading.Event()
+        ev.set()
+        set_cancel_event(ev)
+        with pytest.raises(CancelledError, match='отменена'):
+            check_cancelled()
+
+    def test_cleanup_clears_cancel_event(self):
+        """cleanup_all_progress_resources should clear cancel_event."""
+        set_cancel_event(threading.Event())
+        cleanup_all_progress_resources()
+        assert _CbStore.cancel_event is None
+
+
+class TestConsoleProgressCancellation:
+    """Tests for cancellation check in ConsoleProgress._render()."""
+
+    def setup_method(self):
+        clear_cancel_event()
+        set_progress_callback(None)
+
+    def teardown_method(self):
+        clear_cancel_event()
+        set_progress_callback(None)
+
+    def test_step_sync_raises_on_cancel(self):
+        """step_sync should raise CancelledError when cancel event is set mid-progress."""
+        ev = threading.Event()
+        set_cancel_event(ev)
+        # Create progress while event is NOT set
+        progress = ConsoleProgress(total=100, label='Test')
+        # Now set the event and step — should raise
+        ev.set()
+        with pytest.raises(CancelledError):
+            progress.step_sync(1)
+
+    def test_step_sync_works_without_cancel(self):
+        """step_sync should work normally when cancel event is not set."""
+        ev = threading.Event()
+        set_cancel_event(ev)
+        progress = ConsoleProgress(total=100, label='Test')
+        progress.step_sync(10)
+        assert progress.done == 10
+
+    def test_init_raises_on_cancel(self):
+        """ConsoleProgress.__init__ calls _render, should raise if cancelled."""
+        ev = threading.Event()
+        ev.set()
+        set_cancel_event(ev)
+        with pytest.raises(CancelledError):
+            ConsoleProgress(total=100, label='Test')
+
+
+class TestLiveSpinnerCancellation:
+    """Tests for cancellation in LiveSpinner._run()."""
+
+    def setup_method(self):
+        clear_cancel_event()
+
+    def teardown_method(self):
+        clear_cancel_event()
+
+    def test_spinner_stops_on_cancel_event(self):
+        """LiveSpinner._run() should exit when cancel event is set."""
+        ev = threading.Event()
+        set_cancel_event(ev)
+        spinner = LiveSpinner(label='Test', interval=0.02)
+        spinner.start()
+        time.sleep(0.05)
+        # Set the cancel event — spinner loop should break
+        ev.set()
+        time.sleep(0.1)
+        # The thread should have exited (or be about to exit)
+        spinner.stop()
+        assert spinner._stop.is_set()

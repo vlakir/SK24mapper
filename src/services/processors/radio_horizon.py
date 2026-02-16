@@ -1,4 +1,4 @@
-"""Radio horizon processor - compute and visualize radio line-of-sight."""
+"""Radio horizon / radar coverage processor - compute and visualize LOS coverage."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from geo.topography import (
 from imaging import assemble_and_crop
 from infrastructure.http.client import resolve_cache_dir
 from services.radio_horizon import (
-    compute_and_colorize_radio_horizon,
+    compute_and_colorize_coverage,
     compute_downsample_factor,
     downsample_dem,
 )
@@ -42,31 +42,28 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-async def process_radio_horizon(ctx: MapDownloadContext) -> Image.Image:
+async def _load_dem(
+    ctx: MapDownloadContext,
+    *,
+    use_retina: bool = False,
+    label: str = 'DEM',
+) -> tuple[np.ndarray, int]:
     """
-    Process radio horizon map.
+    Загрузка и сборка DEM. Возвращает (dem_full, ds_factor).
 
-    Loads DEM, computes minimum UAV heights for radio line-of-sight,
-    and overlays result on topographic base.
-
-    Args:
-        ctx: Map download context with all necessary parameters.
-
-    Returns:
-        Radio horizon visualization image.
-
+    Сохраняет ctx.raw_dem_for_cursor (полноразмерный DEM).
     """
     provider = ElevationTileProvider(
         client=ctx.client,
         api_key=ctx.api_key,
-        use_retina=RADIO_HORIZON_USE_RETINA,
+        use_retina=use_retina,
         cache_root=resolve_cache_dir(),
     )
 
-    full_eff_tile_px = 256 * (2 if RADIO_HORIZON_USE_RETINA else 1)
+    full_eff_tile_px = 256 * (2 if use_retina else 1)
 
     tile_progress = ConsoleProgress(
-        total=len(ctx.tiles), label='Загрузка DEM для радиогоризонта'
+        total=len(ctx.tiles), label=f'Загрузка DEM для {label}'
     )
     tile_count = 0
 
@@ -80,7 +77,7 @@ async def process_radio_horizon(ctx: MapDownloadContext) -> Image.Image:
             await tile_progress.step(1)
             tile_count += 1
             if tile_count % CONTOUR_LOG_MEMORY_EVERY_TILES == 0:
-                log_memory_usage(f'radio_horizon after {tile_count} tiles')
+                log_memory_usage(f'{label} after {tile_count} tiles')
             return idx, dem_tile
 
     tasks = [fetch_dem_tile(pair) for pair in enumerate(ctx.tiles)]
@@ -90,7 +87,6 @@ async def process_radio_horizon(ctx: MapDownloadContext) -> Image.Image:
     results.sort(key=lambda t: t[0])
     dem_tiles_data = [dem for _, dem in results]
 
-    # Assemble full DEM
     dem_full = assemble_dem(
         tiles_data=dem_tiles_data,
         tiles_x=ctx.tiles_x,
@@ -101,18 +97,16 @@ async def process_radio_horizon(ctx: MapDownloadContext) -> Image.Image:
     del dem_tiles_data
     gc.collect()
 
-    # Save raw DEM for cursor elevation display (before downsampling)
-    # This avoids re-downloading DEM in _load_dem_for_cursor
     ctx.raw_dem_for_cursor = dem_full.copy()
 
-    # Check if downsampling needed
     dem_h_orig, dem_w_orig = dem_full.shape
+    ctx.rh_cache_crop_size = (dem_w_orig, dem_h_orig)
     ds_factor = compute_downsample_factor(dem_h_orig, dem_w_orig)
 
     if ds_factor > 1:
         logger.info(
-            'Радиогоризонт: DEM слишком большой (%dx%d = %d Mpx), '
-            'даунсэмплинг в %d раз',
+            '%s: DEM слишком большой (%dx%d = %d Mpx), даунсэмплинг в %d раз',
+            label,
             dem_w_orig,
             dem_h_orig,
             dem_w_orig * dem_h_orig // 1_000_000,
@@ -121,97 +115,23 @@ async def process_radio_horizon(ctx: MapDownloadContext) -> Image.Image:
         dem_full = downsample_dem(dem_full, ds_factor)
         gc.collect()
 
-    # Compute antenna position in DEM pixels
-    cp_lng_sk42, cp_lat_sk42 = ctx.t_sk42_from_gk.transform(
-        ctx.settings.control_point_x_sk42_gk,
-        ctx.settings.control_point_y_sk42_gk,
-    )
-    control_lng_wgs, control_lat_wgs = ctx.t_sk42_to_wgs.transform(
-        cp_lng_sk42, cp_lat_sk42
-    )
+    return dem_full, ds_factor
 
-    ant_px_x, ant_px_y = latlng_to_pixel_xy(control_lat_wgs, control_lng_wgs, ctx.zoom)
 
-    cx, cy, cw, ch = ctx.crop_rect
-    first_tile_x, first_tile_y = ctx.tiles[0]
-    global_origin_x = first_tile_x * full_eff_tile_px
-    global_origin_y = first_tile_y * full_eff_tile_px
-
-    antenna_col_orig = int(ant_px_x * (full_eff_tile_px / 256) - global_origin_x - cx)
-    antenna_row_orig = int(ant_px_y * (full_eff_tile_px / 256) - global_origin_y - cy)
-
-    antenna_col = antenna_col_orig // ds_factor
-    antenna_row = antenna_row_orig // ds_factor
-
-    dem_h, dem_w = dem_full.shape
-    antenna_row = max(0, min(antenna_row, dem_h - 1))
-    antenna_col = max(0, min(antenna_col, dem_w - 1))
-
-    logger.info(
-        'Радиогоризонт: DEM размер %dx%d, антенна в пикселях (%d, %d)',
-        dem_w,
-        dem_h,
-        antenna_col,
-        antenna_row,
-    )
-
-    # Compute pixel size in meters
-    pixel_size_m = (
-        meters_per_pixel(ctx.center_lat_wgs, ctx.zoom, scale=ctx.eff_scale) * ds_factor
-    )
-
-    # Get control point elevation from DEM
-    cp_elevation = float(dem_full[antenna_row, antenna_col])
-    ctx.control_point_elevation = cp_elevation
-
-    # DEM for cursor display will be loaded in _postprocess by _load_dem_for_cursor
-    # with proper rotation and cropping
-
-    # Compute radio horizon
-    sp = LiveSpinner('Вычисление радиогоризонта')
-    sp.start()
-
-    result = compute_and_colorize_radio_horizon(
-        dem=dem_full,
-        antenna_row=antenna_row,
-        antenna_col=antenna_col,
-        antenna_height_m=ctx.settings.antenna_height_m,
-        pixel_size_m=pixel_size_m,
-        max_height_m=ctx.settings.max_flight_height_m,
-        uav_height_reference=ctx.settings.uav_height_reference,
-        cp_elevation=cp_elevation,
-    )
-
-    sp.stop('Радиогоризонт вычислен')
-
-    # Save DEM for cache BEFORE deleting it
-    # dem_full at this point is already downsampled if ds_factor > 1
-    ctx.rh_cache_dem = dem_full.copy()
-    ctx.rh_cache_antenna_row = antenna_row
-    ctx.rh_cache_antenna_col = antenna_col
-    ctx.rh_cache_pixel_size_m = pixel_size_m
-
-    del dem_full
-    gc.collect()
-
-    # Resize if downsampled
-    if ds_factor > 1:
-        target_size = (ctx.crop_rect[2], ctx.crop_rect[3])
-        logger.info(
-            'Радиогоризонт: масштабирование результата %s -> %s',
-            result.size,
-            target_size,
-        )
-        result = result.resize(target_size, Image.Resampling.BILINEAR)
-
-    # Load topographic base
-    logger.info('Загрузка топографической основы для радиогоризонта')
+async def _load_topo(
+    ctx: MapDownloadContext,
+    *,
+    use_retina: bool = False,
+    label: str = 'карты',
+) -> Image.Image:
+    """Загрузка топографической основы (стиль Outdoors). Возвращает PIL Image."""
+    logger.info('Загрузка топографической основы для %s', label)
     sp_topo = LiveSpinner('Загрузка топографической основы')
     sp_topo.start()
 
     topo_style_id = MAPBOX_STYLE_BY_TYPE[MapType.OUTDOORS]
     topo_tile_size = TILE_SIZE
-    topo_use_retina = RADIO_HORIZON_USE_RETINA
+    topo_use_retina = use_retina
 
     async def fetch_topo_tile(
         idx_xy: tuple[int, tuple[int, int]],
@@ -248,51 +168,156 @@ async def process_radio_horizon(ctx: MapDownloadContext) -> Image.Image:
         topo_images.clear()
 
     sp_topo.stop('Топографическая основа загружена')
+    return topo_base
 
-    # Save topo base for cache in FINAL size (after rotation and crop)
-    # Use target_w_px and target_h_px, not crop_rect (which is before rotation)
-    # Convert to RGBA to avoid conversion on every recompute
-    final_topo_size = (ctx.target_w_px, ctx.target_h_px)
-    if topo_base.size != final_topo_size:
-        logger.info(
-            'Масштабирование топоосновы для кэша %s -> %s (после поворота)',
-            topo_base.size,
-            final_topo_size,
-        )
-        topo_for_cache = topo_base.resize(final_topo_size, Image.Resampling.BILINEAR)
-    else:
-        logger.info(
-            'Топооснова уже в финальном размере, копируем в кэш: %s', topo_base.size
-        )
-        topo_for_cache = topo_base.copy()
 
-    # Convert to RGBA for fast blending (avoids L->RGBA conversion on every recompute)
-    ctx.rh_cache_topo_base = topo_for_cache.convert('L').convert('RGBA')
+async def _load_dem_and_topo(
+    ctx: MapDownloadContext,
+    *,
+    use_retina: bool = RADIO_HORIZON_USE_RETINA,
+    label: str = 'радиогоризонта',
+) -> tuple[np.ndarray, Image.Image, int, int, float, float, int]:
+    """
+    Общая загрузка DEM и топоосновы для radio_horizon и radar_coverage.
+
+    Returns:
+        Tuple of (dem, topo_base, antenna_row, antenna_col,
+        pixel_size_m, cp_elevation, ds_factor).
+
+    """
+    dem_full, ds_factor = await _load_dem(ctx, use_retina=use_retina, label=label)
+
+    full_eff_tile_px = 256 * (2 if use_retina else 1)
+
+    # Compute antenna position in DEM pixels
+    cp_lng_sk42, cp_lat_sk42 = ctx.t_sk42_from_gk.transform(
+        ctx.settings.control_point_x_sk42_gk,
+        ctx.settings.control_point_y_sk42_gk,
+    )
+    control_lng_wgs, control_lat_wgs = ctx.t_sk42_to_wgs.transform(
+        cp_lng_sk42, cp_lat_sk42
+    )
+
+    ant_px_x, ant_px_y = latlng_to_pixel_xy(control_lat_wgs, control_lng_wgs, ctx.zoom)
+
+    cx_crop, cy_crop, _cw, _ch = ctx.crop_rect
+    first_tile_x, first_tile_y = ctx.tiles[0]
+    global_origin_x = first_tile_x * full_eff_tile_px
+    global_origin_y = first_tile_y * full_eff_tile_px
+
+    antenna_col_orig = int(
+        ant_px_x * (full_eff_tile_px / 256) - global_origin_x - cx_crop
+    )
+    antenna_row_orig = int(
+        ant_px_y * (full_eff_tile_px / 256) - global_origin_y - cy_crop
+    )
+
+    antenna_col = antenna_col_orig // ds_factor
+    antenna_row = antenna_row_orig // ds_factor
+
+    dem_h, dem_w = dem_full.shape
+    antenna_row = max(0, min(antenna_row, dem_h - 1))
+    antenna_col = max(0, min(antenna_col, dem_w - 1))
 
     logger.info(
-        'Топооснова в кэше: %s, RGBA (финальный размер)',
-        ctx.rh_cache_topo_base.size,
+        '%s: DEM размер %dx%d, антенна в пикселях (%d, %d)',
+        label,
+        dem_w,
+        dem_h,
+        antenna_col,
+        antenna_row,
     )
+
+    pixel_size_m = (
+        meters_per_pixel(ctx.center_lat_wgs, ctx.zoom, scale=ctx.eff_scale) * ds_factor
+    )
+
+    cp_elevation = float(dem_full[antenna_row, antenna_col])
+    ctx.control_point_elevation = cp_elevation
+
+    # Load topographic base (DRY — shared _load_topo)
+    topo_base = await _load_topo(ctx, use_retina=use_retina, label=label)
+
+    # Save topo base for cache at DEM size (matches downsampled DEM dimensions).
+    # This ensures aligned crop+resize during recompute (same transform as coverage).
+    dem_cache_size = (dem_full.shape[1], dem_full.shape[0])
+    if topo_base.size != dem_cache_size:
+        topo_for_cache = topo_base.resize(dem_cache_size, Image.Resampling.BILINEAR)
+    else:
+        topo_for_cache = topo_base.copy()
+
+    ctx.rh_cache_topo_base = topo_for_cache.convert('L').convert('RGBA')
+
+    # Save DEM for cache
+    ctx.rh_cache_dem_full = ctx.raw_dem_for_cursor  # полноразмерный DEM для курсора
+    ctx.rh_cache_dem = dem_full.copy()
+    ctx.rh_cache_antenna_row = antenna_row
+    ctx.rh_cache_antenna_col = antenna_col
+    ctx.rh_cache_pixel_size_m = pixel_size_m
+
+    return (
+        dem_full,
+        topo_base,
+        antenna_row,
+        antenna_col,
+        pixel_size_m,
+        cp_elevation,
+        ds_factor,
+    )
+
+
+async def process_radio_horizon(ctx: MapDownloadContext) -> Image.Image:
+    """Process radio horizon map (360° coverage for НСУ БпЛА)."""
+    (
+        dem_full,
+        topo_base,
+        antenna_row,
+        antenna_col,
+        pixel_size_m,
+        cp_elevation,
+        ds_factor,
+    ) = await _load_dem_and_topo(
+        ctx, use_retina=RADIO_HORIZON_USE_RETINA, label='радиогоризонта'
+    )
+
+    sp = LiveSpinner('Вычисление радиогоризонта')
+    sp.start()
+
+    result = compute_and_colorize_coverage(
+        dem=dem_full,
+        antenna_row=antenna_row,
+        antenna_col=antenna_col,
+        antenna_height_m=ctx.settings.antenna_height_m,
+        pixel_size_m=pixel_size_m,
+        max_height_m=ctx.settings.max_flight_height_m,
+        uav_height_reference=ctx.settings.uav_height_reference,
+        cp_elevation=cp_elevation,
+    )
+
+    sp.stop('Радиогоризонт вычислен')
+
+    del dem_full
+    gc.collect()
+
+    # Resize if downsampled
+    if ds_factor > 1:
+        target_size = (ctx.crop_rect[2], ctx.crop_rect[3])
+        result = result.resize(target_size, Image.Resampling.BILINEAR)
 
     # Resize topo base to match result for current blend
     if topo_base.size != result.size:
         topo_base = topo_base.resize(result.size, Image.Resampling.BILINEAR)
 
-    # Blend radio horizon with topo base
-    # В настройках хранится "прозрачность слоя" (1 = чистая топооснова),
-    # а blend принимает "непрозрачность" (1 = только радиогоризонт), поэтому инвертируем
+    # Blend
     blend_alpha = 1.0 - ctx.settings.radio_horizon_overlay_alpha
-    logger.info(
-        'Наложение радиогоризонта на топооснову (blend_alpha=%.2f)',
-        blend_alpha,
-    )
     topo_base = topo_base.convert('L').convert('RGBA')
     result = result.convert('RGBA')
+    # Сохраняем слой покрытия до blend для интерактивной альфы
+    ctx.rh_cache_coverage = result.copy()
     result = Image.blend(topo_base, result, blend_alpha)
 
     del topo_base
     gc.collect()
 
     logger.info('Карта радиогоризонта построена')
-
     return result

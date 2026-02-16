@@ -2,37 +2,27 @@
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
 import logging
 import math
+import random
 from typing import TYPE_CHECKING
 
 import numpy as np
 from PIL import Image
 
-from contours.helpers import tx_ty_from_index
-from elevation.provider import ElevationTileProvider
-from elevation.stats import compute_elevation_range, sample_elevation_percentiles
-from geo.geometry import tile_overlap_rect_common
+from elevation.stats import compute_elevation_range
 from geo.topography import (
     ELEV_MIN_RANGE_M,
     ELEV_PCTL_HI,
     ELEV_PCTL_LO,
     ELEVATION_COLOR_RAMP,
-    assemble_dem,
-    decode_terrain_rgb_to_elevation_m,
 )
-from infrastructure.http.client import resolve_cache_dir
 from services.color_utils import ColorMapper
+from services.processors.radio_horizon import _load_dem, _load_topo
 from shared.constants import (
-    CONTOUR_LOG_MEMORY_EVERY_TILES,
-    CONTOUR_PASS2_QUEUE_MAXSIZE,
+    ELEVATION_COLOR_USE_RETINA,
     ELEVATION_LEGEND_STEP_M,
-    ELEVATION_USE_RETINA,
 )
-from shared.diagnostics import log_memory_usage
-from shared.progress import ConsoleProgress
 
 if TYPE_CHECKING:
     from services.map_context import MapDownloadContext
@@ -44,9 +34,10 @@ async def process_elevation_color(ctx: MapDownloadContext) -> Image.Image:
     """
     Process elevation color map using DEM tiles.
 
-    Two-pass approach:
-    1. Sample elevations to determine range
-    2. Colorize tiles using the computed range
+    Single-pass approach:
+    1. Load DEM via shared _load_dem (same as radio_horizon)
+    2. Sample elevations from numpy array to determine range
+    3. Colorize DEM directly using LUT
 
     Args:
         ctx: Map download context with all necessary parameters.
@@ -57,75 +48,21 @@ async def process_elevation_color(ctx: MapDownloadContext) -> Image.Image:
     """
     color_mapper = ColorMapper(ELEVATION_COLOR_RAMP, lut_size=2048)
 
-    provider = ElevationTileProvider(
-        client=ctx.client,
-        api_key=ctx.api_key,
-        use_retina=ELEVATION_USE_RETINA,
-        cache_root=resolve_cache_dir(),
+    # 1. Load DEM (reuse shared loader from radio_horizon)
+    dem_full, ds_factor = await _load_dem(
+        ctx, use_retina=ELEVATION_COLOR_USE_RETINA, label='карты высот'
     )
 
-    full_eff_tile_px = 256 * (2 if ELEVATION_USE_RETINA else 1)
+    # 2. Sample elevations from numpy DEM for percentile estimation
+    rng = random.Random(42)  # noqa: S311
+    flat = dem_full.ravel()
+    sample_count = min(50_000, len(flat))
+    indices = rng.sample(range(len(flat)), sample_count)
+    samples = [float(flat[i]) for i in indices]
 
-    # Pass A: Sample elevations
-    tile_progress = ConsoleProgress(total=len(ctx.tiles), label='Загрузка и анализ DEM')
+    logger.info('DEM sampling: kept=%d from %d pixels', len(samples), len(flat))
 
-    async def get_dem_tile(xw: int, yw: int) -> Image.Image:
-        return await provider.get_tile_image(ctx.zoom, xw, yw)
-
-    samples, seen_count, tile_cache = await sample_elevation_percentiles(
-        enumerate(ctx.tiles),
-        tiles_x=ctx.tiles_x,
-        crop_rect=ctx.crop_rect,
-        full_eff_tile_px=full_eff_tile_px,
-        get_tile_image=get_dem_tile,
-        max_samples=50000,
-        rng_seed=42,
-        on_progress=tile_progress.step,
-        semaphore=ctx.semaphore,
-        cache_tiles=True,
-    )
-
-    with contextlib.suppress(Exception):
-        tile_progress.close()
-
-    logger.info('DEM sampling reservoir: kept=%s seen~=%s', len(samples), seen_count)
-
-    # Build raw DEM for cursor elevation display from cached tiles
-    if tile_cache:
-        try:
-            logger.info(
-                'Building raw DEM for cursor: tile_cache size=%d, tiles=%d',
-                len(tile_cache),
-                len(ctx.tiles),
-            )
-            dem_tiles_data = []
-            for _idx, (tile_x_world, tile_y_world) in enumerate(ctx.tiles):
-                if (tile_x_world, tile_y_world) in tile_cache:
-                    img = tile_cache[(tile_x_world, tile_y_world)]
-                    dem_tile = decode_terrain_rgb_to_elevation_m(img)
-                    dem_tiles_data.append(dem_tile)
-                else:
-                    # Should not happen if cache_tiles=True, but handle gracefully
-                    dem_tiles_data.append(
-                        np.zeros((full_eff_tile_px, full_eff_tile_px), dtype=np.float32)
-                    )
-            ctx.raw_dem_for_cursor = assemble_dem(
-                tiles_data=dem_tiles_data,
-                tiles_x=ctx.tiles_x,
-                tiles_y=ctx.tiles_y,
-                eff_tile_px=full_eff_tile_px,
-                crop_rect=ctx.crop_rect,
-            )
-            logger.info(
-                'Raw DEM for cursor built: shape=%s, min=%.1f, max=%.1f',
-                ctx.raw_dem_for_cursor.shape,
-                float(np.min(ctx.raw_dem_for_cursor)),
-                float(np.max(ctx.raw_dem_for_cursor)),
-            )
-            del dem_tiles_data
-        except Exception as e:
-            logger.warning('Failed to build raw DEM for cursor: %s', e, exc_info=True)
-
+    # 3. Compute elevation range
     lo, hi = compute_elevation_range(
         samples,
         p_lo=ELEV_PCTL_LO,
@@ -138,121 +75,36 @@ async def process_elevation_color(ctx: MapDownloadContext) -> Image.Image:
     hi_rounded = math.ceil(hi / step_m) * step_m
     if hi_rounded <= lo_rounded:
         hi_rounded = lo_rounded + step_m
-    inv = 1.0 / (hi_rounded - lo_rounded)
 
-    # Store elevation range for legend
     ctx.elev_min_m = lo_rounded
     ctx.elev_max_m = hi_rounded
 
-    # Pass B: Colorize tiles
-    result = Image.new('RGB', (ctx.crop_rect[2], ctx.crop_rect[3]))
-    tile_progress = ConsoleProgress(total=len(ctx.tiles), label='Окрашивание DEM')
-    tile_count = 0
+    # 4. Colorize numpy DEM directly (no RGB decoding needed)
+    inv = 1.0 / (hi_rounded - lo_rounded)
+    t = np.clip((dem_full - lo_rounded) * inv, 0.0, 1.0)
+    lut = color_mapper.lut
+    lut_indices = (t * (len(lut) - 1)).astype(np.int32)
+    rgb = lut[lut_indices]  # (H, W, 3)
 
-    queue: asyncio.Queue[tuple[int, int, int, int, int, int, Image.Image] | None] = (
-        asyncio.Queue(maxsize=CONTOUR_PASS2_QUEUE_MAXSIZE)
+    # 5. Scale back if downsampled
+    target_w, target_h = ctx.crop_rect[2], ctx.crop_rect[3]
+    result = Image.fromarray(rgb)
+    if result.size != (target_w, target_h):
+        result = result.resize((target_w, target_h), Image.Resampling.BILINEAR)
+
+    # 6. Load topographic base and blend (DRY — same _load_topo as НСУ/РЛС)
+    topo_base = await _load_topo(
+        ctx, use_retina=ELEVATION_COLOR_USE_RETINA, label='карты высот'
     )
-    paste_lock = asyncio.Lock()
+    if topo_base.size != result.size:
+        topo_base = topo_base.resize(result.size, Image.Resampling.BILINEAR)
 
-    async def producer(idx_xy: tuple[int, tuple[int, int]]) -> None:
-        nonlocal tile_count
-        idx, (tile_x_world, tile_y_world) = idx_xy
-        tx, ty = tx_ty_from_index(idx, ctx.tiles_x)
-        ov = tile_overlap_rect_common(tx, ty, ctx.crop_rect, full_eff_tile_px)
-        if ov is None:
-            await tile_progress.step(1)
-            return
-        # Use cached tile from Pass A
-        if tile_cache and (tile_x_world, tile_y_world) in tile_cache:
-            img = tile_cache[(tile_x_world, tile_y_world)]
-        else:
-            async with ctx.semaphore:
-                img = await provider.get_tile_image(
-                    ctx.zoom, tile_x_world, tile_y_world
-                )
-        x0, y0, x1, y1 = ov
-        await queue.put((tx, ty, x0, y0, x1, y1, img))
+    blend_alpha = 1.0 - ctx.settings.radio_horizon_overlay_alpha
+    topo_gray = topo_base.convert('L').convert('RGBA')
+    result = result.convert('RGBA')
 
-    async def consumer() -> None:
-        nonlocal tile_count
-        ar = 0.1 * 65536.0 * inv
-        ag = 0.1 * 256.0 * inv
-        ab = 0.1 * 1.0 * inv
-        a0 = (-10000.0 - lo_rounded) * inv
+    # Cache layers for interactive alpha (same mechanism as НСУ/РЛС)
+    ctx.rh_cache_topo_base = topo_gray
+    ctx.rh_cache_coverage = result.copy()
 
-        while True:
-            item = await queue.get()
-            if item is None:
-                queue.task_done()
-                break
-            tx, ty, x0, y0, x1, y1, img = item
-            try:
-                cx, cy, _, _ = ctx.crop_rect
-                dx0 = x0 - cx
-                dy0 = y0 - cy
-                base_x = tx * full_eff_tile_px
-                base_y = ty * full_eff_tile_px
-
-                arr = np.asarray(img, dtype=np.uint8)
-                sub = arr[
-                    y0 - base_y : y1 - base_y,
-                    x0 - base_x : x1 - base_x,
-                    :3,
-                ]
-
-                t = (
-                    ar * sub[..., 0].astype(np.float32)
-                    + ag * sub[..., 1].astype(np.float32)
-                    + ab * sub[..., 2].astype(np.float32)
-                    + a0
-                )
-
-                _lut = color_mapper.lut
-                _lut_size = len(_lut)
-                _l = np.clip(t * (_lut_size - 1), 0, _lut_size - 1).astype(np.int32)
-                rgb = np.stack([_lut[_l, c] for c in range(3)], axis=-1).astype(
-                    np.uint8
-                )
-
-                patch = Image.fromarray(rgb)
-                async with paste_lock:
-                    result.paste(patch, (dx0, dy0))
-
-                await tile_progress.step(1)
-                tile_count += 1
-                if tile_count % CONTOUR_LOG_MEMORY_EVERY_TILES == 0:
-                    log_memory_usage(f'pass2(color) after {tile_count} tiles')
-            except Exception as e:
-                logger.warning('Error colorizing tile (%d,%d): %s', tx, ty, e)
-                await tile_progress.step(1)
-            finally:
-                queue.task_done()
-
-    # Run producer/consumer
-    num_consumers = min(4, len(ctx.tiles))
-    consumers = [asyncio.create_task(consumer()) for _ in range(num_consumers)]
-    producers = [asyncio.create_task(producer(pair)) for pair in enumerate(ctx.tiles)]
-
-    try:
-        await asyncio.gather(*producers)
-        for _ in consumers:
-            await queue.put(None)
-        await queue.join()
-        await asyncio.gather(*consumers)
-    except Exception:
-        for task in producers + consumers:
-            task.cancel()
-        for _ in consumers:
-            await queue.put(None)
-        await queue.join()
-        await asyncio.gather(*consumers, return_exceptions=True)
-        raise
-    finally:
-        tile_progress.close()
-        if tile_cache:
-            for img in tile_cache.values():
-                with contextlib.suppress(Exception):
-                    img.close()
-            tile_cache.clear()
-
-    return result
+    return Image.blend(topo_gray, result, blend_alpha)

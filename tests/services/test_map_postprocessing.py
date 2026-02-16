@@ -9,6 +9,7 @@ from services.map_postprocessing import (
     compute_control_point_image_coords,
     draw_center_cross_on_image,
     draw_control_point_triangle,
+    draw_radar_marker,
 )
 
 
@@ -181,3 +182,49 @@ class TestComputeControlPointImageCoords:
         offset1 = cx_scale1 - 500.0
         offset2 = cx_scale2 - 500.0
         assert offset2 == pytest.approx(offset1 * 2)
+
+
+class TestDrawRadarMarker:
+    """Tests for draw_radar_marker function."""
+
+    def test_draws_marker(self):
+        """Should draw diamond marker at specified position."""
+        img = Image.new('RGB', (100, 100), color=(255, 255, 255))
+        draw_radar_marker(img, cx_img=50.0, cy_img=50.0, meters_per_px=1.0)
+        # Check that some pixels near center are not white (marker drawn)
+        center_pixel = img.getpixel((50, 50))
+        assert center_pixel != (255, 255, 255)
+
+    def test_handles_azimuth(self):
+        """Should handle azimuth parameter for direction line."""
+        img = Image.new('RGB', (100, 100), color=(255, 255, 255))
+        draw_radar_marker(
+            img, cx_img=50.0, cy_img=50.0, meters_per_px=1.0,
+            azimuth_deg=90.0,
+        )
+        # Should not raise
+
+    def test_handles_rotation(self):
+        """Should handle rotation parameter."""
+        img = Image.new('RGB', (100, 100), color=(255, 255, 255))
+        draw_radar_marker(
+            img, cx_img=50.0, cy_img=50.0, meters_per_px=1.0,
+            azimuth_deg=45.0, rotation_deg=30.0,
+        )
+
+    def test_handles_zero_meters_per_px(self):
+        """Should not crash with zero meters_per_px."""
+        img = Image.new('RGB', (100, 100), color=(255, 255, 255))
+        draw_radar_marker(img, cx_img=50.0, cy_img=50.0, meters_per_px=0.0)
+
+    def test_handles_negative_meters_per_px(self):
+        """Should not crash with negative meters_per_px."""
+        img = Image.new('RGB', (100, 100), color=(255, 255, 255))
+        draw_radar_marker(img, cx_img=50.0, cy_img=50.0, meters_per_px=-1.0)
+
+    def test_draws_on_rgba(self):
+        """Should work on RGBA images."""
+        img = Image.new('RGBA', (100, 100), color=(255, 255, 255, 255))
+        draw_radar_marker(img, cx_img=50.0, cy_img=50.0, meters_per_px=1.0)
+        center_pixel = img.getpixel((50, 50))
+        assert center_pixel != (255, 255, 255, 255)

@@ -39,7 +39,7 @@ def resolve_cache_dir() -> Path | None:
 
     local = os.getenv('LOCALAPPDATA')
     if local:
-        return (Path(local) / 'SK42mapper' / '.cache' / 'tiles').resolve()
+        return (Path(local) / 'SK42' / '.cache' / 'tiles').resolve()
     # Fallback: user's home directory
     return (Path.home() / '.sk42mapper_cache' / 'tiles').resolve()
 

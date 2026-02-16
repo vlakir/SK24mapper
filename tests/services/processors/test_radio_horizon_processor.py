@@ -68,7 +68,7 @@ async def test_process_radio_horizon_basic():
     # Mocking ElevationTileProvider and topography
     with patch('services.processors.radio_horizon.ElevationTileProvider') as mock_provider_cls, \
          patch('services.processors.radio_horizon.async_fetch_xyz_tile', new_callable=AsyncMock) as mock_fetch_xyz, \
-         patch('services.processors.radio_horizon.compute_and_colorize_radio_horizon') as mock_compute, \
+         patch('services.processors.radio_horizon.compute_and_colorize_coverage') as mock_compute, \
          patch('services.processors.radio_horizon.meters_per_pixel') as mock_mpp:
         
         mock_provider = mock_provider_cls.return_value

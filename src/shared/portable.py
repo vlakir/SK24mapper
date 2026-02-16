@@ -9,7 +9,7 @@ def is_portable_mode() -> bool:
     Определяет, запущено ли приложение в portable режиме.
 
     Portable режим активируется, если имя исполняемого файла содержит '_portable'.
-    Например: SK42mapper_portable.exe
+    Например: SK42_portable.exe
 
     Returns:
         bool: True если приложение в portable режиме, иначе False

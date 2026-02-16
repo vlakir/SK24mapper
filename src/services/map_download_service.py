@@ -36,7 +36,7 @@ from imaging import (
 )
 from imaging.io import build_save_kwargs as _build_save_kwargs
 from imaging.io import save_jpeg as _save_jpeg
-from imaging.transforms import ROTATE_ANGLE_EPS
+from imaging.transforms import _CV2_DIM_LIMIT, ROTATE_ANGLE_EPS
 from infrastructure.http.client import cleanup_sqlite_cache as _cleanup_sqlite_cache
 from infrastructure.http.client import make_http_session as _make_http_session
 from infrastructure.http.client import resolve_cache_dir as _resolve_cache_dir
@@ -53,16 +53,19 @@ from services.map_postprocessing import (
     compute_control_point_image_coords,
     draw_center_cross_on_image,
     draw_control_point_triangle,
+    draw_radar_marker,
 )
 from services.processors.elevation_contours import (
     apply_contours_to_image,
 )
+from services.radar_coverage import draw_sector_overlay
 from services.tile_coverage import compute_tile_coverage
 from shared.constants import (
     ASYNC_MAX_CONCURRENCY,
     CONTROL_POINT_LABEL_GAP_MIN_PX,
     CONTROL_POINT_LABEL_GAP_RATIO,
     DOWNLOAD_CONCURRENCY,
+    ELEVATION_COLOR_USE_RETINA,
     ELEVATION_LEGEND_STEP_M,
     ELEVATION_USE_RETINA,
     MAX_OUTPUT_PIXELS,
@@ -220,7 +223,11 @@ class MapDownloadService:
         ) = await self._determine_map_type(mt_enum, settings)
 
         # Determine scale
-        if is_elev_color or is_elev_contours:
+        if is_elev_color:
+            eff_scale = effective_scale_for_xyz(
+                256, use_retina=ELEVATION_COLOR_USE_RETINA
+            )
+        elif is_elev_contours:
             eff_scale = effective_scale_for_xyz(256, use_retina=ELEVATION_USE_RETINA)
         elif is_radio_horizon:
             eff_scale = effective_scale_for_xyz(
@@ -296,7 +303,9 @@ class MapDownloadService:
         rotation_deg = coord_transformer_obj.compute_rotation_deg(coverage.map_params)
 
         # Determine effective tile size
-        if is_elev_color or is_elev_contours:
+        if is_elev_color:
+            full_eff_tile_px = 256 * (2 if ELEVATION_COLOR_USE_RETINA else 1)
+        elif is_elev_contours:
             full_eff_tile_px = 256 * (2 if ELEVATION_USE_RETINA else 1)
         elif is_radio_horizon:
             full_eff_tile_px = 256 * (2 if RADIO_HORIZON_USE_RETINA else 1)
@@ -400,7 +409,10 @@ class MapDownloadService:
             await _validate_terrain_api(self.api_key)
         elif mt_enum == MapType.RADAR_COVERAGE:
             if not settings.control_point_enabled:
-                msg = 'Для карты зоны обнаружения РЛС необходимо включить контрольную точку'
+                msg = (
+                    'Для карты зоны обнаружения РЛС '
+                    'необходимо включить контрольную точку'
+                )
                 raise ValueError(msg)
             logger.info(
                 'Тип карты: %s (зона обнаружения РЛС); дальность=%s км; '
@@ -420,7 +432,13 @@ class MapDownloadService:
             style_id = map_type_to_style_id(default_map_type())
             await _validate_api_and_connectivity(self.api_key, style_id)
 
-        return style_id, is_elev_color, is_elev_contours, is_radio_horizon, is_radar_coverage
+        return (
+            style_id,
+            is_elev_color,
+            is_elev_contours,
+            is_radio_horizon,
+            is_radar_coverage,
+        )
 
     async def _run_processor(self, ctx: MapDownloadContext) -> Image.Image:
         """Run appropriate processor based on map type."""
@@ -452,9 +470,9 @@ class MapDownloadService:
 
         # Overlay contours if enabled
         if ctx.overlay_contours and not ctx.is_elev_contours:
-            if ctx.is_radio_horizon or ctx.is_radar_coverage:
-                # For RH: draw contours on a separate transparent layer
-                # for inclusion in the cached overlay (interactive recompute)
+            if ctx.is_radio_horizon or ctx.is_radar_coverage or ctx.is_elev_color:
+                # For RH/Radar/ElevColor: draw contours on a separate transparent layer
+                # for inclusion in the cached overlay (interactive alpha slider)
                 contour_layer = Image.new('RGBA', result.size, (0, 0, 0, 0))
                 contour_layer = await self._apply_overlay_contours(ctx, contour_layer)
                 # Composite onto result
@@ -486,19 +504,11 @@ class MapDownloadService:
                 ctx.rh_contour_layer is not None
                 and abs(ctx.rotation_deg) > ROTATE_ANGLE_EPS
             ):
-                cl_arr = np.array(ctx.rh_contour_layer)
-                cl_h, cl_w = cl_arr.shape[:2]
-                cl_center = (cl_w / 2, cl_h / 2)
-                cl_rot_mat = cv2.getRotationMatrix2D(cl_center, ctx.rotation_deg, 1.0)
-                cl_rotated = cv2.warpAffine(
-                    cl_arr,
-                    cl_rot_mat,
-                    (cl_w, cl_h),
-                    flags=cv2.INTER_LINEAR,
-                    borderMode=cv2.BORDER_CONSTANT,
-                    borderValue=(0, 0, 0, 0),
+                ctx.rh_contour_layer = rotate_keep_size(
+                    ctx.rh_contour_layer,
+                    ctx.rotation_deg,
+                    fill=(0, 0, 0, 0),
                 )
-                ctx.rh_contour_layer = Image.fromarray(cl_rotated)
         finally:
             sp.stop('Поворот карты завершён')
         rotation_elapsed = time.monotonic() - rotation_start_time
@@ -533,8 +543,8 @@ class MapDownloadService:
         if ctx.is_elev_color or ctx.is_radio_horizon or ctx.is_radar_coverage:
             self._draw_legend(ctx, result)
 
-        # For radio horizon / radar coverage: create and cache overlay layer
-        if ctx.is_radio_horizon or ctx.is_radar_coverage:
+        # For RH / radar / elev_color: create and cache overlay
+        if ctx.is_radio_horizon or ctx.is_radar_coverage or ctx.is_elev_color:
             self._create_rh_overlay_layer(ctx, result)
 
         # For radar coverage: draw sector overlay after grid/legend
@@ -633,16 +643,28 @@ class MapDownloadService:
             # Apply rotation (same as rotate_keep_size for main image)
             if abs(ctx.rotation_deg) > ROTATION_EPSILON:
                 h, w = dem_full.shape
-                center = (w / 2, h / 2)
-                rotation_matrix = cv2.getRotationMatrix2D(center, ctx.rotation_deg, 1.0)
-                dem_full = cv2.warpAffine(
-                    dem_full,
-                    rotation_matrix,
-                    (w, h),
-                    flags=cv2.INTER_LINEAR,
-                    borderMode=cv2.BORDER_CONSTANT,
-                    borderValue=0.0,
-                )
+                if w >= _CV2_DIM_LIMIT or h >= _CV2_DIM_LIMIT:
+                    # PIL fallback для больших DEM
+                    dem_pil = Image.fromarray(dem_full, mode='F')
+                    dem_pil = dem_pil.rotate(
+                        ctx.rotation_deg,
+                        resample=Image.Resampling.BICUBIC,
+                        fillcolor=0.0,
+                    )
+                    dem_full = np.array(dem_pil)
+                else:
+                    center = (w / 2, h / 2)
+                    rotation_matrix = cv2.getRotationMatrix2D(
+                        center, ctx.rotation_deg, 1.0
+                    )
+                    dem_full = cv2.warpAffine(
+                        dem_full,
+                        rotation_matrix,
+                        (w, h),
+                        flags=cv2.INTER_LINEAR,
+                        borderMode=cv2.BORDER_CONSTANT,
+                        borderValue=0.0,
+                    )
 
             # Center crop DEM to target size (same as center_crop for main image)
             h, w = dem_full.shape
@@ -843,8 +865,11 @@ class MapDownloadService:
             # Draw grid on overlay
             self._draw_grid(ctx, overlay)
 
+            # Save base overlay (contours + grid) for legend rebuild
+            ctx.rh_cache_overlay_base = overlay.copy()
+
             # Draw legend on overlay
-            if ctx.is_radio_horizon or ctx.is_radar_coverage:
+            if ctx.is_radio_horizon or ctx.is_radar_coverage or ctx.is_elev_color:
                 self._draw_legend(ctx, overlay)
 
             # Save to cache
@@ -862,9 +887,6 @@ class MapDownloadService:
     ) -> None:
         """Draw radar sector overlay (shadow, borders, ceiling arcs) on result."""
         try:
-            from services.map_postprocessing import draw_radar_marker
-            from services.radar_coverage import draw_sector_overlay
-
             mpp = ctx.get_meters_per_pixel()
             if mpp <= 0:
                 return
@@ -893,10 +915,7 @@ class MapDownloadService:
             max_range_px = (ctx.settings.radar_max_range_km * 1000.0) / mpp
 
             # Convert to RGBA for overlay drawing
-            if result.mode != 'RGBA':
-                result_rgba = result.convert('RGBA')
-            else:
-                result_rgba = result
+            result_rgba = result.convert('RGBA') if result.mode != 'RGBA' else result
 
             ppm = 1.0 / mpp
             font_size_px = max(10, round(ctx.settings.grid_font_size_m * ppm * 0.4))
@@ -920,7 +939,10 @@ class MapDownloadService:
 
             # Draw radar marker (diamond with direction)
             draw_radar_marker(
-                result_rgba, cx_img, cy_img, mpp,
+                result_rgba,
+                cx_img,
+                cy_img,
+                mpp,
                 azimuth_deg=ctx.settings.radar_azimuth_deg,
                 rotation_deg=ctx.rotation_deg,
             )
@@ -1056,18 +1078,23 @@ class MapDownloadService:
 
             # Collect radio horizon cache if available
             rh_cache = None
-            if (ctx.is_radio_horizon or ctx.is_radar_coverage) and ctx.rh_cache_dem is not None:
+            if (
+                ctx.is_radio_horizon or ctx.is_radar_coverage
+            ) and ctx.rh_cache_dem is not None:
                 rh_cache = {
                     'dem': ctx.rh_cache_dem,
+                    'dem_full': ctx.rh_cache_dem_full,
                     'topo_base': ctx.rh_cache_topo_base,
                     'antenna_row': ctx.rh_cache_antenna_row,
                     'antenna_col': ctx.rh_cache_antenna_col,
                     'pixel_size_m': ctx.rh_cache_pixel_size_m,
                     'antenna_height_m': ctx.settings.antenna_height_m,
                     'overlay_alpha': ctx.settings.radio_horizon_overlay_alpha,
-                    'max_height_m': (ctx.settings.radar_target_height_max_m
-                                     if ctx.is_radar_coverage
-                                     else ctx.settings.max_flight_height_m),
+                    'max_height_m': (
+                        ctx.settings.radar_target_height_max_m
+                        if ctx.is_radar_coverage
+                        else ctx.settings.max_flight_height_m
+                    ),
                     'radar_target_height_min_m': ctx.settings.radar_target_height_min_m,
                     'radar_target_height_max_m': ctx.settings.radar_target_height_max_m,
                     'uav_height_reference': ctx.settings.uav_height_reference,
@@ -1075,8 +1102,11 @@ class MapDownloadService:
                         ctx.target_w_px,
                         ctx.target_h_px,
                     ),  # Финальный размер для масштабирования
+                    'crop_size': ctx.rh_cache_crop_size,
                     # Кэшированный слой с сеткой/легендой/изолиниями
+                    'coverage_layer': ctx.rh_cache_coverage,
                     'overlay_layer': ctx.rh_cache_overlay,
+                    'overlay_base': ctx.rh_cache_overlay_base,
                     # Параметры постобработки (fallback)
                     'settings': ctx.settings,
                     # Флаг типа карты
@@ -1089,6 +1119,19 @@ class MapDownloadService:
                     'radar_max_range_km': ctx.settings.radar_max_range_km,
                     # Угол поворота карты (для компенсации в overlay)
                     'rotation_deg': ctx.rotation_deg,
+                }
+            elif ctx.is_elev_color and ctx.rh_cache_coverage is not None:
+                rh_cache = {
+                    'topo_base': ctx.rh_cache_topo_base,
+                    'overlay_alpha': ctx.settings.radio_horizon_overlay_alpha,
+                    'coverage_layer': ctx.rh_cache_coverage,
+                    'overlay_layer': ctx.rh_cache_overlay,
+                    'overlay_base': ctx.rh_cache_overlay_base,
+                    'settings': ctx.settings,
+                    'is_elev_color': True,
+                    'rotation_deg': ctx.rotation_deg,
+                    'final_size': (ctx.target_w_px, ctx.target_h_px),
+                    'crop_size': ctx.rh_cache_crop_size,
                 }
 
             if gui_image is not None:

@@ -31,12 +31,12 @@ from services.radio_horizon import (
     _build_color_lut,
     _trace_line_of_sight,
     colorize_radio_horizon,
-    compute_and_colorize_radio_horizon,
+    compute_and_colorize_coverage,
     compute_downsample_factor,
     compute_radio_horizon,
     downsample_dem,
     get_radio_horizon_legend_params,
-    recompute_radio_horizon_fast,
+    recompute_coverage_fast,
 )
 
 
@@ -458,7 +458,7 @@ class TestUavHeightReference:
         dem = np.full((20, 20), 100.0, dtype=np.float32)
         dem[10, 10] = 150.0  # Контрольная точка выше
 
-        image = compute_and_colorize_radio_horizon(
+        image = compute_and_colorize_coverage(
             dem=dem,
             antenna_row=10,
             antenna_col=10,
@@ -477,7 +477,7 @@ class TestUavHeightReference:
         dem = np.full((20, 20), 50.0, dtype=np.float32)
         dem[10, 10] = 100.0  # Контрольная точка
 
-        image_ground = compute_and_colorize_radio_horizon(
+        image_ground = compute_and_colorize_coverage(
             dem=dem,
             antenna_row=10,
             antenna_col=10,
@@ -487,7 +487,7 @@ class TestUavHeightReference:
             uav_height_reference=UavHeightReference.GROUND,
         )
 
-        image_cp = compute_and_colorize_radio_horizon(
+        image_cp = compute_and_colorize_coverage(
             dem=dem,
             antenna_row=10,
             antenna_col=10,
@@ -510,7 +510,7 @@ class TestUavHeightReference:
         """Режим SEA_LEVEL — абсолютные высоты от уровня моря."""
         dem = np.full((20, 20), 200.0, dtype=np.float32)
 
-        image_ground = compute_and_colorize_radio_horizon(
+        image_ground = compute_and_colorize_coverage(
             dem=dem,
             antenna_row=10,
             antenna_col=10,
@@ -520,7 +520,7 @@ class TestUavHeightReference:
             uav_height_reference=UavHeightReference.GROUND,
         )
 
-        image_sea = compute_and_colorize_radio_horizon(
+        image_sea = compute_and_colorize_coverage(
             dem=dem,
             antenna_row=10,
             antenna_col=10,
@@ -541,7 +541,7 @@ class TestUavHeightReference:
         dem[10, 10] = 100.0
 
         # Без явного cp_elevation
-        image1 = compute_and_colorize_radio_horizon(
+        image1 = compute_and_colorize_coverage(
             dem=dem,
             antenna_row=10,
             antenna_col=10,
@@ -552,7 +552,7 @@ class TestUavHeightReference:
         )
 
         # С явным cp_elevation = 100 (как в DEM)
-        image2 = compute_and_colorize_radio_horizon(
+        image2 = compute_and_colorize_coverage(
             dem=dem,
             antenna_row=10,
             antenna_col=10,
@@ -647,12 +647,12 @@ class TestColorizeRadioHorizonZeroSize:
 
 
 class TestComputeAndColorizeEmptyDem:
-    """Тесты compute_and_colorize_radio_horizon с пустым DEM."""
+    """Тесты compute_and_colorize_coverage с пустым DEM."""
 
     def test_empty_dem_returns_empty_image(self) -> None:
         """Пустой DEM (size==0) возвращает минимальное изображение."""
         dem = np.array([], dtype=np.float32).reshape(0, 0)
-        result = compute_and_colorize_radio_horizon(
+        result = compute_and_colorize_coverage(
             dem=dem,
             antenna_row=0,
             antenna_col=0,
@@ -664,7 +664,7 @@ class TestComputeAndColorizeEmptyDem:
     def test_zero_height_dem_returns_empty_image(self) -> None:
         """DEM с нулевой высотой (0xN) возвращает минимальное изображение."""
         dem = np.zeros((0, 20), dtype=np.float32)
-        result = compute_and_colorize_radio_horizon(
+        result = compute_and_colorize_coverage(
             dem=dem,
             antenna_row=0,
             antenna_col=0,
@@ -676,7 +676,7 @@ class TestComputeAndColorizeEmptyDem:
     def test_zero_width_dem_returns_empty_image(self) -> None:
         """DEM с нулевой шириной (Nx0) возвращает минимальное изображение."""
         dem = np.zeros((20, 0), dtype=np.float32)
-        result = compute_and_colorize_radio_horizon(
+        result = compute_and_colorize_coverage(
             dem=dem,
             antenna_row=0,
             antenna_col=0,
@@ -688,7 +688,7 @@ class TestComputeAndColorizeEmptyDem:
     def test_empty_dem_image_color(self) -> None:
         """Пустой DEM генерирует изображение с корректным цветом."""
         dem = np.array([], dtype=np.float32).reshape(0, 0)
-        result = compute_and_colorize_radio_horizon(
+        result = compute_and_colorize_coverage(
             dem=dem,
             antenna_row=0,
             antenna_col=0,
@@ -719,7 +719,7 @@ class TestAdaptiveGridStep:
     def test_grid_step_small_threshold(self) -> None:
         """DEM выше порога SMALL использует увеличенный шаг.
 
-        Используется compute_and_colorize_radio_horizon для покрытия линий 503-504.
+        Используется compute_and_colorize_coverage для покрытия линий 503-504.
         """
         # Порог SMALL = 4_000_000. Для 2100x2100 = 4_410_000 > 4_000_000
         # Создаём маленький DEM и проверяем через mock-подход:
@@ -738,10 +738,10 @@ class TestAdaptiveGridStep:
         assert result.shape == (side, side)
 
     def test_compute_and_colorize_grid_step_small_threshold(self) -> None:
-        """compute_and_colorize_radio_horizon с DEM выше порога SMALL."""
+        """compute_and_colorize_coverage с DEM выше порога SMALL."""
         side = math.isqrt(RADIO_HORIZON_GRID_STEP_THRESHOLD_PIXELS_SMALL) + 10
         dem = np.full((side, side), 100.0, dtype=np.float32)
-        result = compute_and_colorize_radio_horizon(
+        result = compute_and_colorize_coverage(
             dem=dem,
             antenna_row=side // 2,
             antenna_col=side // 2,
@@ -858,7 +858,7 @@ class TestRecomputeRadioHorizonFast:
         dem = np.full((20, 20), 100.0, dtype=np.float32)
         topo_base = self._make_topo_base(20, 20)
 
-        result = recompute_radio_horizon_fast(
+        result, _ = recompute_coverage_fast(
             dem=dem,
             new_antenna_row=10,
             new_antenna_col=10,
@@ -877,7 +877,7 @@ class TestRecomputeRadioHorizonFast:
         dem = np.full((20, 20), 100.0, dtype=np.float32)
         topo_base = self._make_topo_base(40, 40)
 
-        result = recompute_radio_horizon_fast(
+        result, _ = recompute_coverage_fast(
             dem=dem,
             new_antenna_row=10,
             new_antenna_col=10,
@@ -896,7 +896,7 @@ class TestRecomputeRadioHorizonFast:
         dem = np.full((20, 20), 100.0, dtype=np.float32)
         topo_base = self._make_topo_base(30, 30)  # Отличается от dem и final_size
 
-        result = recompute_radio_horizon_fast(
+        result, _ = recompute_coverage_fast(
             dem=dem,
             new_antenna_row=10,
             new_antenna_col=10,
@@ -915,7 +915,7 @@ class TestRecomputeRadioHorizonFast:
         dem = np.full((20, 20), 100.0, dtype=np.float32)
         topo_base = self._make_topo_base(20, 20)
 
-        result = recompute_radio_horizon_fast(
+        result, _ = recompute_coverage_fast(
             dem=dem,
             new_antenna_row=10,
             new_antenna_col=10,
@@ -933,7 +933,7 @@ class TestRecomputeRadioHorizonFast:
         dem = np.full((20, 20), 100.0, dtype=np.float32)
         topo_base = self._make_topo_base(20, 20)
 
-        result = recompute_radio_horizon_fast(
+        result, _ = recompute_coverage_fast(
             dem=dem,
             new_antenna_row=10,
             new_antenna_col=10,
@@ -953,7 +953,7 @@ class TestRecomputeRadioHorizonFast:
 
         topo_red = Image.new('RGBA', (20, 20), (255, 0, 0, 255))
 
-        result_alpha_0 = recompute_radio_horizon_fast(
+        result_alpha_0, _ = recompute_coverage_fast(
             dem=dem,
             new_antenna_row=10,
             new_antenna_col=10,
@@ -963,7 +963,7 @@ class TestRecomputeRadioHorizonFast:
             overlay_alpha=0.0,
             grid_step=2,
         )
-        result_alpha_1 = recompute_radio_horizon_fast(
+        result_alpha_1, _ = recompute_coverage_fast(
             dem=dem,
             new_antenna_row=10,
             new_antenna_col=10,
@@ -983,7 +983,7 @@ class TestRecomputeRadioHorizonFast:
         dem = np.full((20, 20), 100.0, dtype=np.float32)
         topo_base = self._make_topo_base(20, 20)
 
-        result = recompute_radio_horizon_fast(
+        result, _ = recompute_coverage_fast(
             dem=dem,
             new_antenna_row=100,
             new_antenna_col=100,
@@ -1001,7 +1001,7 @@ class TestRecomputeRadioHorizonFast:
         dem = np.full((20, 20), 100.0, dtype=np.float32)
         topo_base = self._make_topo_base(20, 20)
 
-        result = recompute_radio_horizon_fast(
+        result, _ = recompute_coverage_fast(
             dem=dem,
             new_antenna_row=-5,
             new_antenna_col=-5,
@@ -1020,7 +1020,7 @@ class TestRecomputeRadioHorizonFast:
         dem[10, 10] = 150.0
         topo_base = self._make_topo_base(20, 20)
 
-        result = recompute_radio_horizon_fast(
+        result, _ = recompute_coverage_fast(
             dem=dem,
             new_antenna_row=10,
             new_antenna_col=10,
@@ -1039,7 +1039,7 @@ class TestRecomputeRadioHorizonFast:
         dem = np.full((25, 30), 100.0, dtype=np.float32)
         topo_base = self._make_topo_base(30, 25)
 
-        result = recompute_radio_horizon_fast(
+        result, _ = recompute_coverage_fast(
             dem=dem,
             new_antenna_row=12,
             new_antenna_col=15,
@@ -1084,13 +1084,13 @@ class TestGetRadioHorizonLegendParamsFull:
 
 
 class TestComputeAndColorizeAdaptiveGridStep:
-    """Тесты адаптивного шага сетки в compute_and_colorize_radio_horizon."""
+    """Тесты адаптивного шага сетки в compute_and_colorize_coverage."""
 
     def test_small_threshold_colorize(self) -> None:
         """DEM выше порога SMALL использует увеличенный шаг в colorize-версии."""
         side = math.isqrt(RADIO_HORIZON_GRID_STEP_THRESHOLD_PIXELS_SMALL) + 10
         dem = np.full((side, side), 100.0, dtype=np.float32)
-        result = compute_and_colorize_radio_horizon(
+        result = compute_and_colorize_coverage(
             dem=dem,
             antenna_row=side // 2,
             antenna_col=side // 2,
@@ -1120,7 +1120,7 @@ class TestIntegrationFull:
         )
         image = colorize_radio_horizon(matrix, max_height_m=500.0)
 
-        combined = compute_and_colorize_radio_horizon(
+        combined = compute_and_colorize_coverage(
             dem=dem,
             antenna_row=15,
             antenna_col=15,
@@ -1134,13 +1134,13 @@ class TestIntegrationFull:
         assert image.mode == combined.mode
 
     def test_recompute_matches_initial_compute(self) -> None:
-        """recompute_radio_horizon_fast с overlay_alpha=0 даёт результат
+        """recompute_coverage_fast с overlay_alpha=0 даёт результат
         близкий к compute_and_colorize."""
         dem = np.full((20, 20), 100.0, dtype=np.float32)
         dem[5:10, 5:10] = 150.0
 
         # Основной расчёт
-        initial = compute_and_colorize_radio_horizon(
+        initial = compute_and_colorize_coverage(
             dem=dem,
             antenna_row=10,
             antenna_col=10,
@@ -1151,7 +1151,7 @@ class TestIntegrationFull:
 
         # Быстрый пересчёт с overlay_alpha=0 (blend_alpha=1, чистый радиогоризонт)
         topo_base = Image.new('RGBA', (20, 20), (0, 0, 0, 255))
-        recomputed = recompute_radio_horizon_fast(
+        recomputed, _ = recompute_coverage_fast(
             dem=dem,
             new_antenna_row=10,
             new_antenna_col=10,
@@ -1164,4 +1164,189 @@ class TestIntegrationFull:
 
         # Размеры должны совпадать
         assert initial.size == recomputed.size[:2] if hasattr(recomputed.size, '__getitem__') else True
+
+
+class TestComputeAndColorizeCoverage:
+    """Tests for generalized compute_and_colorize_coverage (sector support)."""
+
+    def test_without_sector_matches_radio_horizon(self) -> None:
+        """Without sector (default params), result matches radio horizon."""
+        dem = np.full((20, 20), 100.0, dtype=np.float32)
+        dem[5:10, 5:10] = 150.0
+
+        rh_result = compute_and_colorize_coverage(
+            dem=dem, antenna_row=10, antenna_col=10,
+            antenna_height_m=10.0, pixel_size_m=10.0,
+            max_height_m=500.0, grid_step=2,
+        )
+        cov_result = compute_and_colorize_coverage(
+            dem=dem, antenna_row=10, antenna_col=10,
+            antenna_height_m=10.0, pixel_size_m=10.0,
+            max_height_m=500.0, grid_step=2,
+            sector_enabled=False,
+        )
+
+        assert rh_result.size == cov_result.size
+        assert rh_result.mode == cov_result.mode
+
+    def test_with_sector_returns_image(self) -> None:
+        """With sector enabled, should return valid image."""
+        dem = np.full((30, 30), 100.0, dtype=np.float32)
+        result = compute_and_colorize_coverage(
+            dem=dem, antenna_row=15, antenna_col=15,
+            antenna_height_m=10.0, pixel_size_m=10.0,
+            max_height_m=500.0, grid_step=2,
+            sector_enabled=True,
+            radar_azimuth_deg=0.0,
+            radar_sector_width_deg=90.0,
+            elevation_min_deg=0.5,
+            elevation_max_deg=30.0,
+            max_range_m=200.0,  # 200m → 20 pixels at pixel_size=10
+        )
+
+        assert result.size == (30, 30)
+        assert result.mode == 'RGB'
+
+    def test_sector_produces_nan_outside(self) -> None:
+        """Sector filtering should result in different colors outside sector."""
+        dem = np.full((40, 40), 100.0, dtype=np.float32)
+
+        # Full circle (no sector)
+        full = compute_and_colorize_coverage(
+            dem=dem, antenna_row=20, antenna_col=20,
+            antenna_height_m=10.0, pixel_size_m=10.0,
+            sector_enabled=False, grid_step=2,
+        )
+
+        # Narrow sector
+        sector = compute_and_colorize_coverage(
+            dem=dem, antenna_row=20, antenna_col=20,
+            antenna_height_m=10.0, pixel_size_m=10.0,
+            sector_enabled=True,
+            radar_azimuth_deg=0.0,
+            radar_sector_width_deg=30.0,
+            max_range_m=150.0,
+            grid_step=2,
+        )
+
+        # Images should differ (sector has NaN regions colored differently)
+        arr_full = np.array(full)
+        arr_sector = np.array(sector)
+        assert not np.array_equal(arr_full, arr_sector)
+
+    def test_empty_dem_with_sector(self) -> None:
+        """Empty DEM with sector should return empty image."""
+        dem = np.array([], dtype=np.float32).reshape(0, 0)
+        result = compute_and_colorize_coverage(
+            dem=dem, antenna_row=0, antenna_col=0,
+            antenna_height_m=10.0, pixel_size_m=10.0,
+            sector_enabled=True,
+            radar_azimuth_deg=0.0,
+            radar_sector_width_deg=90.0,
+        )
+        assert result.size == (1, 1)
+
+    def test_different_azimuths_differ(self) -> None:
+        """Different azimuths should produce different images."""
+        dem = np.full((30, 30), 100.0, dtype=np.float32)
+        dem[5:10, 20:25] = 200.0  # Hill to the east
+
+        kwargs = dict(
+            dem=dem, antenna_row=15, antenna_col=15,
+            antenna_height_m=10.0, pixel_size_m=10.0,
+            sector_enabled=True,
+            radar_sector_width_deg=60.0,
+            max_range_m=150.0, grid_step=2,
+        )
+
+        result_north = compute_and_colorize_coverage(radar_azimuth_deg=0.0, **kwargs)
+        result_east = compute_and_colorize_coverage(radar_azimuth_deg=90.0, **kwargs)
+
+        arr_n = np.array(result_north)
+        arr_e = np.array(result_east)
+        assert not np.array_equal(arr_n, arr_e)
+
+
+class TestRecomputeCoverageFast:
+    """Tests for generalized recompute_coverage_fast."""
+
+    def _make_topo_base(self, w: int, h: int) -> Image.Image:
+        return Image.new('RGBA', (w, h), (128, 128, 128, 255))
+
+    def test_without_sector(self) -> None:
+        """Without sector should work like recompute_coverage_fast."""
+        dem = np.full((20, 20), 100.0, dtype=np.float32)
+        topo = self._make_topo_base(20, 20)
+
+        result, _ = recompute_coverage_fast(
+            dem=dem, new_antenna_row=10, new_antenna_col=10,
+            antenna_height_m=10.0, pixel_size_m=10.0,
+            topo_base=topo, overlay_alpha=0.5, grid_step=2,
+        )
+
+        assert result.size == (20, 20)
+        assert result.mode == 'RGBA'
+
+    def test_with_sector(self) -> None:
+        """With sector should return valid image."""
+        dem = np.full((20, 20), 100.0, dtype=np.float32)
+        topo = self._make_topo_base(20, 20)
+
+        result, _ = recompute_coverage_fast(
+            dem=dem, new_antenna_row=10, new_antenna_col=10,
+            antenna_height_m=10.0, pixel_size_m=10.0,
+            topo_base=topo, overlay_alpha=0.5, grid_step=2,
+            sector_enabled=True,
+            radar_azimuth_deg=45.0,
+            radar_sector_width_deg=90.0,
+            elevation_min_deg=0.5,
+            elevation_max_deg=30.0,
+            max_range_m=150.0,
+        )
+
+        assert result.size == (20, 20)
+        assert result.mode == 'RGBA'
+
+    def test_with_sector_and_final_size(self) -> None:
+        """With sector and final_size should scale result."""
+        dem = np.full((20, 20), 100.0, dtype=np.float32)
+        topo = self._make_topo_base(40, 40)
+
+        result, _ = recompute_coverage_fast(
+            dem=dem, new_antenna_row=10, new_antenna_col=10,
+            antenna_height_m=10.0, pixel_size_m=10.0,
+            topo_base=topo, overlay_alpha=0.5,
+            final_size=(40, 40), grid_step=2,
+            sector_enabled=True,
+            radar_azimuth_deg=0.0,
+            radar_sector_width_deg=60.0,
+            max_range_m=100.0,
+        )
+
+        assert result.size == (40, 40)
+
+    def test_sector_vs_no_sector_differ(self) -> None:
+        """Sector enabled should produce different result from no sector."""
+        dem = np.full((20, 20), 100.0, dtype=np.float32)
+        dem[15:20, 15:20] = 200.0
+        topo = self._make_topo_base(20, 20)
+
+        kwargs = dict(
+            dem=dem, new_antenna_row=10, new_antenna_col=10,
+            antenna_height_m=10.0, pixel_size_m=10.0,
+            topo_base=topo, overlay_alpha=0.3, grid_step=2,
+        )
+
+        result_full, _ = recompute_coverage_fast(**kwargs)
+        result_sector, _ = recompute_coverage_fast(
+            **kwargs,
+            sector_enabled=True,
+            radar_azimuth_deg=0.0,
+            radar_sector_width_deg=60.0,
+            max_range_m=100.0,
+        )
+
+        arr_f = np.array(result_full)
+        arr_s = np.array(result_sector)
+        assert not np.array_equal(arr_f, arr_s)
 

@@ -8,7 +8,7 @@ from domain.models import MapSettings
 def temp_profiles_dir(tmp_path, monkeypatch):
     profiles_dir = tmp_path / "profiles"
     profiles_dir.mkdir()
-    monkeypatch.setattr("profiles._user_profiles_dir", lambda: profiles_dir)
+    monkeypatch.setattr("domain.profiles._user_profiles_dir", lambda: profiles_dir)
     return profiles_dir
 
 @pytest.fixture

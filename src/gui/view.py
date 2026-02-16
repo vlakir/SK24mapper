@@ -3,15 +3,29 @@
 from __future__ import annotations
 
 import logging
+import math
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from PIL import Image, ImageDraw
-from PySide6.QtCore import QObject, QSignalBlocker, Qt, QThread, QTimer, Signal, Slot
+from pyproj import Transformer
+from PySide6.QtCore import (
+    QObject,
+    QPointF,
+    QRectF,
+    QSignalBlocker,
+    Qt,
+    QThread,
+    QTimer,
+    Signal,
+    Slot,
+)
 from PySide6.QtGui import (
     QAction,
     QCloseEvent,
+    QColor,
+    QPainter,
     QPixmapCache,
     QResizeEvent,
     QShowEvent,
@@ -21,7 +35,9 @@ from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
     QComboBox,
+    QDial,
     QDialog,
+    QDialogButtonBox,
     QDoubleSpinBox,
     QFileDialog,
     QFrame,
@@ -32,7 +48,6 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMainWindow,
     QMessageBox,
-    QProgressBar,
     QProgressDialog,
     QPushButton,
     QRadioButton,
@@ -41,16 +56,25 @@ from PySide6.QtWidgets import (
     QSlider,
     QSplitter,
     QStatusBar,
-    QTabWidget,
+    QStyle,
     QVBoxLayout,
     QWidget,
 )
+from superqt import QRangeSlider
 
 from domain.profiles import ensure_profiles_dir
+from geo.coords_sk42 import build_sk42_gk_crs, determine_zone
+from geo.topography import (
+    build_transformers_sk42,
+    crs_sk42_geog,
+    latlng_to_pixel_xy,
+    pixel_xy_to_latlng,
+)
 from gui.controller import MilMapperController
 from gui.model import EventData, MilMapperModel, ModelEvent, Observer
 from gui.preview_window import OptimizedImageView
 from gui.status_bar import StatusBarProxy
+from gui.theme import apply_theme
 from gui.widgets import (
     CoordinateInputWidget,
     OldCoordinateInputWidget,
@@ -63,6 +87,7 @@ from imaging import (
     draw_label_with_subscript_bg,
     load_grid_font,
 )
+from imaging.transforms import center_crop, rotate_keep_size
 from services.coordinate_transformer import CoordinateTransformer
 from services.map_postprocessing import (
     compute_control_point_image_coords,
@@ -70,15 +95,19 @@ from services.map_postprocessing import (
     draw_radar_marker,
 )
 from services.radar_coverage import draw_sector_overlay
-from services.radio_horizon import recompute_coverage_fast, recompute_radio_horizon_fast
+from services.radio_horizon import recompute_coverage_fast
 from shared.constants import (
     CONTROL_POINT_LABEL_GAP_MIN_PX,
     CONTROL_POINT_LABEL_GAP_RATIO,
+    CONTROL_POINT_PRECISION_TOLERANCE_M,
     COORDINATE_FORMAT_SPLIT_LENGTH,
     ELEVATION_LEGEND_STEP_M,
     MAP_TYPE_LABELS_RU,
     MIN_DECIMALS_FOR_SMALL_STEP,
     RADIO_HORIZON_COLOR_RAMP,
+    ROTATION_EPSILON,
+    ROTATION_INVERSE_THRESHOLD_DEG,
+    UAV_HEIGHT_REFERENCE_ABBR,
     MapType,
     UavHeightReference,
 )
@@ -94,24 +123,89 @@ from shared.progress import (
 )
 from shared.progress import set_progress_callback as _set_prog
 
+# ---------------------------------------------------------------------------
+# QRangeSlider subclass that survives global-QSS style resets
+# ---------------------------------------------------------------------------
+
+
+class _DarculaRangeSlider(QRangeSlider):
+    """
+    QRangeSlider with fully custom Darcula painting.
+
+    superqt's default painting is invisible on dark themes (semi-transparent
+    bar on Windows, global-QSS conflicts).  We bypass it entirely and draw
+    groove, bar, and handles ourselves to match the global Darcula theme.
+    """
+
+    _GROOVE_COLOR = QColor('#43454a')
+    _BAR_COLOR = QColor('#4882d4')
+    _HANDLE_COLOR = QColor('#4882d4')
+    _HANDLE_HOVER_COLOR = QColor('#5c9be0')
+    _GROOVE_H = 4.0
+    _HANDLE_R = 6.0  # radius — matches global theme (width 12px)
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)  # type: ignore[arg-type]
+        self._style.horizontal_thickness = self._GROOVE_H
+        self._style.has_stylesheet = True
+
+    def paintEvent(self, _ev: object) -> None:
+        """Draw groove → bar → handles with QPainter."""
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(Qt.PenStyle.NoPen)
+
+        opt = self._styleOption
+        groove = self.style().subControlRect(
+            QStyle.ComplexControl.CC_Slider,
+            opt,
+            QStyle.SubControl.SC_SliderGroove,
+            self,
+        )
+        cy = groove.center().y()
+        gh = self._GROOVE_H
+
+        # 1) Groove — full-width gray line
+        p.setBrush(self._GROOVE_COLOR)
+        p.drawRoundedRect(
+            QRectF(groove.left(), cy - gh / 2, groove.width(), gh),
+            2,
+            2,
+        )
+
+        # 2) Bar — blue line between handle centers
+        hdl_lo = self._handleRect(0, opt)
+        hdl_hi = self._handleRect(-1, opt)
+        bar_l = hdl_lo.center().x()
+        bar_r = hdl_hi.center().x()
+        if bar_r > bar_l:
+            p.setBrush(self._BAR_COLOR)
+            p.drawRoundedRect(
+                QRectF(bar_l, cy - gh / 2, bar_r - bar_l, gh),
+                2,
+                2,
+            )
+
+        # 3) Handles — circles on top
+        hover_idx = (
+            self._hoverIndex
+            if self._hoverControl == QStyle.SubControl.SC_SliderHandle
+            else -1
+        )
+        for idx in range(len(self._optSliderPositions)):
+            hr = self._handleRect(idx, opt)
+            center = QPointF(hr.center())
+            color = self._HANDLE_HOVER_COLOR if idx == hover_idx else self._HANDLE_COLOR
+            p.setBrush(color)
+            p.drawEllipse(center, self._HANDLE_R, self._HANDLE_R)
+
+        p.end()
+
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from domain.models import MapMetadata, MapSettings
-
-
-import math
-
-from pyproj import Transformer
-
-from geo.coords_sk42 import build_sk42_gk_crs, determine_zone
-from geo.topography import (
-    build_transformers_sk42,
-    crs_sk42_geog,
-    latlng_to_pixel_xy,
-    pixel_xy_to_latlng,
-)
-from shared.constants import CONTROL_POINT_PRECISION_TOLERANCE_M
 
 logger = logging.getLogger(__name__)
 
@@ -126,75 +220,12 @@ class _ViewObserver(Observer):
         self._handler(event_data)
 
 
-class RadioHorizonRecomputeWorker(QThread):
-    """Worker thread for radio horizon recomputation."""
-
-    finished = Signal(
-        Image.Image, int, int
-    )  # result_image, new_antenna_row, new_antenna_col
-    error = Signal(str)  # error_message
-
-    def __init__(
-        self,
-        rh_cache: dict[str, Any],
-        new_antenna_row: int,
-        new_antenna_col: int,
-    ) -> None:
-        super().__init__()
-        self._rh_cache = rh_cache
-        self._new_antenna_row = new_antenna_row
-        self._new_antenna_col = new_antenna_col
-
-    def run(self) -> None:
-        """Execute recomputation in background thread."""
-        try:
-            start_time = time.monotonic()
-            logger.info(
-                'RadioHorizonRecomputeWorker: recomputing with antenna at (%d, %d)',
-                self._new_antenna_col,
-                self._new_antenna_row,
-            )
-
-            # Step 1: Recompute radio horizon (with resize inside if needed)
-            step_start = time.monotonic()
-            final_size = self._rh_cache.get('final_size')
-            result_image = recompute_radio_horizon_fast(
-                dem=self._rh_cache['dem'],
-                new_antenna_row=self._new_antenna_row,
-                new_antenna_col=self._new_antenna_col,
-                antenna_height_m=self._rh_cache['antenna_height_m'],
-                pixel_size_m=self._rh_cache['pixel_size_m'],
-                topo_base=self._rh_cache['topo_base'],
-                overlay_alpha=self._rh_cache['overlay_alpha'],
-                max_height_m=self._rh_cache['max_height_m'],
-                uav_height_reference=self._rh_cache['uav_height_reference'],
-                final_size=final_size,
-            )
-            step_elapsed = time.monotonic() - step_start
-            logger.info(
-                '  └─ Recompute radio horizon (with resize): %.3f sec', step_elapsed
-            )
-
-            total_elapsed = time.monotonic() - start_time
-            logger.info(
-                'RadioHorizonRecomputeWorker: recomputation completed in %.3f sec',
-                total_elapsed,
-            )
-            self.finished.emit(
-                result_image, self._new_antenna_row, self._new_antenna_col
-            )
-
-        except Exception as e:
-            logger.exception('RadioHorizonRecomputeWorker failed')
-            self.error.emit(str(e))
-
-
 class CoverageRecomputeWorker(QThread):
     """Обобщённый worker для пересчёта покрытия (НСУ 360° или РЛС с сектором)."""
 
     finished = Signal(
-        Image.Image, int, int
-    )  # result_image, new_antenna_row, new_antenna_col
+        Image.Image, Image.Image, int, int
+    )  # result_image, coverage_layer, new_antenna_row, new_antenna_col
     error = Signal(str)
 
     def __init__(
@@ -217,7 +248,9 @@ class CoverageRecomputeWorker(QThread):
             mode = 'radar coverage' if self._sector_params else 'radio horizon'
             logger.info(
                 'CoverageRecomputeWorker: recomputing %s with antenna at (%d, %d)',
-                mode, self._new_antenna_col, self._new_antenna_row,
+                mode,
+                self._new_antenna_col,
+                self._new_antenna_row,
             )
 
             step_start = time.monotonic()
@@ -225,20 +258,33 @@ class CoverageRecomputeWorker(QThread):
 
             sector_kwargs = {}
             if self._sector_params:
-                max_h = self._sector_params.get('radar_target_height_max_m', self._rh_cache['max_height_m'])
+                max_h = self._sector_params.get(
+                    'radar_target_height_max_m', self._rh_cache['max_height_m']
+                )
                 sector_kwargs = {
                     'sector_enabled': True,
-                    'radar_azimuth_deg': self._sector_params.get('radar_azimuth_deg', 0.0),
-                    'radar_sector_width_deg': self._sector_params.get('radar_sector_width_deg', 90.0),
-                    'elevation_min_deg': self._sector_params.get('radar_elevation_min_deg', 0.5),
-                    'elevation_max_deg': self._sector_params.get('radar_elevation_max_deg', 30.0),
-                    'max_range_m': self._sector_params.get('radar_max_range_km', 15.0) * 1000.0,
-                    'target_height_min_m': self._sector_params.get('radar_target_height_min_m', 0.0),
+                    'radar_azimuth_deg': self._sector_params.get(
+                        'radar_azimuth_deg', 0.0
+                    ),
+                    'radar_sector_width_deg': self._sector_params.get(
+                        'radar_sector_width_deg', 90.0
+                    ),
+                    'elevation_min_deg': self._sector_params.get(
+                        'radar_elevation_min_deg', 0.5
+                    ),
+                    'elevation_max_deg': self._sector_params.get(
+                        'radar_elevation_max_deg', 30.0
+                    ),
+                    'max_range_m': self._sector_params.get('radar_max_range_km', 15.0)
+                    * 1000.0,
+                    'target_height_min_m': self._sector_params.get(
+                        'radar_target_height_min_m', 0.0
+                    ),
                 }
             else:
                 max_h = self._rh_cache['max_height_m']
 
-            result_image = recompute_coverage_fast(
+            result_image, coverage_layer = recompute_coverage_fast(
                 dem=self._rh_cache['dem'],
                 new_antenna_row=self._new_antenna_row,
                 new_antenna_col=self._new_antenna_col,
@@ -249,12 +295,12 @@ class CoverageRecomputeWorker(QThread):
                 max_height_m=max_h,
                 uav_height_reference=self._rh_cache['uav_height_reference'],
                 final_size=final_size,
+                crop_size=self._rh_cache.get('crop_size'),
+                rotation_deg=self._rh_cache.get('rotation_deg', 0.0),
                 **sector_kwargs,
             )
             step_elapsed = time.monotonic() - step_start
-            logger.info(
-                '  └─ Recompute coverage (with resize): %.3f sec', step_elapsed
-            )
+            logger.info('  └─ Recompute coverage (with resize): %.3f sec', step_elapsed)
 
             total_elapsed = time.monotonic() - start_time
             logger.info(
@@ -262,7 +308,10 @@ class CoverageRecomputeWorker(QThread):
                 total_elapsed,
             )
             self.finished.emit(
-                result_image, self._new_antenna_row, self._new_antenna_col
+                result_image,
+                coverage_layer,
+                self._new_antenna_row,
+                self._new_antenna_col,
             )
 
         except Exception as e:
@@ -281,24 +330,9 @@ class GridSettingsWidget(QWidget):
         """Setup grid settings UI."""
         layout = QGridLayout()
 
-        # Display grid checkbox - FIRST
-        self.display_grid_cb = QCheckBox('Выводить сетку')
-        self.display_grid_cb.setChecked(True)
-        self.display_grid_cb.setToolTip(
-            'Если включено: рисуются линии сетки и подписи.\n'
-            'Если выключено: рисуются только крестики в точках пересечения '
-            'без подписей.'
-        )
-        layout.addWidget(self.display_grid_cb, 0, 0, 1, 2)  # Растянуть на 2 колонки
-
-        # Connect checkbox to enable/disable handler
-        self.display_grid_cb.toggled.connect(
-            lambda checked: self._on_display_grid_toggled(checked=checked)
-        )
-
         # Grid width (in meters)
         self.width_label = QLabel('Толщина линий (м):')
-        layout.addWidget(self.width_label, 1, 0)
+        layout.addWidget(self.width_label, 0, 0)
         self.width_spin = QDoubleSpinBox()
         self.width_spin.setRange(1.0, 50.0)
         self.width_spin.setValue(5.0)
@@ -307,33 +341,33 @@ class GridSettingsWidget(QWidget):
         self.width_spin.setToolTip(
             'Толщина линий сетки в метрах (пересчитывается в пиксели по масштабу карты)'
         )
-        layout.addWidget(self.width_spin, 1, 1)
+        layout.addWidget(self.width_spin, 0, 1)
 
         # Font size (in meters)
         self.font_label = QLabel('Размер шрифта (м):')
-        layout.addWidget(self.font_label, 2, 0)
+        layout.addWidget(self.font_label, 1, 0)
         self.font_spin = QDoubleSpinBox()
         self.font_spin.setRange(10.0, 500.0)
         self.font_spin.setValue(100.0)
         self.font_spin.setSingleStep(10.0)
         self.font_spin.setDecimals(1)
         self.font_spin.setToolTip('Размер шрифта подписей координат в метрах')
-        layout.addWidget(self.font_spin, 2, 1)
+        layout.addWidget(self.font_spin, 1, 1)
 
         # Text margin (in meters)
         self.margin_label = QLabel('Отступ текста (м):')
-        layout.addWidget(self.margin_label, 3, 0)
+        layout.addWidget(self.margin_label, 2, 0)
         self.margin_spin = QDoubleSpinBox()
         self.margin_spin.setRange(0.0, 200.0)
         self.margin_spin.setValue(50.0)
         self.margin_spin.setSingleStep(5.0)
         self.margin_spin.setDecimals(1)
         self.margin_spin.setToolTip('Отступ подписи от края изображения в метрах')
-        layout.addWidget(self.margin_spin, 3, 1)
+        layout.addWidget(self.margin_spin, 2, 1)
 
         # Label background padding (in meters)
         self.padding_label = QLabel('Отступ фона (м):')
-        layout.addWidget(self.padding_label, 4, 0)
+        layout.addWidget(self.padding_label, 3, 0)
         self.padding_spin = QDoubleSpinBox()
         self.padding_spin.setRange(0.0, 100.0)
         self.padding_spin.setValue(10.0)
@@ -342,29 +376,17 @@ class GridSettingsWidget(QWidget):
         self.padding_spin.setToolTip(
             'Внутренний отступ подложки вокруг текста в метрах'
         )
-        layout.addWidget(self.padding_spin, 4, 1)
+        layout.addWidget(self.padding_spin, 3, 1)
 
         self.setLayout(layout)
 
-    def _on_display_grid_toggled(self, *, checked: bool) -> None:
-        """Enable/disable grid parameters based on display_grid checkbox state."""
-        self.width_label.setEnabled(checked)
-        self.width_spin.setEnabled(checked)
-        self.font_label.setEnabled(checked)
-        self.font_spin.setEnabled(checked)
-        self.margin_label.setEnabled(checked)
-        self.margin_spin.setEnabled(checked)
-        self.padding_label.setEnabled(checked)
-        self.padding_spin.setEnabled(checked)
-
-    def get_settings(self) -> dict[str, float | bool]:
+    def get_settings(self) -> dict[str, float]:
         """Get grid settings as dictionary."""
         return {
             'grid_width_m': self.width_spin.value(),
             'grid_font_size_m': self.font_spin.value(),
             'grid_text_margin_m': self.margin_spin.value(),
             'grid_label_bg_padding_m': self.padding_spin.value(),
-            'display_grid': self.display_grid_cb.isChecked(),
         }
 
     def set_settings(self, settings: dict[str, float | bool]) -> None:
@@ -380,11 +402,6 @@ class GridSettingsWidget(QWidget):
             self.padding_spin.setValue(
                 float(settings.get('grid_label_bg_padding_m', 10.0))
             )
-        with QSignalBlocker(self.display_grid_cb):
-            self.display_grid_cb.setChecked(bool(settings.get('display_grid', True)))
-
-        # Manually trigger enable/disable logic since signal was blocked
-        self._on_display_grid_toggled(checked=self.display_grid_cb.isChecked())
 
 
 class OutputSettingsWidget(QWidget):
@@ -478,7 +495,7 @@ class HelmertSettingsWidget(QWidget):
 
         # Info label
         info = QLabel('Единицы: dx/dy/dz — метры; rx/ry/rz — угловые секунды; ds — ppm')
-        info.setStyleSheet('color: #555;')
+        info.setObjectName('infoLabel')
         row += 1
         layout.addWidget(info, row, 0, 1, 4)
 
@@ -595,7 +612,9 @@ class ModalOverlay(QWidget):
 class ApiKeyDialog(QDialog):
     """Dialog for viewing and changing the API key."""
 
-    def __init__(self, controller: MilMapperController, parent: QWidget | None = None) -> None:
+    def __init__(
+        self, controller: MilMapperController, parent: QWidget | None = None
+    ) -> None:
         super().__init__(parent)
         self._controller = controller
         self.setWindowTitle('API ключ')
@@ -664,6 +683,178 @@ class ApiKeyDialog(QDialog):
             QMessageBox.critical(self, 'Ошибка', 'Не удалось сохранить API ключ.')
 
 
+class AdvancedSettingsDialog(QDialog):
+    """Dialog for rarely-used settings: JPEG quality and Helmert parameters."""
+
+    def __init__(
+        self,
+        output_widget: OutputSettingsWidget,
+        helmert_widget: HelmertSettingsWidget,
+        grid_widget: GridSettingsWidget,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle('Дополнительные параметры')
+        self.setMinimumWidth(420)
+        self._src_output = output_widget
+        self._src_helmert = helmert_widget
+        self._src_grid = grid_widget
+        self._setup_ui()
+        self._load_from_source()
+
+    def _setup_ui(self) -> None:
+        layout = QVBoxLayout(self)
+
+        # JPEG quality
+        quality_group = QGroupBox('Качество JPG')
+        q_layout = QHBoxLayout(quality_group)
+        q_layout.addWidget(QLabel('Качество:'))
+        self._quality_slider = QSlider(Qt.Orientation.Horizontal)
+        self._quality_slider.setRange(10, 100)
+        q_layout.addWidget(self._quality_slider, 1)
+        self._quality_label = QLabel()
+        self._quality_label.setMinimumWidth(24)
+        self._quality_slider.valueChanged.connect(
+            lambda v: self._quality_label.setText(str(v))
+        )
+        q_layout.addWidget(self._quality_label)
+        layout.addWidget(quality_group)
+
+        # Grid parameters
+        grid_group = QGroupBox('Параметры сетки')
+        g_layout = QVBoxLayout(grid_group)
+        self._grid = GridSettingsWidget()
+        g_layout.addWidget(self._grid)
+        layout.addWidget(grid_group)
+
+        # Helmert parameters
+        helmert_group = QGroupBox('Датум-трансформация СК-42 → WGS84 (Helmert)')
+        h_layout = QVBoxLayout(helmert_group)
+        self._helmert = HelmertSettingsWidget()
+        h_layout.addWidget(self._helmert)
+        layout.addWidget(helmert_group)
+
+        layout.addStretch()
+
+        # OK / Cancel
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _load_from_source(self) -> None:
+        """Copy current values from MainWindow widgets into dialog widgets."""
+        self._quality_slider.setValue(self._src_output.quality_slider.value())
+        self._quality_label.setText(str(self._src_output.quality_slider.value()))
+
+        self._grid.set_settings(self._src_grid.get_settings())
+
+        vals = self._src_helmert.get_values()
+        self._helmert.set_values(
+            vals['helmert_dx'],
+            vals['helmert_dy'],
+            vals['helmert_dz'],
+            vals['helmert_rx_as'],
+            vals['helmert_ry_as'],
+            vals['helmert_rz_as'],
+            vals['helmert_ds_ppm'],
+        )
+
+    def apply_to_source(self) -> bool:
+        """
+        Write dialog values back to MainWindow widgets.
+
+        Returns True if Helmert changed.
+        """
+        self._src_output.quality_slider.setValue(self._quality_slider.value())
+        self._src_grid.set_settings(self._grid.get_settings())
+
+        old_vals = self._src_helmert.get_values()
+        new_vals = self._helmert.get_values()
+        self._src_helmert.set_values(
+            new_vals['helmert_dx'],
+            new_vals['helmert_dy'],
+            new_vals['helmert_dz'],
+            new_vals['helmert_rx_as'],
+            new_vals['helmert_ry_as'],
+            new_vals['helmert_rz_as'],
+            new_vals['helmert_ds_ppm'],
+        )
+        return old_vals != new_vals
+
+
+class _ThinProgressBar(QWidget):
+    """Frameless progress bar — thin colored strip without native Qt borders."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._minimum = 0
+        self._maximum = 0  # 0/0 = indeterminate
+        self._value = 0
+        self._bar_color = QColor('#4882d4')
+        self._anim_offset = 0
+        self._timer_id: int | None = None
+
+    # -- QProgressBar-compatible API ------------------------------------------
+
+    def setRange(self, minimum: int, maximum: int) -> None:
+        self._minimum = minimum
+        self._maximum = maximum
+        self._value = min(self._value, maximum)
+        indeterminate = minimum == maximum == 0
+        if indeterminate and self._timer_id is None and self.isVisible():
+            self._timer_id = self.startTimer(30)
+        elif not indeterminate and self._timer_id is not None:
+            self.killTimer(self._timer_id)
+            self._timer_id = None
+        self.update()
+
+    def setValue(self, value: int) -> None:
+        self._value = value
+        self.update()
+
+    def maximum(self) -> int:
+        return self._maximum
+
+    def setTextVisible(self, *, _v: bool) -> None:
+        pass  # no text
+
+    def showEvent(self, event: QShowEvent) -> None:
+        super().showEvent(event)
+        if self._minimum == self._maximum == 0 and self._timer_id is None:
+            self._timer_id = self.startTimer(30)
+
+    def hideEvent(self, event: object) -> None:
+        super().hideEvent(event)  # type: ignore[arg-type]
+        if self._timer_id is not None:
+            self.killTimer(self._timer_id)
+            self._timer_id = None
+
+    def timerEvent(self, _event: object) -> None:
+        self._anim_offset = (self._anim_offset + 2) % max(self.width(), 1)
+        self.update()
+
+    def paintEvent(self, _event: object) -> None:
+        p = QPainter(self)
+        antialiasing = False
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, antialiasing)
+        w, h = self.width(), self.height()
+        if self._minimum == self._maximum == 0:
+            # Indeterminate: bouncing 30%-width chunk
+            chunk_w = max(w * 3 // 10, 4)
+            period = w + chunk_w
+            x = (self._anim_offset % period) - chunk_w
+            p.fillRect(max(x, 0), 0, min(chunk_w, w - max(x, 0)), h, self._bar_color)
+        elif self._maximum > self._minimum:
+            frac = (self._value - self._minimum) / (self._maximum - self._minimum)
+            fill_w = int(w * frac)
+            if fill_w > 0:
+                p.fillRect(0, 0, fill_w, h, self._bar_color)
+        p.end()
+
+
 class MainWindow(QMainWindow):
     """Main application window implementing Observer pattern."""
 
@@ -699,6 +890,14 @@ class MainWindow(QMainWindow):
 
         # True when azimuth was changed and recompute hasn't fired yet
         self._azimuth_needs_recompute: bool = False
+        # True when parameter was changed interactively and recompute hasn't fired yet
+        self._range_needs_recompute: bool = False
+        self._sector_needs_recompute: bool = False
+        self._antenna_needs_recompute: bool = False
+        self._alpha_needs_recompute: bool = False
+        self._elev_needs_recompute: bool = False
+        self._flight_height_needs_recompute: bool = False
+        self._target_h_needs_recompute: bool = False
 
         # Guard flag to prevent model updates while UI is being populated
         # programmatically
@@ -730,7 +929,7 @@ class MainWindow(QMainWindow):
 
     def _setup_ui(self) -> None:
         """Setup the main window UI."""
-        self.setWindowTitle('SK42mapper')
+        self.setWindowTitle('SK42')
         # Используем минимальный размер и возможность свободно менять размер окна
         self.setMinimumSize(900, 500)
         # Адаптивный стартовый размер: 90% экрана, но не более 1500x950
@@ -761,6 +960,7 @@ class MainWindow(QMainWindow):
 
         # Правая колонка (превью)
         right_container = QVBoxLayout()
+        right_container.setContentsMargins(0, 0, 0, 0)
         right_widget = QWidget()
         right_widget.setLayout(right_container)
 
@@ -772,23 +972,30 @@ class MainWindow(QMainWindow):
         self.setStatusBar(self.status_bar)
         self._status_proxy = StatusBarProxy(self.status_bar)
 
-        # Прогресс-бар в левом нижнем углу (в статус-баре)
-        self._progress_bar = QProgressBar()
-        self._progress_bar.setMaximumWidth(200)
-        self._progress_bar.setMaximumHeight(20)
-        self._progress_bar.setVisible(False)
-        self._progress_bar.setRange(0, 0)
+        # Прогресс-бар в левом нижнем углу (в статус-баре): текст → полоска → ✕
+        # Фиксированная ширина метки — прогресс-бар не прыгает при смене текста
         self._progress_label = QLabel()
+        self._progress_label.setObjectName('progressLabel')
+        self._progress_label.setFixedWidth(280)
         self._progress_label.setVisible(False)
+        self._progress_bar = _ThinProgressBar()
+        self._progress_bar.setFixedWidth(120)
+        self._progress_bar.setFixedHeight(3)
+        self._progress_bar.setVisible(False)
+        self._cancel_btn = QPushButton('\u2715')
+        self._cancel_btn.setObjectName('cancelButton')
+        self._cancel_btn.setFixedSize(16, 16)
+        self._cancel_btn.setVisible(False)
+        self._cancel_btn.setToolTip('Отменить операцию')
+        self._cancel_btn.clicked.connect(self._cancel_operation)
         # Добавляем виджеты прогресса в левую часть статус-бара
         self.status_bar.addWidget(self._progress_label)
         self.status_bar.addWidget(self._progress_bar)
+        self.status_bar.addWidget(self._cancel_btn)
 
         # Метка для координат СК-42 (в правую часть статус-бара)
         self._coords_label = QLabel()
-        self._coords_label.setStyleSheet(
-            'font-family: monospace; font-weight: bold; color: red;'
-        )
+        self._coords_label.setObjectName('coordsLabel')
         self.status_bar.addPermanentWidget(self._coords_label)
 
         # Блок профилей
@@ -800,10 +1007,12 @@ class MainWindow(QMainWindow):
         profile_layout.addWidget(self.profile_combo)
 
         self.save_profile_btn = QPushButton('Сохранить')
+        self.save_profile_btn.setObjectName('accentButtonSmall')
         self.save_profile_btn.setToolTip('Сохранить текущие настройки в профиль')
         profile_layout.addWidget(self.save_profile_btn)
 
         self.save_profile_as_btn = QPushButton('Сохранить как...')
+        self.save_profile_as_btn.setObjectName('accentButtonSmall')
         self.save_profile_as_btn.setToolTip(
             'Сохранить текущие настройки в новый профиль',
         )
@@ -831,7 +1040,7 @@ class MainWindow(QMainWindow):
         from_group.setFrameStyle(QFrame.Shape.StyledPanel)
         from_layout = QVBoxLayout()
         from_title = QLabel('Левый нижний угол')
-        from_title.setStyleSheet('padding: 5px;')
+        from_title.setContentsMargins(5, 5, 5, 5)
         from_layout.addWidget(from_title)
         from_layout.addWidget(self.from_x_widget)
         from_layout.addWidget(self.from_y_widget)
@@ -842,7 +1051,7 @@ class MainWindow(QMainWindow):
         to_group.setFrameStyle(QFrame.Shape.StyledPanel)
         to_layout = QVBoxLayout()
         to_title = QLabel('Правый верхний угол')
-        to_title.setStyleSheet('padding: 5px;')
+        to_title.setContentsMargins(5, 5, 5, 5)
         to_layout.addWidget(to_title)
         to_layout.addWidget(self.to_x_widget)
         to_layout.addWidget(self.to_y_widget)
@@ -856,7 +1065,7 @@ class MainWindow(QMainWindow):
         control_point_group.setFrameStyle(QFrame.Shape.StyledPanel)
         control_point_layout = QVBoxLayout()
 
-        self.control_point_checkbox = QCheckBox('Контрольная точка (НСУ)')
+        self.control_point_checkbox = QCheckBox('Контрольная точка')
         self.control_point_checkbox.setToolTip(
             'Включить отображение контрольной точки на карте'
         )
@@ -872,34 +1081,30 @@ class MainWindow(QMainWindow):
             'Название контрольной точки для отображения на карте'
         )
 
-        # Высота антенны (для карты радиогоризонта)
-        antenna_row = QHBoxLayout()
+        # Высота антенны (для карты радиогоризонта) — виджеты,
+        # вставляются в grid ниже (row 5)
         self.antenna_height_label = QLabel('Высота антенны (м):')
-        self.antenna_height_spin = QDoubleSpinBox()
-        self.antenna_height_spin.setRange(0.0, 500.0)
-        self.antenna_height_spin.setDecimals(0)
-        self.antenna_height_spin.setValue(10.0)
-        self.antenna_height_spin.setSingleStep(1.0)
-        self.antenna_height_spin.setToolTip(
+        self.antenna_height_slider = QSlider(Qt.Orientation.Horizontal)
+        self.antenna_height_slider.setRange(0, 50)
+        self.antenna_height_slider.setValue(10)
+        self.antenna_height_slider.setToolTip(
             'Высота антенны над поверхностью земли (для карты радиогоризонта)'
         )
-        antenna_row.addWidget(self.antenna_height_label)
-        antenna_row.addWidget(self.antenna_height_spin)
+        self.antenna_height_value_label = QLabel('10')
+        self.antenna_height_value_label.setMinimumWidth(24)
 
         # Максимальная высота полёта (для карты радиогоризонта)
-        max_flight_row = QHBoxLayout()
-        self.max_flight_height_label = QLabel('Практический потолок БпЛА (м):')
-        self.max_flight_height_spin = QDoubleSpinBox()
-        self.max_flight_height_spin.setRange(10.0, 5000.0)
-        self.max_flight_height_spin.setDecimals(0)
-        self.max_flight_height_spin.setValue(500.0)
-        self.max_flight_height_spin.setSingleStep(50.0)
-        self.max_flight_height_spin.setToolTip(
+        self.max_flight_height_slider = QSlider(Qt.Orientation.Horizontal)
+        self.max_flight_height_slider.setRange(10, 5000)
+        self.max_flight_height_slider.setSingleStep(10)
+        self.max_flight_height_slider.setPageStep(10)
+        self.max_flight_height_slider.setValue(500)
+        self.max_flight_height_slider.setToolTip(
             'Максимальная высота полёта для цветовой шкалы радиогоризонта.\n'
             'Значения выше будут отображаться серым цветом.'
         )
-        max_flight_row.addWidget(self.max_flight_height_label)
-        max_flight_row.addWidget(self.max_flight_height_spin)
+        self.max_flight_height_value_label = QLabel('500')
+        self.max_flight_height_value_label.setMinimumWidth(30)
 
         name_row = QHBoxLayout()
         name_row.addWidget(self.control_point_checkbox)
@@ -910,12 +1115,8 @@ class MainWindow(QMainWindow):
         coords_row.addWidget(self.control_point_x_widget)
         coords_row.addWidget(self.control_point_y_widget)
 
-        heights_row = QHBoxLayout()
-        heights_row.addLayout(antenna_row)
-        heights_row.addLayout(max_flight_row)
-
         # Режим отсчёта высоты БпЛА (для карты радиогоризонта)
-        self.height_ref_label = QLabel('Отсчёт высоты БпЛА:')
+        self.height_ref_label = QLabel('Отсчёт высоты:')
         self.height_ref_group = QButtonGroup(self)
 
         self.height_ref_cp_radio = QRadioButton('От уровня КТ (AGL)')
@@ -952,12 +1153,12 @@ class MainWindow(QMainWindow):
         settings_container = QFrame()
         settings_container.setFrameStyle(QFrame.Shape.StyledPanel)
         settings_main_layout = QVBoxLayout()
-        settings_main_layout.addWidget(QLabel('Настройки'))
 
         # Тип карты и чекбокс изолиний (над вкладками, всегда видны)
         maptype_row = QHBoxLayout()
-        maptype_label = QLabel('Тип карты:')
+        maptype_label = QLabel('<b>Тип карты:</b>')
         self.map_type_combo = QComboBox()
+        # Styling handled by global theme (theme.py)
 
         self._maptype_order = [
             MapType.SATELLITE,
@@ -985,72 +1186,53 @@ class MainWindow(QMainWindow):
             QSizePolicy.Policy.Fixed,
             QSizePolicy.Policy.Fixed,
         )
+        # Чекбокс "Сетка" (раньше был внутри GridSettingsWidget)
+        self.display_grid_cb = QCheckBox('Сетка')
+        self.display_grid_cb.setChecked(True)
+        self.display_grid_cb.setToolTip(
+            'Если включено: рисуются линии сетки и подписи.\n'
+            'Если выключено: рисуются только крестики в точках пересечения '
+            'без подписей.'
+        )
+
         maptype_row.addWidget(maptype_label)
         maptype_row.addWidget(self.map_type_combo, 1)
         maptype_row.addSpacing(8)
+        maptype_row.addWidget(self.display_grid_cb)
         maptype_row.addWidget(self.contours_checkbox)
-        settings_main_layout.addLayout(maptype_row)
 
-        # Создаём вкладки
-        settings_tabs = QTabWidget()
+        maptype_frame = QFrame()
+        maptype_frame.setLayout(maptype_row)
+        maptype_frame.setObjectName('maptypeFrame')
 
-        # === Вкладка "Основные" ===
-        main_tab = QWidget()
-        main_tab_layout = QVBoxLayout()
+        # Вставить maptype_frame в coords_layout перед control_point_group
+        coords_layout.insertWidget(coords_layout.count() - 1, maptype_frame)
 
-        settings_horizontal_layout = QHBoxLayout()
-
-        grid_frame = QFrame()
-        grid_frame.setFrameStyle(QFrame.Shape.StyledPanel)
-        grid_layout = QVBoxLayout()
-        grid_frame.setLayout(grid_layout)
+        # GridSettingsWidget создаётся, но не добавляется в layout —
+        # используется только в AdvancedSettingsDialog
         self.grid_widget = GridSettingsWidget()
-        grid_layout.addWidget(self.grid_widget)
-        settings_horizontal_layout.addWidget(grid_frame)
 
-        output_frame = QFrame()
-        output_frame.setFrameStyle(QFrame.Shape.StyledPanel)
-        output_layout = QVBoxLayout()
-        output_frame.setLayout(output_layout)
+        # Виджеты для «Дополнительных параметров» (не в layout, только хранятся)
         self.output_widget = OutputSettingsWidget()
-        output_layout.addWidget(self.output_widget)
-        # Alias for quality slider
         self.quality_slider = self.output_widget.quality_slider
-
-        settings_horizontal_layout.addWidget(output_frame)
-        main_tab_layout.addLayout(settings_horizontal_layout)
-        main_tab_layout.addStretch()
-        main_tab.setLayout(main_tab_layout)
-        settings_tabs.addTab(main_tab, 'Основные')
-
-        # === Вкладка "Опции" ===
-        options_tab = QWidget()
-        options_tab_layout = QVBoxLayout()
 
         # Настройки радиогоризонта (единая панель для НСУ и РЛС)
         radio_horizon_group = QGroupBox('Радиогоризонт')
         radio_horizon_layout = QVBoxLayout()
 
-        # === Общие установки (видны в обоих режимах) ===
+        # === Общие установки (создаём виджеты, добавим в grid ниже) ===
 
-        # Высота антенны и практический потолок
-        radio_horizon_layout.addLayout(heights_row)
-
-        # Прозрачность слоя
-        alpha_row = QHBoxLayout()
-        alpha_row.addWidget(QLabel('Прозрачность топоосновы:'))
-        self.radio_horizon_alpha_spin = QDoubleSpinBox()
-        self.radio_horizon_alpha_spin.setRange(0.0, 1.0)
-        self.radio_horizon_alpha_spin.setSingleStep(0.05)
-        self.radio_horizon_alpha_spin.setDecimals(2)
-        self.radio_horizon_alpha_spin.setValue(0.3)
-        self.radio_horizon_alpha_spin.setToolTip(
-            '0 = топооснова не видна, 1 = чистая топооснова'
+        # Прозрачность слоя (виджеты — добавляются в grid позже)
+        self.radio_horizon_alpha_label = QLabel('30%')
+        self.radio_horizon_alpha_label.setMinimumWidth(30)
+        self.radio_horizon_alpha_slider = QSlider(Qt.Orientation.Horizontal)
+        self.radio_horizon_alpha_slider.setRange(0, 100)  # проценты
+        self.radio_horizon_alpha_slider.setSingleStep(5)
+        self.radio_horizon_alpha_slider.setPageStep(5)
+        self.radio_horizon_alpha_slider.setValue(30)  # 30%
+        self.radio_horizon_alpha_slider.setToolTip(
+            '0% = топооснова не видна, 100% = чистая топооснова'
         )
-        self.radio_horizon_alpha_spin.valueChanged.connect(self._on_settings_changed)
-        alpha_row.addWidget(self.radio_horizon_alpha_spin)
-        alpha_row.addStretch()
-        radio_horizon_layout.addLayout(alpha_row)
 
         # === НСУ-специфичные установки (скрываются при РЛС) ===
 
@@ -1066,144 +1248,232 @@ class MainWindow(QMainWindow):
         self._nsu_height_ref_widget.setLayout(nsu_ref_layout)
         radio_horizon_layout.addWidget(self._nsu_height_ref_widget)
 
-        # === РЛС-специфичные установки (скрываются при НСУ) ===
+        # === РЛС/НСУ-специфичные установки в общей сетке ===
 
         # Все РЛС-строки обёрнуты в один QWidget для единого управления видимостью
         self._radar_settings_widget = QWidget()
-        radar_layout = QVBoxLayout()
-        radar_layout.setContentsMargins(0, 0, 0, 0)
+        radar_hbox = QHBoxLayout()
+        radar_hbox.setContentsMargins(0, 0, 0, 0)
+        radar_hbox.setSpacing(16)
 
-        # Азимут и ширина сектора
-        radar_row1 = QHBoxLayout()
-        radar_row1.addWidget(QLabel('Азимут (°):'))
-        self.radar_azimuth_spin = QDoubleSpinBox()
-        self.radar_azimuth_spin.setRange(0.0, 359.9)
-        self.radar_azimuth_spin.setDecimals(1)
-        self.radar_azimuth_spin.setValue(0.0)
-        self.radar_azimuth_spin.setSingleStep(5.0)
-        self.radar_azimuth_spin.setWrapping(True)
-        self.radar_azimuth_spin.setToolTip('Азимут направления РЛС (0°=север, по часовой)')
-        radar_row1.addWidget(self.radar_azimuth_spin)
+        # Азимут: лейбл + крутилка + значение — отцентрированы по вертикали
+        self._azimuth_top_label = QLabel('Азимут')
+        self._azimuth_top_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        radar_row1.addWidget(QLabel('Сектор (°):'))
-        self.radar_sector_spin = QDoubleSpinBox()
-        self.radar_sector_spin.setRange(1.0, 360.0)
-        self.radar_sector_spin.setDecimals(0)
-        self.radar_sector_spin.setValue(90.0)
-        self.radar_sector_spin.setSingleStep(5.0)
-        self.radar_sector_spin.setToolTip('Ширина сектора обзора РЛС (градусы)')
-        radar_row1.addWidget(self.radar_sector_spin)
-        radar_layout.addLayout(radar_row1)
+        self.radar_azimuth_dial = QDial()
+        self.radar_azimuth_dial.setRange(0, 359)
+        self.radar_azimuth_dial.setWrapping(True)
+        self.radar_azimuth_dial.setNotchesVisible(True)
+        self.radar_azimuth_dial.setInvertedAppearance(True)
+        self.radar_azimuth_dial.setFixedSize(110, 110)
+        self.radar_azimuth_dial.setValue(180)  # 0° azimuth
+        self.radar_azimuth_dial.setToolTip(
+            'Азимут направления РЛС (0°=север, по часовой)'
+        )
 
-        # Углы места мин/макс
-        radar_row2 = QHBoxLayout()
-        radar_row2.addWidget(QLabel('Угол места мин (°):'))
-        self.radar_elev_min_spin = QDoubleSpinBox()
-        self.radar_elev_min_spin.setRange(0.0, 89.0)
-        self.radar_elev_min_spin.setDecimals(1)
-        self.radar_elev_min_spin.setValue(0.5)
-        self.radar_elev_min_spin.setSingleStep(0.5)
-        self.radar_elev_min_spin.setToolTip('Минимальный угол места (мёртвая воронка)')
-        radar_row2.addWidget(self.radar_elev_min_spin)
+        self.radar_azimuth_label = QLabel('0°')
+        self.radar_azimuth_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.radar_azimuth_label.setToolTip(
+            'Азимут направления РЛС (0°=север, по часовой)'
+        )
 
-        radar_row2.addWidget(QLabel('макс (°):'))
-        self.radar_elev_max_spin = QDoubleSpinBox()
-        self.radar_elev_max_spin.setRange(1.0, 90.0)
-        self.radar_elev_max_spin.setDecimals(1)
-        self.radar_elev_max_spin.setValue(30.0)
-        self.radar_elev_max_spin.setSingleStep(1.0)
-        self.radar_elev_max_spin.setToolTip('Максимальный угол места РЛС')
-        radar_row2.addWidget(self.radar_elev_max_spin)
-        radar_layout.addLayout(radar_row2)
+        self._azimuth_widget = QWidget()
+        azimuth_col = QVBoxLayout(self._azimuth_widget)
+        azimuth_col.setContentsMargins(0, 0, 0, 0)
+        azimuth_col.setSpacing(0)
+        azimuth_col.addStretch()
+        azimuth_col.addWidget(self._azimuth_top_label)
+        azimuth_col.addWidget(self.radar_azimuth_dial, 0, Qt.AlignmentFlag.AlignCenter)
+        azimuth_col.addWidget(self.radar_azimuth_label)
+        azimuth_col.addStretch()
+        radar_hbox.addWidget(self._azimuth_widget)
 
-        # Дальность
-        radar_row3 = QHBoxLayout()
-        radar_row3.addWidget(QLabel('Дальность (км):'))
-        self.radar_range_spin = QDoubleSpinBox()
-        self.radar_range_spin.setRange(0.5, 200.0)
-        self.radar_range_spin.setDecimals(1)
-        self.radar_range_spin.setValue(15.0)
-        self.radar_range_spin.setSingleStep(1.0)
-        self.radar_range_spin.setToolTip('Максимальная дальность обнаружения РЛС (км)')
-        radar_row3.addWidget(self.radar_range_spin)
-        radar_row3.addStretch()
-        radar_layout.addLayout(radar_row3)
+        # Слайдеры справа от крутилки
+        grid = QGridLayout()
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setVerticalSpacing(2)
+        grid.setHorizontalSpacing(2)
 
-        # Высота целей от/до
-        radar_row4 = QHBoxLayout()
-        radar_row4.addWidget(QLabel('Высота целей от (м):'))
-        self.radar_target_h_min_spin = QDoubleSpinBox()
-        self.radar_target_h_min_spin.setRange(0.0, 50000.0)
-        self.radar_target_h_min_spin.setDecimals(0)
-        self.radar_target_h_min_spin.setValue(30.0)
-        self.radar_target_h_min_spin.setSingleStep(10.0)
-        self.radar_target_h_min_spin.setToolTip('Минимальная высота цели для цветовой шкалы (м)')
-        radar_row4.addWidget(self.radar_target_h_min_spin)
+        # Row 0: Азимутальный угол
+        self.radar_sector_slider = QSlider(Qt.Orientation.Horizontal)
+        self.radar_sector_slider.setRange(30, 360)
+        self.radar_sector_slider.setValue(90)
+        self.radar_sector_slider.setToolTip('Ширина сектора обзора РЛС (градусы)')
+        self.radar_sector_label = QLabel('90°')
+        self.radar_sector_label.setMinimumWidth(30)
+        sector_row = QVBoxLayout()
+        sector_row.setContentsMargins(0, 0, 0, 0)
+        sector_row.setSpacing(0)
+        self.radar_sector_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        sector_row.addWidget(self.radar_sector_label)
+        sector_row.addWidget(self.radar_sector_slider)
+        self._sector_label = QLabel('Азимут. угол (°):')
+        grid.addWidget(self._sector_label, 0, 0)
+        grid.addLayout(sector_row, 0, 1)
 
-        radar_row4.addWidget(QLabel('до (м):'))
-        self.radar_target_h_max_spin = QDoubleSpinBox()
-        self.radar_target_h_max_spin.setRange(10.0, 50000.0)
-        self.radar_target_h_max_spin.setDecimals(0)
-        self.radar_target_h_max_spin.setValue(5000.0)
-        self.radar_target_h_max_spin.setSingleStep(100.0)
-        self.radar_target_h_max_spin.setToolTip('Максимальная высота цели для цветовой шкалы (м)')
-        radar_row4.addWidget(self.radar_target_h_max_spin)
-        radar_row4.addStretch()
-        radar_layout.addLayout(radar_row4)
+        # Row 1: Угол места — range slider + label
+        self.radar_elev_slider = _DarculaRangeSlider(Qt.Orientation.Horizontal)
+        self.radar_elev_slider.setRange(0, 90)
+        self.radar_elev_slider.setValue((1, 30))
+        self.radar_elev_slider.setToolTip('Диапазон углов места РЛС (°)')
+        self.radar_elev_label = QLabel('1—30°')
+        self.radar_elev_label.setMinimumWidth(42)
+        elev_row = QVBoxLayout()
+        elev_row.setContentsMargins(0, 0, 0, 0)
+        elev_row.setSpacing(0)
+        self.radar_elev_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        elev_row.addWidget(self.radar_elev_label)
+        elev_row.addWidget(self.radar_elev_slider)
+        self._elev_label = QLabel('Угол места (°):')
+        grid.addWidget(self._elev_label, 1, 0)
+        grid.addLayout(elev_row, 1, 1)
 
-        self._radar_settings_widget.setLayout(radar_layout)
+        # Row 2: Дальность — slider + label
+        self.radar_range_slider = QSlider(Qt.Orientation.Horizontal)
+        self.radar_range_slider.setRange(1, 100)  # 1–100 км
+        self.radar_range_slider.setValue(15)
+        self.radar_range_slider.setToolTip(
+            'Максимальная дальность обнаружения РЛС (км)'
+        )
+        self.radar_range_label = QLabel('15')
+        self.radar_range_label.setMinimumWidth(24)
+        range_row = QVBoxLayout()
+        range_row.setContentsMargins(0, 0, 0, 0)
+        range_row.setSpacing(0)
+        self.radar_range_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        range_row.addWidget(self.radar_range_label)
+        range_row.addWidget(self.radar_range_slider)
+        self._range_label = QLabel('Дальность (км):')
+        grid.addWidget(self._range_label, 2, 0)
+        grid.addLayout(range_row, 2, 1)
+
+        # Row 3: Высота целей — range slider + label
+        self.radar_target_h_slider = _DarculaRangeSlider(Qt.Orientation.Horizontal)
+        self.radar_target_h_slider.setRange(2, 500)  # ×10 → 20–5000 м
+        self.radar_target_h_slider.setValue((3, 500))
+        self.radar_target_h_slider.setToolTip('Диапазон высот целей (м)')
+        self.radar_target_h_label = QLabel('30—5000')
+        self.radar_target_h_label.setMinimumWidth(55)
+        target_h_row = QVBoxLayout()
+        target_h_row.setContentsMargins(0, 0, 0, 0)
+        target_h_row.setSpacing(0)
+        self.radar_target_h_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        target_h_row.addWidget(self.radar_target_h_label)
+        target_h_row.addWidget(self.radar_target_h_slider)
+        self._target_h_label = QLabel('Высота целей (м):')
+        grid.addWidget(self._target_h_label, 3, 0)
+        grid.addLayout(target_h_row, 3, 1)
+
+        # Row 4: Высота антенны — slider + label (общая для НСУ и РЛС)
+        # Совмещаем с лейблом азимута "0°" (col 0) на той же строке
+        antenna_h_row = QVBoxLayout()
+        antenna_h_row.setContentsMargins(0, 0, 0, 0)
+        antenna_h_row.setSpacing(0)
+        self.antenna_height_value_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        antenna_h_row.addWidget(self.antenna_height_value_label)
+        antenna_h_row.addWidget(self.antenna_height_slider)
+        grid.addWidget(self.antenna_height_label, 4, 0)
+        grid.addLayout(antenna_h_row, 4, 1)
+
+        # Row 5: Практический потолок БпЛА (НСУ-only)
+        flight_h_row = QVBoxLayout()
+        flight_h_row.setContentsMargins(0, 0, 0, 0)
+        flight_h_row.setSpacing(0)
+        self.max_flight_height_value_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        flight_h_row.addWidget(self.max_flight_height_value_label)
+        flight_h_row.addWidget(self.max_flight_height_slider)
+        self._flight_height_label = QLabel('Потолок БпЛА (м):')
+        grid.addWidget(self._flight_height_label, 5, 0)
+        grid.addLayout(flight_h_row, 5, 1)
+
+        # Row 6: Прозрачность топоосновы (общая для НСУ и РЛС)
+        alpha_col_row = QVBoxLayout()
+        alpha_col_row.setContentsMargins(0, 0, 0, 0)
+        alpha_col_row.setSpacing(0)
+        self.radio_horizon_alpha_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        alpha_col_row.addWidget(self.radio_horizon_alpha_label)
+        alpha_col_row.addWidget(self.radio_horizon_alpha_slider)
+        self._alpha_label = QLabel('Прозрачность:')
+        grid.addWidget(self._alpha_label, 6, 0)
+        grid.addLayout(alpha_col_row, 6, 1)
+
+        # Виджеты, видимые только в режиме РЛС (строки 0-3 сетки)
+        self._radar_only_widgets = [
+            self._azimuth_widget,
+            self._sector_label,
+            self.radar_sector_slider,
+            self.radar_sector_label,
+            self._elev_label,
+            self.radar_elev_slider,
+            self.radar_elev_label,
+            self._range_label,
+            self.radar_range_slider,
+            self.radar_range_label,
+            self._target_h_label,
+            self.radar_target_h_slider,
+            self.radar_target_h_label,
+        ]
+
+        # Виджеты, видимые только в режиме НСУ (строка 5 сетки)
+        self._nsu_only_widgets = [
+            self._flight_height_label,
+            self.max_flight_height_slider,
+            self.max_flight_height_value_label,
+        ]
+
+        # Виджеты антенны — видны для НСУ/РЛС, скрыты для ELEVATION_COLOR
+        self._antenna_widgets = [
+            self.antenna_height_label,
+            self.antenna_height_slider,
+            self.antenna_height_value_label,
+        ]
+
+        radar_hbox.addLayout(grid, 1)
+        self._radar_settings_widget.setLayout(radar_hbox)
         self._radar_settings_widget.setVisible(False)
         radio_horizon_layout.addWidget(self._radar_settings_widget)
 
         radio_horizon_group.setLayout(radio_horizon_layout)
         radio_horizon_group.setVisible(False)  # Видна только при НСУ/РЛС
         self._radio_horizon_group = radio_horizon_group
-        options_tab_layout.addWidget(radio_horizon_group)
+        settings_main_layout.addWidget(radio_horizon_group)
 
-        # Датум-трансформация
-        self.helmert_group = QGroupBox('Датум-трансформация СК-42 → WGS84 (Helmert)')
-        helmert_group_layout = QVBoxLayout()
+        # Helmert widget (не в layout, хранится для диалога и профилей)
         self.helmert_widget = HelmertSettingsWidget()
-        helmert_group_layout.addWidget(self.helmert_widget)
-        self.helmert_group.setLayout(helmert_group_layout)
-        options_tab_layout.addWidget(self.helmert_group)
 
-        options_tab_layout.addStretch()
-        options_tab.setLayout(options_tab_layout)
-        settings_tabs.addTab(options_tab, 'Опции')
-
-        settings_main_layout.addWidget(settings_tabs)
+        settings_main_layout.addStretch()
         settings_container.setLayout(settings_main_layout)
         left_container.addWidget(settings_container)
 
         # Оборачиваем левую колонку в QScrollArea для предотвращения обрезания контента
-        left_scroll = QScrollArea()
-        left_scroll.setWidgetResizable(True)
-        left_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        left_scroll.setWidget(left_widget)
+        self._left_scroll = QScrollArea()
+        self._left_scroll.setWidgetResizable(True)
+        self._left_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._left_scroll.setWidget(left_widget)
+        self._left_content_widget = left_widget
 
         # Кнопка "Создать карту" — вне скролла, всегда видна
         self.download_btn = QPushButton('Создать карту')
         self.download_btn.setToolTip('Начать создание карты')
-        self.download_btn.setStyleSheet('QPushButton { font-weight: bold; }')
+        self.download_btn.setObjectName('accentButton')
         self.download_btn.setSizePolicy(
             QSizePolicy.Policy.Expanding,
             QSizePolicy.Policy.Fixed,
         )
 
         # Обёртка: скролл и кнопка
-        left_panel = QWidget()
+        self._left_panel = QWidget()
         left_panel_layout = QVBoxLayout()
         left_panel_layout.setContentsMargins(0, 0, 0, 0)
-        left_panel_layout.addWidget(left_scroll, 1)
+        left_panel_layout.addWidget(self._left_scroll, 1)
         left_panel_layout.addWidget(self.download_btn)
-        left_panel.setLayout(left_panel_layout)
+        self._left_panel.setLayout(left_panel_layout)
 
         # Превью справа
-        preview_frame = QFrame()
-        preview_frame.setFrameStyle(QFrame.Shape.StyledPanel)
+        self._preview_frame = QFrame()
+        self._preview_frame.setFrameStyle(QFrame.Shape.StyledPanel)
         preview_layout = QVBoxLayout()
-        preview_frame.setLayout(preview_layout)
+        self._preview_frame.setLayout(preview_layout)
 
         preview_layout.addWidget(QLabel('Предпросмотр карты:'))
 
@@ -1216,13 +1486,11 @@ class MainWindow(QMainWindow):
         self._preview_area.setMinimumWidth(300)
         preview_layout.addWidget(self._preview_area, 1)
 
-        right_container.addWidget(preview_frame, 1)
-
-        preview_layout.addSpacing(10)
+        right_container.addWidget(self._preview_frame, 1)
 
         # Кнопка "Сохранить карту"
         self.save_map_btn = QPushButton('Сохранить карту')
-        self.save_map_btn.setStyleSheet('QPushButton { font-weight: bold; }')
+        self.save_map_btn.setObjectName('accentButton')
         self.save_map_btn.setToolTip('Сохранить карту в файл')
         self.save_map_btn.setEnabled(False)
         self.save_map_btn.setSizePolicy(
@@ -1237,20 +1505,20 @@ class MainWindow(QMainWindow):
         self._busy_dialog = None
 
         # Разделитель колонок для настраиваемых ширин
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.addWidget(left_panel)
-        splitter.addWidget(right_widget)
-        splitter.setChildrenCollapsible(False)
-        splitter.setHandleWidth(6)
-        # Prevent left panel from collapsing too small
-        left_min = max(300, left_widget.sizeHint().width())
-        left_panel.setMinimumWidth(left_min)
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
-        splitter.setSizes([left_min + 100, 600])
+        self._splitter = QSplitter(Qt.Orientation.Horizontal)
+        self._splitter.addWidget(self._left_panel)
+        self._splitter.addWidget(right_widget)
+        self._splitter.setChildrenCollapsible(False)
+        self._splitter.setHandleWidth(1)
+        # Левая панель: ширина по содержимому, не растягивается
+        left_preferred = self._left_content_widget.sizeHint().width() + 4
+        self._left_panel.setMinimumWidth(left_preferred)
+        self._splitter.setStretchFactor(0, 0)
+        self._splitter.setStretchFactor(1, 1)
+        self._splitter.setSizes([left_preferred, 600])
 
         # Добавляем splitter вместо двух виджетов
-        main_layout.addWidget(splitter, 1)
+        main_layout.addWidget(self._splitter, 1)
 
     def _create_menu(self) -> None:
         """Create application menu."""
@@ -1303,6 +1571,12 @@ class MainWindow(QMainWindow):
         self.save_map_action.triggered.connect(self._save_map)
         self.save_map_action.setEnabled(False)  # Initially disabled like the button
         operations_menu.addAction(self.save_map_action)
+
+        operations_menu.addSeparator()
+
+        advanced_action = QAction('Дополнительные параметры…', self)
+        advanced_action.triggered.connect(self._show_advanced_settings)
+        operations_menu.addAction(advanced_action)
 
         # Help menu
         help_menu = menubar.addMenu('Справка')
@@ -1359,8 +1633,8 @@ class MainWindow(QMainWindow):
             self.to_x_widget,
             self.to_y_widget,
         ]:
-            widget.high_spin.valueChanged.connect(self._on_settings_changed)
-            widget.low_spin.valueChanged.connect(self._on_settings_changed)
+            widget.high_edit.editingFinished.connect(self._on_settings_changed)
+            widget.low_edit.editingFinished.connect(self._on_settings_changed)
 
         # Control point
         self.control_point_checkbox.stateChanged.connect(self._on_control_point_toggled)
@@ -1376,37 +1650,50 @@ class MainWindow(QMainWindow):
         # Control point name
         self.control_point_name_edit.editingFinished.connect(self._on_settings_changed)
         # Antenna height for radio horizon
-        self.antenna_height_spin.valueChanged.connect(self._on_settings_changed)
+        self.antenna_height_slider.valueChanged.connect(self._on_antenna_slider_changed)
+        self.antenna_height_slider.sliderReleased.connect(
+            self._on_antenna_slider_released
+        )
         # Max flight height for radio horizon
-        self.max_flight_height_spin.valueChanged.connect(self._on_settings_changed)
+        self.max_flight_height_slider.valueChanged.connect(
+            self._on_flight_height_slider_changed
+        )
+        self.max_flight_height_slider.sliderReleased.connect(
+            self._on_flight_height_slider_released
+        )
         # UAV height reference radios
-        self.height_ref_group.buttonClicked.connect(self._on_settings_changed)
+        self.height_ref_group.buttonClicked.connect(self._on_height_ref_changed)
+
+        # Overlay alpha
+        self.radio_horizon_alpha_slider.valueChanged.connect(
+            self._on_alpha_slider_changed
+        )
+        self.radio_horizon_alpha_slider.sliderReleased.connect(
+            self._on_alpha_slider_released
+        )
 
         # Radar coverage settings
-        self.radar_azimuth_spin.valueChanged.connect(self._on_settings_changed)
-        self.radar_sector_spin.valueChanged.connect(self._on_settings_changed)
-        self.radar_elev_min_spin.valueChanged.connect(self._on_settings_changed)
-        self.radar_elev_max_spin.valueChanged.connect(self._on_settings_changed)
-        self.radar_range_spin.valueChanged.connect(self._on_settings_changed)
-        self.radar_target_h_min_spin.valueChanged.connect(self._on_settings_changed)
-        self.radar_target_h_max_spin.valueChanged.connect(self._on_settings_changed)
+        self.radar_azimuth_dial.valueChanged.connect(self._on_azimuth_dial_changed)
+        self.radar_azimuth_dial.sliderReleased.connect(self._on_azimuth_dial_released)
+        self.radar_sector_slider.valueChanged.connect(self._on_sector_slider_changed)
+        self.radar_sector_slider.sliderReleased.connect(self._on_sector_slider_released)
+        self.radar_elev_slider.valueChanged.connect(self._on_elev_range_changed)
+        self.radar_elev_slider.sliderReleased.connect(self._on_elev_slider_released)
+        self.radar_range_slider.valueChanged.connect(self._on_range_slider_changed)
+        self.radar_range_slider.sliderReleased.connect(self._on_range_slider_released)
+        self.radar_target_h_slider.valueChanged.connect(self._on_target_h_range_changed)
+        self.radar_target_h_slider.sliderReleased.connect(
+            self._on_target_h_slider_released
+        )
 
         # Grid settings
         self.grid_widget.width_spin.valueChanged.connect(self._on_settings_changed)
         self.grid_widget.font_spin.valueChanged.connect(self._on_settings_changed)
         self.grid_widget.margin_spin.valueChanged.connect(self._on_settings_changed)
         self.grid_widget.padding_spin.valueChanged.connect(self._on_settings_changed)
-        self.grid_widget.display_grid_cb.stateChanged.connect(self._on_settings_changed)
+        self.display_grid_cb.stateChanged.connect(self._on_settings_changed)
 
-        # Helmert settings
-        self.helmert_widget.enable_cb.toggled.connect(self._on_settings_changed)
-        self.helmert_widget.dx.valueChanged.connect(self._on_settings_changed)
-        self.helmert_widget.dy.valueChanged.connect(self._on_settings_changed)
-        self.helmert_widget.dz.valueChanged.connect(self._on_settings_changed)
-        self.helmert_widget.rx.valueChanged.connect(self._on_settings_changed)
-        self.helmert_widget.ry.valueChanged.connect(self._on_settings_changed)
-        self.helmert_widget.rz.valueChanged.connect(self._on_settings_changed)
-        self.helmert_widget.ds.valueChanged.connect(self._on_settings_changed)
+        # Helmert settings — changed only via AdvancedSettingsDialog
 
     def _load_initial_data(self) -> None:
         """Load initial application data."""
@@ -1476,19 +1763,38 @@ class MainWindow(QMainWindow):
             map_type_value = self.map_type_combo.itemData(idx)
             is_radio_horizon = map_type_value == MapType.RADIO_HORIZON.value
             is_radar_coverage = map_type_value == MapType.RADAR_COVERAGE.value
+            is_elev_color = map_type_value == MapType.ELEVATION_COLOR.value
         except Exception:
             is_radio_horizon = False
             is_radar_coverage = False
+            is_elev_color = False
 
-        # Панель «Радиогоризонт» видна только в режимах НСУ/РЛС
-        self._radio_horizon_group.setVisible(is_radio_horizon or is_radar_coverage)
+        # Панель видна для НСУ/РЛС/Карта высот (слайдер прозрачности)
+        self._radio_horizon_group.setVisible(
+            is_radio_horizon or is_radar_coverage or is_elev_color
+        )
+
+        # Заголовок панели зависит от режима
+        if is_elev_color:
+            self._radio_horizon_group.setTitle('')
+        else:
+            self._radio_horizon_group.setTitle('')
 
         # Управление видимостью НСУ/РЛС-специфичных виджетов внутри единой панели
         nsu_visible = is_radio_horizon and not is_radar_coverage
-        self.max_flight_height_label.setVisible(nsu_visible)
-        self.max_flight_height_spin.setVisible(nsu_visible)
         self._nsu_height_ref_widget.setVisible(nsu_visible)
-        self._radar_settings_widget.setVisible(is_radar_coverage)
+        # Для ELEVATION_COLOR показываем только слайдер альфы
+        self._radar_settings_widget.setVisible(
+            is_radio_horizon or is_radar_coverage or is_elev_color
+        )
+        for w in self._radar_only_widgets:
+            w.setVisible(is_radar_coverage)
+        for w in self._nsu_only_widgets:
+            w.setVisible(nsu_visible)
+        # Виджеты антенны скрыты для ELEVATION_COLOR
+        antenna_visible = is_radio_horizon or is_radar_coverage
+        for w in self._antenna_widgets:
+            w.setVisible(antenna_visible)
 
         if is_radio_horizon or is_radar_coverage:
             # Принудительно включаем контрольную точку
@@ -1506,8 +1812,33 @@ class MainWindow(QMainWindow):
             # Обновляем состояние полей согласно текущему состоянию чекбокса
             self._on_control_point_toggled()
 
+        # Подстроить ширину левой панели под новое содержимое
+        self._adjust_left_panel_width()
+
         # Delegate to the common settings handler to store the new map type in the model
         self._on_settings_changed()
+
+    def _adjust_left_panel_width(self) -> None:
+        """Resize left splitter pane to fit its content after visibility changes."""
+
+        def _do_adjust() -> None:
+            # Ширина реального содержимого внутри QScrollArea
+            content_w = self._left_content_widget.sizeHint().width()
+            # Плюс возможный вертикальный скроллбар
+            sb = self._left_scroll.verticalScrollBar()
+            if sb and sb.isVisible():
+                content_w += sb.width()
+            # Небольшой запас на рамки layout
+            needed = content_w + 4
+            current = self._splitter.sizes()
+            if current and needed > current[0]:
+                self._left_panel.setMinimumWidth(needed)
+                self._splitter.setSizes(
+                    [needed, max(current[1] - (needed - current[0]), 200)]
+                )
+
+        # Отложить на 0 мс — чтобы Qt успел пересчитать layout после setVisible
+        QTimer.singleShot(0, _do_adjust)
 
     def _sync_ui_to_model_now(self) -> None:
         """
@@ -1519,6 +1850,7 @@ class MainWindow(QMainWindow):
         # Collect all current settings
         coords = self._get_current_coordinates()
         grid_settings = self.grid_widget.get_settings()
+        grid_settings['display_grid'] = self.display_grid_cb.isChecked()
         helmert_settings = self.helmert_widget.get_values()
 
         # Map type from combo (stored as enum value string)
@@ -1536,15 +1868,25 @@ class MainWindow(QMainWindow):
         payload.update(helmert_settings)
         payload['map_type'] = map_type_value
         payload['overlay_contours'] = overlay_checked
-        payload['radio_horizon_overlay_alpha'] = self.radio_horizon_alpha_spin.value()
+        payload['radio_horizon_overlay_alpha'] = (
+            self.radio_horizon_alpha_slider.value() / 100.0
+        )
         # Radar coverage parameters
-        payload['radar_azimuth_deg'] = self.radar_azimuth_spin.value()
-        payload['radar_sector_width_deg'] = self.radar_sector_spin.value()
-        payload['radar_elevation_min_deg'] = self.radar_elev_min_spin.value()
-        payload['radar_elevation_max_deg'] = self.radar_elev_max_spin.value()
-        payload['radar_max_range_km'] = self.radar_range_spin.value()
-        payload['radar_target_height_min_m'] = self.radar_target_h_min_spin.value()
-        payload['radar_target_height_max_m'] = self.radar_target_h_max_spin.value()
+        payload['radar_azimuth_deg'] = float(
+            (540 - self.radar_azimuth_dial.value()) % 360
+        )
+        payload['radar_sector_width_deg'] = float(self.radar_sector_slider.value())
+        elev_lo: float
+        elev_hi: float
+        elev_lo, elev_hi = self.radar_elev_slider.value()
+        payload['radar_elevation_min_deg'] = float(elev_lo)
+        payload['radar_elevation_max_deg'] = float(elev_hi)
+        payload['radar_max_range_km'] = float(self.radar_range_slider.value())
+        target_lo: float
+        target_hi: float
+        target_lo, target_hi = self.radar_target_h_slider.value()
+        payload['radar_target_height_min_m'] = float(target_lo * 10)
+        payload['radar_target_height_max_m'] = float(target_hi * 10)
         self._controller.update_settings_bulk(**payload)
 
     def _get_current_coordinates(self) -> dict[str, int | bool | float | str]:
@@ -1571,8 +1913,8 @@ class MainWindow(QMainWindow):
             'control_point_x': control_point_x,
             'control_point_y': control_point_y,
             'control_point_name': self.control_point_name_edit.text(),
-            'antenna_height_m': round(self.antenna_height_spin.value()),
-            'max_flight_height_m': self.max_flight_height_spin.value(),
+            'antenna_height_m': self.antenna_height_slider.value(),
+            'max_flight_height_m': float(self.max_flight_height_slider.value()),
             'uav_height_reference': self._get_uav_height_reference(),
         }
 
@@ -1712,6 +2054,7 @@ class MainWindow(QMainWindow):
 
         # Clear previous preview and pixmap cache between runs
         self._clear_preview_ui()
+        self._preview_area.start_loading()
 
         # Cleanup any stale worker from previous run
         self._cleanup_download_worker()
@@ -1728,13 +2071,38 @@ class MainWindow(QMainWindow):
         self._download_worker.start()
 
         # Update UI state
+        # Очищаем временное сообщение статус-бара, иначе оно скроет виджеты
+        self.status_bar.clearMessage()
         # Show progress bar in status bar (will be updated by progress callbacks)
-        self._progress_bar.setVisible(True)
         self._progress_label.setVisible(True)
+        self._progress_bar.setVisible(True)
+        self._cancel_btn.setVisible(True)
+        self._cancel_btn.setEnabled(True)
         self._progress_label.setText('Подготовка…')
         self._progress_bar.setRange(0, 0)
         # Disable all UI controls during download
         self._set_controls_enabled(enabled=False)
+
+    @Slot()
+    def _cancel_operation(self) -> None:
+        """Cancel the currently running operation."""
+        if self._download_worker and self._download_worker.isRunning():
+            logger.info('User requested download cancellation')
+            self._download_worker.request_cancel()
+            self._progress_label.setText('Отмена…')
+            self._cancel_btn.setEnabled(False)
+        elif self._rh_worker is not None and self._rh_worker.isRunning():
+            logger.info('User requested radio horizon recompute cancellation')
+            self._rh_worker.terminate()
+            self._rh_worker.wait(500)
+            self._rh_worker.deleteLater()
+            self._rh_worker = None
+            self._progress_bar.setVisible(False)
+            self._progress_label.setVisible(False)
+            self._cancel_btn.setVisible(False)
+            self._set_controls_enabled(enabled=True)
+            QApplication.restoreOverrideCursor()
+            self._status_proxy.show_message('Операция отменена', 3000)
 
     @Slot(object, object)
     def _on_mouse_moved_on_map(self, px: float | None, py: float | None) -> None:
@@ -1877,8 +2245,26 @@ class MainWindow(QMainWindow):
         """Legacy wrapper — delegates to _recompute_coverage_at_click."""
         self._recompute_coverage_at_click(px, py)
 
-    def _recompute_coverage_at_click(self, px: float, py: float) -> None:
-        """Recompute coverage (НСУ or РЛС) with new position at clicked point."""
+    def _recompute_coverage_at_click(
+        self,
+        px: float,
+        py: float,
+        *,
+        dem_row: int | None = None,
+        dem_col: int | None = None,
+    ) -> None:
+        """
+        Recompute coverage (НСУ or РЛС) with new position at clicked point.
+
+        Args:
+            px: X position on the final image (for overlay center).
+            py: Y position on the final image (for overlay center).
+            dem_row: If provided, use this DEM row directly
+                instead of converting from (px, py).
+            dem_col: If provided, use this DEM column directly
+                instead of converting from (px, py).
+
+        """
         # If worker is still running, defer this recompute until it finishes
         if self._rh_worker is not None and self._rh_worker.isRunning():
             logger.info('Worker busy — deferring recompute to pending queue')
@@ -1895,12 +2281,46 @@ class MainWindow(QMainWindow):
 
         dem_h, dem_w = dem.shape
 
-        if final_size:
+        if dem_row is not None and dem_col is not None:
+            # Direct DEM coords — no round-trip conversion needed
+            new_antenna_row = dem_row
+            new_antenna_col = dem_col
+        elif final_size:
             final_w, final_h = final_size
-            scale_x = dem_w / final_w
-            scale_y = dem_h / final_h
-            new_antenna_col = int(px * scale_x)
-            new_antenna_row = int(py * scale_y)
+            rotation_deg = self._rh_cache.get('rotation_deg', 0.0)
+
+            # Размеры полноразмерного DEM (= crop_rect pixel size)
+            dem_full = self._rh_cache.get('dem_full')
+            if dem_full is not None:
+                crop_h, crop_w = dem_full.shape
+            else:
+                crop_h, crop_w = dem_h, dem_w
+
+            # 1. Undo center crop: final image → crop_rect (повёрнутый)
+            left_crop = (crop_w - final_w) / 2.0
+            top_crop = (crop_h - final_h) / 2.0
+            px_rot = px + left_crop
+            py_rot = py + top_crop
+
+            # 2. Обратный поворот вокруг центра crop_rect
+            # cv2 forward rotation: [[cos(a), sin(a)], [-sin(a), cos(a)]]
+            # Inverse = transpose:  [[cos(a), -sin(a)], [sin(a), cos(a)]]
+            # With positive angle, (dx*cos - dy*sin, dx*sin + dy*cos) is the inverse.
+            if abs(rotation_deg) > ROTATION_INVERSE_THRESHOLD_DEG:
+                cx, cy = crop_w / 2.0, crop_h / 2.0
+                rad = math.radians(rotation_deg)
+                cos_a, sin_a = math.cos(rad), math.sin(rad)
+                dx, dy = px_rot - cx, py_rot - cy
+                ux = dx * cos_a - dy * sin_a + cx
+                uy = dx * sin_a + dy * cos_a + cy
+            else:
+                ux, uy = px_rot, py_rot
+
+            # 3. Масштабирование: crop_rect → downsampled DEM
+            scale_x = dem_w / crop_w
+            scale_y = dem_h / crop_h
+            new_antenna_col = int(ux * scale_x)
+            new_antenna_row = int(uy * scale_y)
         else:
             new_antenna_col = int(px)
             new_antenna_row = int(py)
@@ -1910,10 +2330,14 @@ class MainWindow(QMainWindow):
 
         logger.info(
             'Coverage recompute: scene (%.1f, %.1f) -> DEM (%d, %d)',
-            px, py, new_antenna_col, new_antenna_row,
+            px,
+            py,
+            new_antenna_col,
+            new_antenna_row,
         )
 
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        self._set_controls_enabled(enabled=False)
 
         # Determine if this is a radar coverage map
         is_radar = self._rh_cache.get('is_radar_coverage', False)
@@ -1921,48 +2345,82 @@ class MainWindow(QMainWindow):
         if is_radar:
             sector_params = {
                 'radar_azimuth_deg': self._rh_cache.get('radar_azimuth_deg', 0.0),
-                'radar_sector_width_deg': self._rh_cache.get('radar_sector_width_deg', 90.0),
-                'radar_elevation_min_deg': self._rh_cache.get('radar_elevation_min_deg', 0.5),
-                'radar_elevation_max_deg': self._rh_cache.get('radar_elevation_max_deg', 30.0),
+                'radar_sector_width_deg': self._rh_cache.get(
+                    'radar_sector_width_deg', 90.0
+                ),
+                'radar_elevation_min_deg': self._rh_cache.get(
+                    'radar_elevation_min_deg', 0.5
+                ),
+                'radar_elevation_max_deg': self._rh_cache.get(
+                    'radar_elevation_max_deg', 30.0
+                ),
                 'radar_max_range_km': self._rh_cache.get('radar_max_range_km', 15.0),
-                'radar_target_height_min_m': self._rh_cache.get('radar_target_height_min_m', 0.0),
-                'radar_target_height_max_m': self._rh_cache.get('radar_target_height_max_m', 5000.0),
+                'radar_target_height_min_m': self._rh_cache.get(
+                    'radar_target_height_min_m', 0.0
+                ),
+                'radar_target_height_max_m': self._rh_cache.get(
+                    'radar_target_height_max_m', 5000.0
+                ),
             }
-            self._status_proxy.show_message('Пересчет зоны обнаружения РЛС...', 0)
+            self._progress_label.setText('Пересчет зоны обнаружения РЛС…')
         else:
-            self._status_proxy.show_message('Пересчет радиогоризонта...', 0)
+            self._progress_label.setText('Пересчет радиогоризонта…')
+
+        # Очищаем временное сообщение статус-бара, иначе оно скроет виджеты
+        self.status_bar.clearMessage()
+        # Индикатор прогресса (indeterminate)
+        self._progress_bar.setRange(0, 0)
+        self._progress_label.setVisible(True)
+        self._progress_bar.setVisible(True)
+        self._cancel_btn.setVisible(True)
 
         self._rh_click_pos = (px, py)
 
         # Use generalized CoverageRecomputeWorker
         self._rh_worker = CoverageRecomputeWorker(
-            self._rh_cache, new_antenna_row, new_antenna_col,
+            self._rh_cache,
+            new_antenna_row,
+            new_antenna_col,
             sector_params=sector_params,
         )
         self._rh_worker.finished.connect(self._on_radio_horizon_recompute_finished)
         self._rh_worker.error.connect(self._on_radio_horizon_recompute_error)
         self._rh_worker.start()
 
-    @Slot(Image.Image, int, int)
+    @Slot(Image.Image, Image.Image, int, int)
     def _on_radio_horizon_recompute_finished(
-        self, result_image: Image.Image, new_antenna_row: int, new_antenna_col: int
+        self,
+        result_image: Image.Image,
+        coverage_layer: Image.Image,
+        new_antenna_row: int,
+        new_antenna_col: int,
     ) -> None:
         """Handle radio horizon recompute completion."""
         try:
             gui_start_time = time.monotonic()
+            # Sync UI → model FIRST so that label drawing reads current values
+            # (e.g. antenna_height_m, max_flight_height_m from sliders)
+            self._sync_ui_to_model_now()
+            self._rh_cache['coverage_layer'] = coverage_layer
             logger.info('RH recompute finished - applying postprocessing')
 
             # Update cache with new antenna position
             self._rh_cache['antenna_row'] = new_antenna_row
             self._rh_cache['antenna_col'] = new_antenna_col
-            # Recompute result is NOT rotated — reset rotation for overlays
-            self._rh_cache['rotation_deg'] = 0.0
+            # rotation_deg is preserved: recomputed result is now rotated
+            # (same coordinate system as first build).
+            rotation_deg = self._rh_cache.get('rotation_deg', 0.0)
+
+            # Create display-sized topo for interactive alpha blending.
+            # (recompute worker returns coverage_layer at final_size,
+            #  so topo must also be at final_size for correct blend)
+            self._prepare_rh_topo_display()
 
             # Apply postprocessing (grid, legend, contours)
             metadata = self._model.state.last_map_metadata
             mpp = metadata.meters_per_pixel if metadata else 0.0
 
-            # Apply cached overlay layer if available, otherwise draw manually
+            # Apply cached overlay layer, or rebuild from base + fresh legend
             step_start = time.monotonic()
             overlay_layer = self._rh_cache.get('overlay_layer')
             if overlay_layer:
@@ -1972,14 +2430,19 @@ class MainWindow(QMainWindow):
                 step_elapsed = time.monotonic() - step_start
                 logger.info('  └─ Apply cached overlay layer: %.3f sec', step_elapsed)
             else:
-                # Fallback: draw grid and legend manually
-                if self._rh_cache.get('settings'):
-                    settings = self._rh_cache['settings']
-                    self._draw_rh_grid(result_image, settings, mpp)
-                self._draw_rh_legend(result_image, mpp)
+                # Rebuild overlay: base (contours + grid) + fresh legend
+                overlay_base = self._rh_cache.get('overlay_base')
+                if overlay_base is not None:
+                    overlay_layer = overlay_base.copy()
+                else:
+                    overlay_layer = Image.new('RGBA', result_image.size, (0, 0, 0, 0))
+                self._draw_rh_legend(overlay_layer, mpp)
+                self._rh_cache['overlay_layer'] = overlay_layer
+                result_image = result_image.convert('RGBA')
+                result_image = Image.alpha_composite(result_image, overlay_layer)
                 step_elapsed = time.monotonic() - step_start
                 logger.info(
-                    '  └─ Draw grid and legend manually: %.3f sec', step_elapsed
+                    '  └─ Rebuilt overlay (base + legend): %.3f sec', step_elapsed
                 )
 
             # Draw control point triangle and label on the image (like in first build)
@@ -1994,7 +2457,7 @@ class MainWindow(QMainWindow):
                         px,
                         py,
                         mpp,
-                        rotation_deg=0.0,
+                        rotation_deg=rotation_deg,
                         size_m=self._model.settings.grid_font_size_m,
                     )
 
@@ -2007,9 +2470,6 @@ class MainWindow(QMainWindow):
                     x_val, y_val = coords
                     self.control_point_x_widget.set_coordinate(x_val)
                     self.control_point_y_widget.set_coordinate(y_val)
-
-                    # Update model
-                    self._sync_ui_to_model_now()
 
                     logger.info('Control point updated to X=%d, Y=%d', x_val, y_val)
             step_elapsed = time.monotonic() - step_start
@@ -2031,8 +2491,10 @@ class MainWindow(QMainWindow):
                     max_range_px = (radar_range_km * 1000.0) / pixel_size_final
 
                     # Radar position = control point position (click pos)
-                    radar_cx, radar_cy = self._rh_click_pos if self._rh_click_pos else (
-                        result_image.width / 2, result_image.height / 2
+                    radar_cx, radar_cy = (
+                        self._rh_click_pos
+                        if self._rh_click_pos
+                        else (result_image.width / 2, result_image.height / 2)
                     )
 
                     # Font for ceiling arc labels
@@ -2055,16 +2517,22 @@ class MainWindow(QMainWindow):
                         pixel_size_m=pixel_size_final,
                         elevation_max_deg=radar_elev_max,
                         font=arc_font,
+                        rotation_deg=rotation_deg,
                     )
 
                     draw_radar_marker(
-                        result_image, radar_cx, radar_cy, pixel_size_final,
+                        result_image,
+                        radar_cx,
+                        radar_cy,
+                        pixel_size_final,
                         azimuth_deg=radar_az,
-                        rotation_deg=0.0,
+                        rotation_deg=rotation_deg,
                     )
 
                     step_elapsed = time.monotonic() - step_start
-                    logger.info('  └─ Draw radar sector overlay: %.3f sec', step_elapsed)
+                    logger.info(
+                        '  └─ Draw radar sector overlay: %.3f sec', step_elapsed
+                    )
                 except Exception as e:
                     logger.warning('Failed to draw radar sector overlay: %s', e)
 
@@ -2088,13 +2556,18 @@ class MainWindow(QMainWindow):
                 az = self._rh_cache.get('radar_azimuth_deg', 0.0)
                 self._update_azimuth_indicator(az)
 
+            # Restore QGraphics overlay markers cleared by set_image → scene.clear()
+            self._update_cp_marker_from_settings(self._model.settings)
+
             # Restore cursor and show success message
             QApplication.restoreOverrideCursor()
 
             gui_total_elapsed = time.monotonic() - gui_start_time
             logger.info('GUI postprocessing total: %.3f sec', gui_total_elapsed)
             if self._rh_cache.get('is_radar_coverage', False):
-                self._status_proxy.show_message('Зона обнаружения РЛС пересчитана', 2000)
+                self._status_proxy.show_message(
+                    'Зона обнаружения РЛС пересчитана', 2000
+                )
             else:
                 self._status_proxy.show_message('Радиогоризонт пересчитан', 2000)
 
@@ -2103,6 +2576,14 @@ class MainWindow(QMainWindow):
             QApplication.restoreOverrideCursor()
             self._status_proxy.show_message(f'Ошибка при обновлении превью: {e}', 5000)
         finally:
+            # Скрыть прогресс-бар
+            self._progress_bar.setVisible(False)
+            self._progress_label.setVisible(False)
+            self._cancel_btn.setVisible(False)
+
+            # Re-enable all UI controls
+            self._set_controls_enabled(enabled=True)
+
             # Clean up worker
             if self._rh_worker is not None:
                 self._rh_worker.deleteLater()
@@ -2169,26 +2650,48 @@ class MainWindow(QMainWindow):
             if not settings:
                 return
 
+            metadata = self._model.state.last_map_metadata
+            if not metadata:
+                return
+
             is_radar = self._rh_cache.get('is_radar_coverage', False)
             if is_radar:
-                min_value = settings.radar_target_height_min_m
-                max_value = settings.radar_target_height_max_m
+                min_elev = self._rh_cache.get(
+                    'radar_target_height_min_m',
+                    settings.radar_target_height_min_m,
+                )
+                max_elev = self._rh_cache.get(
+                    'radar_target_height_max_m',
+                    settings.radar_target_height_max_m,
+                )
+                title = 'Мин. высота обнаружения РЛС, м'
             else:
-                min_value = 0.0
-                max_value = settings.max_flight_height_m
-            ppm = 1.0 / mpp
-            font_size_px = max(12, round(settings.grid_font_size_m * ppm))
-            label_bg_padding_px = max(2, round(settings.grid_label_bg_padding_m * ppm))
+                min_elev = 0.0
+                max_elev = self._rh_cache.get(
+                    'max_height_m',
+                    settings.max_flight_height_m,
+                )
+                abbr = UAV_HEIGHT_REFERENCE_ABBR.get(
+                    settings.uav_height_reference,
+                    '',
+                )
+                title = (
+                    f'Минимальная высота БпЛА ({abbr}) для устойчивой радиосвязи'
+                    if abbr
+                    else 'Минимальная высота БпЛА'
+                )
 
             draw_elevation_legend(
-                result,
-                min_value=min_value,
-                max_value=max_value,
+                img=result,
                 color_ramp=RADIO_HORIZON_COLOR_RAMP,
-                unit_label='м',
-                step=ELEVATION_LEGEND_STEP_M,
-                font_size_px=font_size_px,
-                label_bg_padding_px=label_bg_padding_px,
+                min_elevation_m=min_elev,
+                max_elevation_m=max_elev,
+                center_lat_wgs=metadata.center_lat_wgs,
+                zoom=metadata.zoom,
+                scale=metadata.scale,
+                title=title,
+                label_step_m=ELEVATION_LEGEND_STEP_M,
+                grid_font_size_m=settings.grid_font_size_m,
             )
         except Exception as e:
             logger.warning('Не удалось нарисовать легенду: %s', e)
@@ -2239,16 +2742,13 @@ class MainWindow(QMainWindow):
                 current_y += name_height + bg_padding_px * 2
 
             # Height line with subscript
-            # Get elevation from DEM cache
-            dem = self._rh_cache.get('dem')
+            # Get elevation from _dem_grid (same source as informer tooltip)
             cp_elev = None
-            if dem is not None:
-                antenna_row = self._rh_cache.get('antenna_row')
-                antenna_col = self._rh_cache.get('antenna_col')
-                if antenna_row is not None and antenna_col is not None:
-                    dem_h, dem_w = dem.shape
-                    if 0 <= antenna_row < dem_h and 0 <= antenna_col < dem_w:
-                        cp_elev = float(dem[antenna_row, antenna_col])
+            if self._dem_grid is not None:
+                row, col = int(cy_img), int(cx_img)
+                dh, dw = self._dem_grid.shape
+                if 0 <= row < dh and 0 <= col < dw:
+                    cp_elev = float(self._dem_grid[row, col])
 
             if cp_elev is not None:
                 height_parts = [
@@ -2282,6 +2782,10 @@ class MainWindow(QMainWindow):
         """Handle radio horizon recompute error."""
         logger.error('Radio horizon recompute failed: %s', error_msg)
         QApplication.restoreOverrideCursor()
+        self._progress_bar.setVisible(False)
+        self._progress_label.setVisible(False)
+        self._cancel_btn.setVisible(False)
+        self._set_controls_enabled(enabled=True)
         self._status_proxy.show_message(f'Ошибка пересчета: {error_msg}', 5000)
 
         # Clean up worker
@@ -2292,9 +2796,443 @@ class MainWindow(QMainWindow):
         # If a recompute was deferred, run it now
         self._flush_pending_recompute()
 
+    def _has_coverage_cache(self) -> bool:
+        """
+        Check if any coverage map is displayed with cache.
+
+        Covers НСУ, РЛС and ELEVATION_COLOR map types.
+        """
+        metadata = self._model.state.last_map_metadata
+        if metadata is None or not self._rh_cache:
+            return False
+        if metadata.map_type in (MapType.RADIO_HORIZON, MapType.RADAR_COVERAGE):
+            return 'dem' in self._rh_cache
+        if metadata.map_type == MapType.ELEVATION_COLOR:
+            return 'coverage_layer' in self._rh_cache
+        return False
+
+    def _is_radar_map_active(self) -> bool:
+        """Check if a radar coverage map is currently displayed with cached DEM."""
+        metadata = self._model.state.last_map_metadata
+        return (
+            metadata is not None
+            and metadata.map_type == MapType.RADAR_COVERAGE
+            and bool(self._rh_cache)
+            and 'dem' in self._rh_cache
+        )
+
+    def _apply_interactive_azimuth(self, new_az: float) -> None:
+        """Update azimuth interactively: cache + indicator, no map clear."""
+        self._rh_cache['radar_azimuth_deg'] = new_az
+        self._status_proxy.show_message(f'Азимут РЛС: {new_az:.0f}°', 1000)
+        self._update_azimuth_indicator(new_az)
+        self._azimuth_needs_recompute = True
+
+    @Slot(int)
+    def _on_azimuth_dial_changed(self, dial_value: int) -> None:
+        """Sync azimuth label when QDial is rotated."""
+        az = float((540 - dial_value) % 360)
+        self.radar_azimuth_label.setText(f'{int(az)}°')
+        if self._is_radar_map_active():
+            self._apply_interactive_azimuth(az)
+        else:
+            self._on_settings_changed()
+
+    @Slot(tuple)
+    def _on_elev_range_changed(self, value: tuple) -> None:
+        """Update elevation range label when range slider is dragged."""
+        lo, hi = value
+        self.radar_elev_label.setText(f'{lo}—{hi}°')
+        if self._has_coverage_cache():
+            self._rh_cache['radar_elevation_min_deg'] = float(lo)
+            self._rh_cache['radar_elevation_max_deg'] = float(hi)
+            self._elev_needs_recompute = True
+        else:
+            self._on_settings_changed()
+
+    @Slot()
+    def _on_elev_slider_released(self) -> None:
+        """Elevation slider released — recompute or sync model."""
+        if self._elev_needs_recompute:
+            self._elev_needs_recompute = False
+            self._trigger_coverage_recompute()
+        else:
+            self._on_settings_changed()
+
+    @Slot(tuple)
+    def _on_target_h_range_changed(self, value: tuple) -> None:
+        """Update label + cache when target height range slider is dragged."""
+        lo, hi = value
+        self.radar_target_h_label.setText(f'{lo * 10}—{hi * 10}')
+        if self._is_radar_map_active():
+            self._rh_cache['radar_target_height_min_m'] = float(lo * 10)
+            self._rh_cache['radar_target_height_max_m'] = float(hi * 10)
+            self._rh_cache['max_height_m'] = float(hi * 10)
+            # Легенда встроена в overlay — сбрасываем, чтобы перерисовать
+            self._rh_cache.pop('overlay_layer', None)
+            self._status_proxy.show_message(
+                f'Высота целей: {lo * 10}—{hi * 10} м', 1000
+            )
+            self._target_h_needs_recompute = True
+        else:
+            self._on_settings_changed()
+
+    @Slot()
+    def _on_target_h_slider_released(self) -> None:
+        """Target height slider released — trigger recompute or sync model."""
+        if self._target_h_needs_recompute:
+            self._target_h_needs_recompute = False
+            self._trigger_coverage_recompute()
+        else:
+            self._on_settings_changed()
+
+    @Slot()
+    def _on_azimuth_dial_released(self) -> None:
+        """QDial released — trigger recompute if needed."""
+        self._trigger_azimuth_recompute()
+
+    # ── Antenna height slider slot ─────────────────────────────
+
+    @Slot(int)
+    def _on_antenna_slider_changed(self, value: int) -> None:
+        """Update label + cache when slider is dragged."""
+        self.antenna_height_value_label.setText(str(value))
+        if self._has_coverage_cache():
+            self._rh_cache['antenna_height_m'] = float(value)
+            self._status_proxy.show_message(f'Высота антенны: {value} м', 1000)
+            self._antenna_needs_recompute = True
+        else:
+            self._on_settings_changed()
+
+    @Slot()
+    def _on_antenna_slider_released(self) -> None:
+        """Slider released — trigger recompute or sync model."""
+        if self._antenna_needs_recompute:
+            self._antenna_needs_recompute = False
+            self._trigger_coverage_recompute()
+        else:
+            self._on_settings_changed()
+
+    # ── Flight height slider interactive slots ──────────────
+
+    def _on_flight_height_slider_changed(self, value: int) -> None:
+        """Update label + cache when flight height slider is dragged."""
+        step = self.max_flight_height_slider.singleStep()
+        snapped = round(value / step) * step
+        if snapped != value:
+            self.max_flight_height_slider.setValue(snapped)
+            return
+        self.max_flight_height_value_label.setText(str(value))
+        if self._has_coverage_cache():
+            self._rh_cache['max_flight_height_m'] = float(value)
+            self._rh_cache['max_height_m'] = float(value)
+            # Легенда встроена в overlay — сбрасываем, чтобы перерисовать
+            self._rh_cache.pop('overlay_layer', None)
+            self._status_proxy.show_message(f'Потолок БпЛА: {value} м', 1000)
+            self._flight_height_needs_recompute = True
+        else:
+            self._on_settings_changed()
+
+    @Slot()
+    def _on_flight_height_slider_released(self) -> None:
+        """Slider released — trigger recompute or sync model."""
+        if self._flight_height_needs_recompute:
+            self._flight_height_needs_recompute = False
+            self._trigger_coverage_recompute()
+        else:
+            self._on_settings_changed()
+
+    # ── Height reference radio buttons ─────────────────────
+
+    @Slot()
+    def _on_height_ref_changed(self) -> None:
+        """Radio button changed — update cache + trigger recompute."""
+        ref = self._get_uav_height_reference()
+        if self._has_coverage_cache():
+            self._rh_cache['uav_height_reference'] = ref
+            self._trigger_coverage_recompute()
+        else:
+            self._on_settings_changed()
+
+    # ── Alpha slider interactive slots ───────────────────────
+
+    def _is_coverage_map_active(self) -> bool:
+        """Check if any coverage map (НСУ or РЛС) is active with cache."""
+        metadata = self._model.state.last_map_metadata
+        if not metadata:
+            return False
+        return (
+            metadata.map_type in (MapType.RADIO_HORIZON, MapType.RADAR_COVERAGE)
+            and bool(self._rh_cache)
+            and 'coverage_layer' in self._rh_cache
+        )
+
+    def _prepare_rh_topo_display(self) -> None:
+        """
+        Transform topo_base to final display size (resize → rotate → crop).
+
+        Sets rh_cache['topo_base_display'] so _apply_interactive_alpha
+        blends at the correct display resolution.
+        """
+        if not self._rh_cache:
+            return
+        rotation_deg = self._rh_cache.get('rotation_deg', 0.0)
+        final_size = self._rh_cache.get('final_size')
+        crop_size = self._rh_cache.get('crop_size')
+        if not final_size or not crop_size:
+            return
+
+        fw, fh = final_size
+        cw, ch = crop_size
+        has_rotation = abs(rotation_deg) > ROTATION_EPSILON
+
+        topo = self._rh_cache.get('topo_base')
+        if topo is not None:
+            topo_d = topo.copy()
+            if topo_d.size != (cw, ch):
+                topo_d = topo_d.resize((cw, ch), Image.Resampling.BILINEAR)
+            if has_rotation:
+                topo_d = rotate_keep_size(topo_d, rotation_deg, fill=(128, 128, 128))
+            topo_d = center_crop(topo_d, fw, fh)
+            self._rh_cache['topo_base_display'] = topo_d.convert('L').convert('RGBA')
+
+    def _prepare_rh_display_cache(self) -> None:
+        """
+        Transform both coverage_layer and topo_base to final display size.
+
+        Called once after the initial build. Replicates the first-build
+        pipeline (resize → rotate → center_crop) so that
+        _apply_interactive_alpha works at the correct display size.
+        """
+        # Prepare topo
+        self._prepare_rh_topo_display()
+
+        # Prepare coverage_layer at final_size
+        if not self._rh_cache:
+            return
+        rotation_deg = self._rh_cache.get('rotation_deg', 0.0)
+        final_size = self._rh_cache.get('final_size')
+        crop_size = self._rh_cache.get('crop_size')
+        if not final_size or not crop_size:
+            return
+
+        fw, fh = final_size
+        cw, ch = crop_size
+        has_rotation = abs(rotation_deg) > ROTATION_EPSILON
+
+        coverage = self._rh_cache.get('coverage_layer')
+        if coverage is not None:
+            cov_d = coverage
+            if cov_d.size != (cw, ch):
+                cov_d = cov_d.resize((cw, ch), Image.Resampling.BILINEAR)
+            if has_rotation:
+                cov_d = rotate_keep_size(cov_d, rotation_deg, fill=(0, 0, 0, 0))
+            cov_d = center_crop(cov_d, fw, fh)
+            self._rh_cache['coverage_layer'] = cov_d
+
+    def _apply_interactive_alpha(self, alpha_fraction: float) -> None:
+        """Re-blend coverage_layer with topo_base at new alpha (instant)."""
+        coverage = self._rh_cache.get('coverage_layer')
+        # Use rotated+cropped topo for display if available (matches coverage coords)
+        topo_base = self._rh_cache.get('topo_base_display') or self._rh_cache.get(
+            'topo_base'
+        )
+        if coverage is None or topo_base is None:
+            return
+        self._rh_cache['overlay_alpha'] = alpha_fraction
+        blend_alpha = 1.0 - alpha_fraction
+        rotation_deg = self._rh_cache.get('rotation_deg', 0.0)
+        # Гарантируем совпадение размеров
+        if coverage.size != topo_base.size:
+            coverage = coverage.resize(topo_base.size, Image.Resampling.BILINEAR)
+        blended = Image.blend(topo_base, coverage, blend_alpha)
+        # Apply cached overlay (grid + legend)
+        overlay_layer = self._rh_cache.get('overlay_layer')
+        if overlay_layer:
+            blended = blended.convert('RGBA')
+            if overlay_layer.size != blended.size:
+                overlay_layer = overlay_layer.resize(
+                    blended.size, Image.Resampling.BILINEAR
+                )
+            blended = Image.alpha_composite(blended, overlay_layer)
+        # Redraw control point triangle + label
+        if hasattr(self, '_rh_click_pos') and self._rh_click_pos is not None:
+            metadata = self._model.state.last_map_metadata
+            mpp = metadata.meters_per_pixel if metadata else 0.0
+            if mpp > 0:
+                px, py = self._rh_click_pos
+                draw_control_point_triangle(
+                    blended,
+                    px,
+                    py,
+                    mpp,
+                    rotation_deg=rotation_deg,
+                    size_m=self._model.settings.grid_font_size_m,
+                )
+                self._draw_rh_control_point_label(blended, px, py, mpp)
+        self._preview_area.set_image(blended)
+        # Restore QGraphics overlay markers cleared by set_image → scene.clear()
+        self._update_cp_marker_from_settings(self._model.settings)
+
+    @Slot(int)
+    def _on_alpha_slider_changed(self, value: int) -> None:
+        """Update label + status while dragging (blend deferred to release)."""
+        step = self.radio_horizon_alpha_slider.singleStep()
+        snapped = round(value / step) * step
+        if snapped != value:
+            self.radio_horizon_alpha_slider.setValue(snapped)
+            return
+        self.radio_horizon_alpha_label.setText(f'{value}%')
+        self._status_proxy.show_message('Пересчет прозрачности...', 1000)
+        self._alpha_needs_recompute = True
+
+    @Slot()
+    def _on_alpha_slider_released(self) -> None:
+        """Alpha slider released — apply blend + sync model."""
+        if self._alpha_needs_recompute:
+            self._alpha_needs_recompute = False
+            if self._has_coverage_cache() and 'coverage_layer' in self._rh_cache:
+                alpha = self.radio_horizon_alpha_slider.value() / 100.0
+                self._rh_cache['overlay_alpha'] = alpha
+                self._set_controls_enabled(enabled=False)
+                self.status_bar.clearMessage()
+                self._progress_label.setText('Пересчёт…')
+                self._progress_bar.setRange(0, 0)
+                self._progress_label.setVisible(True)
+                self._progress_bar.setVisible(True)
+                self._cancel_btn.setVisible(False)  # Быстрая операция — без отмены
+                QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+                QApplication.processEvents()
+                try:
+                    self._apply_interactive_alpha(alpha)
+                finally:
+                    QApplication.restoreOverrideCursor()
+                    self._progress_bar.setVisible(False)
+                    self._progress_label.setVisible(False)
+                    self._cancel_btn.setVisible(False)
+                    self._set_controls_enabled(enabled=True)
+        self._sync_ui_to_model_now()
+
+    # ── Sector slider interactive slots ────────────────────────
+
+    def _apply_interactive_sector(self, sector_deg: float) -> None:
+        """Update sector width interactively: cache + indicator, no map clear."""
+        self._rh_cache['radar_sector_width_deg'] = sector_deg
+        self._status_proxy.show_message(f'Азимутальный угол: {int(sector_deg)}°', 1000)
+        az = self._rh_cache.get('radar_azimuth_deg', 0.0)
+        self._update_azimuth_indicator(az)
+        self._sector_needs_recompute = True
+
+    @Slot(int)
+    def _on_sector_slider_changed(self, slider_value: int) -> None:
+        """Update label when sector slider is dragged; interactive preview."""
+        self.radar_sector_label.setText(f'{slider_value}°')
+        if self._is_radar_map_active():
+            self._apply_interactive_sector(float(slider_value))
+        else:
+            self._on_settings_changed()
+
+    @Slot()
+    def _on_sector_slider_released(self) -> None:
+        """Sector slider released — trigger recompute if needed."""
+        self._trigger_sector_recompute()
+
+    def _trigger_sector_recompute(self) -> None:
+        """Trigger coverage recompute after sector change."""
+        if not self._sector_needs_recompute:
+            return
+        self._sector_needs_recompute = False
+        self._trigger_coverage_recompute()
+
+    # ── Range slider interactive slots ─────────────────────────
+
+    def _apply_interactive_range(self, range_km: float) -> None:
+        """Update range interactively: cache + indicator, no map clear."""
+        self._rh_cache['radar_max_range_km'] = range_km
+        self._status_proxy.show_message(f'Дальность РЛС: {range_km:.1f} км', 1000)
+        az = self._rh_cache.get('radar_azimuth_deg', 0.0)
+        self._update_azimuth_indicator(az)
+        self._range_needs_recompute = True
+
+    @Slot(int)
+    def _on_range_slider_changed(self, slider_value: int) -> None:
+        """Update label when slider is dragged; interactive preview."""
+        km = float(slider_value)
+        self.radar_range_label.setText(str(slider_value))
+        if self._is_radar_map_active():
+            self._apply_interactive_range(km)
+        else:
+            self._on_settings_changed()
+
+    @Slot()
+    def _on_range_slider_released(self) -> None:
+        """Slider released — trigger recompute if needed."""
+        self._trigger_range_recompute()
+
+    # ── Shared coverage recompute ──────────────────────────────
+
+    def _trigger_coverage_recompute(self) -> None:
+        """
+        Common recompute logic shared by azimuth, range, sector triggers.
+
+        Antenna position doesn't change — pass DEM coords directly to avoid
+        lossy round-trip (DEM→final→DEM) through rotation/crop transforms.
+        The recomputed result is now rotated (same as first build), so
+        _rh_click_pos (in rotated coords) remains valid.
+        """
+        if not self._rh_cache or 'dem' not in self._rh_cache:
+            return
+
+        ant_row = self._rh_cache.get('antenna_row', 0)
+        ant_col = self._rh_cache.get('antenna_col', 0)
+
+        # Keep _rh_click_pos as-is (rotated coords from first build).
+        # If not yet set, compute from metadata.
+        if self._rh_click_pos is None:
+            metadata = self._model.state.last_map_metadata
+            if metadata:
+                self._rh_click_pos = self._compute_cp_image_pos(metadata)
+        if self._rh_click_pos is None:
+            return
+
+        px, py = self._rh_click_pos
+        self._recompute_coverage_at_click(px, py, dem_row=ant_row, dem_col=ant_col)
+
+    def _dem_to_final_coords(
+        self,
+        dem_row: int,
+        dem_col: int,
+    ) -> tuple[float, float]:
+        """
+        Convert DEM (row, col) to final image (x, y) using crop formula.
+
+        Accounts for center crop offset (rotation padding) in DEM.
+        """
+        dem = self._rh_cache.get('dem')
+        final_size = self._rh_cache.get('final_size')
+        crop_size = self._rh_cache.get('crop_size')
+        if dem is not None and final_size:
+            dem_h, dem_w = dem.shape
+            final_w, final_h = final_size
+            if crop_size and crop_size[0] > 0 and crop_size[1] > 0:
+                cw, ch = crop_size
+                fx = dem_col * cw / dem_w - (cw - final_w) / 2.0
+                fy = dem_row * ch / dem_h - (ch - final_h) / 2.0
+                return (fx, fy)
+            return (dem_col * final_w / dem_w, dem_row * final_h / dem_h)
+        return (float(dem_col), float(dem_row))
+
+    def _trigger_range_recompute(self) -> None:
+        """Trigger coverage recompute after range change."""
+        if not self._range_needs_recompute:
+            return
+        self._range_needs_recompute = False
+        self._trigger_coverage_recompute()
+
     @Slot(float)
     def _rotate_radar_azimuth(self, delta_deg: float) -> None:
-        """Rotate radar azimuth visually (instant) and mark for recompute.
+        """
+        Rotate radar azimuth visually (instant) and mark for recompute.
 
         Called from Shift+wheel and [ ] keys.
         - Shift+wheel: recompute fires on Shift release.
@@ -2311,8 +3249,9 @@ class MainWindow(QMainWindow):
         new_az = (current_az + delta_deg) % 360.0
         self._rh_cache['radar_azimuth_deg'] = new_az
 
-        with QSignalBlocker(self.radar_azimuth_spin):
-            self.radar_azimuth_spin.setValue(new_az)
+        self.radar_azimuth_label.setText(f'{int(new_az)}°')
+        with QSignalBlocker(self.radar_azimuth_dial):
+            self.radar_azimuth_dial.setValue(int((540 - new_az) % 360))
 
         self._status_proxy.show_message(f'Азимут РЛС: {new_az:.0f}°', 1000)
 
@@ -2329,36 +3268,18 @@ class MainWindow(QMainWindow):
         self._trigger_azimuth_recompute()
 
     def _trigger_azimuth_recompute(self) -> None:
-        """Common method: trigger coverage recompute with current azimuth."""
+        """Trigger coverage recompute after azimuth change."""
         if not self._azimuth_needs_recompute:
             return
         self._azimuth_needs_recompute = False
-
-        if not self._rh_cache or 'dem' not in self._rh_cache:
-            return
-
-        ant_row = self._rh_cache.get('antenna_row', 0)
-        ant_col = self._rh_cache.get('antenna_col', 0)
-
-        # Convert DEM coords back to final-image coordinates
-        dem = self._rh_cache.get('dem')
-        final_size = self._rh_cache.get('final_size')
-        if dem is not None and final_size:
-            dem_h, dem_w = dem.shape
-            final_w, final_h = final_size
-            px = ant_col * final_w / dem_w
-            py = ant_row * final_h / dem_h
-        else:
-            px = float(ant_col)
-            py = float(ant_row)
-
-        self._rh_click_pos = (px, py)
-        self._recompute_coverage_at_click(px, py)
+        self._trigger_coverage_recompute()
 
     def _compute_cp_image_pos(
-        self, metadata: MapMetadata | None = None,
+        self,
+        metadata: MapMetadata | None = None,
     ) -> tuple[float, float] | None:
-        """Compute control point position on the final image using precise coords.
+        """
+        Compute control point position on the final image using precise coords.
 
         Uses the same WGS84→pixel transform as _draw_radar_sector_overlay,
         so the azimuth line origin matches the control point marker exactly.
@@ -2377,47 +3298,49 @@ class MainWindow(QMainWindow):
                 )
                 lat_wgs, lng_wgs = transformer.get_wgs84_center()
                 px, py = compute_control_point_image_coords(
-                    lat_wgs, lng_wgs,
-                    metadata.center_lat_wgs, metadata.center_lng_wgs,
-                    metadata.zoom, metadata.scale,
-                    metadata.width_px, metadata.height_px,
-                    metadata.rotation_deg, latlng_to_pixel_xy,
+                    lat_wgs,
+                    lng_wgs,
+                    metadata.center_lat_wgs,
+                    metadata.center_lng_wgs,
+                    metadata.zoom,
+                    metadata.scale,
+                    metadata.width_px,
+                    metadata.height_px,
+                    metadata.rotation_deg,
+                    latlng_to_pixel_xy,
                 )
-                return (px, py)
             except Exception:
                 logger.debug('Failed to compute CP image pos via coords, falling back')
+            else:
+                return (px, py)
 
-        # Fallback: linear DEM→final scaling
+        # Fallback: DEM→final scaling accounting for center crop
         if self._rh_cache:
             ant_row = self._rh_cache.get('antenna_row', 0)
             ant_col = self._rh_cache.get('antenna_col', 0)
-            dem = self._rh_cache.get('dem')
-            final_size = self._rh_cache.get('final_size')
-            if dem is not None and final_size:
-                dem_h, dem_w = dem.shape
-                final_w, final_h = final_size
-                return (ant_col * final_w / dem_w, ant_row * final_h / dem_h)
-            return (float(ant_col), float(ant_row))
+            return self._dem_to_final_coords(ant_row, ant_col)
         return None
 
     def _get_final_pixel_size_m(self) -> float:
-        """Get effective pixel size for the final (displayed) image.
+        """
+        Get effective pixel size for the final (displayed) image.
 
-        Cache stores DEM pixel_size_m which is coarser than the final image
-        (DEM is downsampled). Scale by DEM→final ratio for overlay drawing.
+        With crop+resize approach, the final pixel size = base_mpp
+        = dem_pixel_size_m * dem_w / crop_w (= dem_px / ds_factor).
         """
         dem_px = self._rh_cache.get('pixel_size_m', 1.0)
         dem = self._rh_cache.get('dem')
-        final_size = self._rh_cache.get('final_size')
-        if dem is not None and final_size:
+        crop_size = self._rh_cache.get('crop_size')
+        if dem is not None and crop_size:
             dem_w = dem.shape[1]
-            final_w = final_size[0]
-            if final_w > 0 and dem_w > 0:
-                return dem_px * dem_w / final_w
+            crop_w = crop_size[0]
+            if crop_w > 0 and dem_w > 0:
+                return dem_px * dem_w / crop_w
         return dem_px
 
     def _update_azimuth_indicator(self, azimuth_deg: float) -> None:
-        """Draw/update the dashed azimuth line on the preview scene.
+        """
+        Draw/update the dashed azimuth line on the preview scene.
 
         This is a lightweight scene overlay that provides instant visual
         feedback while rotating, before the heavy recompute finishes.
@@ -2435,7 +3358,10 @@ class MainWindow(QMainWindow):
         length_px = (radar_range_km * 1000.0) / pixel_size if pixel_size > 0 else 200.0
 
         self._preview_area.set_azimuth_line(
-            cx, cy, azimuth_deg, length_px,
+            cx,
+            cy,
+            azimuth_deg,
+            length_px,
             sector_width_deg=sector_width,
             rotation_deg=rot_deg,
         )
@@ -2448,19 +3374,23 @@ class MainWindow(QMainWindow):
         error_msg: str,
     ) -> None:
         """Handle download completion."""
+        self._preview_area.stop_loading()
+
         # Clear coordinate informer on failure
         if not success:
             self._coords_label.setText('')
 
         # Hide progress widgets and re-enable controls
         try:
-            if self._progress_bar.isVisible():
-                self._progress_bar.setVisible(False)
-                self._progress_label.setVisible(False)
+            self._progress_bar.setVisible(False)
+            self._progress_label.setVisible(False)
+            self._cancel_btn.setVisible(False)
             # Re-enable all UI controls when download is finished
             self._set_controls_enabled(enabled=True)
         except Exception as e:
             logger.debug(f'Failed to hide progress widgets: {e}')
+
+        cancelled = error_msg == 'Операция отменена пользователем'
 
         if success:
             self._status_proxy.show_message(
@@ -2468,6 +3398,9 @@ class MainWindow(QMainWindow):
                 'перенос координат в КТ.',
                 7000,
             )
+        elif cancelled:
+            self._clear_preview_ui()
+            self._status_proxy.show_message('Операция отменена', 3000)
         else:
             # Clear preview and related UI on failure as per requirement
             self._clear_preview_ui()
@@ -2693,9 +3626,9 @@ class MainWindow(QMainWindow):
             'grid_font_size_m': settings.grid_font_size_m,
             'grid_text_margin_m': settings.grid_text_margin_m,
             'grid_label_bg_padding_m': settings.grid_label_bg_padding_m,
-            'display_grid': settings.display_grid,
         }
         self.grid_widget.set_settings(grid_settings)
+        self.display_grid_cb.setChecked(settings.display_grid)
 
         # Update map type combobox and overlay checkbox
         try:
@@ -2723,9 +3656,10 @@ class MainWindow(QMainWindow):
         with QSignalBlocker(self.contours_checkbox):
             self.contours_checkbox.setChecked(overlay_flag)
 
-        # Проверяем, является ли текущий тип карты "Радиогоризонт" или "РЛС"
+        # Проверяем режимы: Радиогоризонт, РЛС, Карта высот
         is_radio_horizon = current_mt == MapType.RADIO_HORIZON
         is_radar_coverage = current_mt == MapType.RADAR_COVERAGE
+        is_elev_color = current_mt == MapType.ELEVATION_COLOR
 
         # Update Helmert settings
         self.helmert_widget.set_values(
@@ -2740,8 +3674,10 @@ class MainWindow(QMainWindow):
 
         # Update radio horizon overlay alpha
         rh_alpha = float(getattr(settings, 'radio_horizon_overlay_alpha', 0.7))
-        with QSignalBlocker(self.radio_horizon_alpha_spin):
-            self.radio_horizon_alpha_spin.setValue(rh_alpha)
+        rh_alpha_pct = int(rh_alpha * 100)
+        with QSignalBlocker(self.radio_horizon_alpha_slider):
+            self.radio_horizon_alpha_slider.setValue(rh_alpha_pct)
+        self.radio_horizon_alpha_label.setText(f'{rh_alpha_pct}%')
 
         # Update control point settings
         control_point_enabled = getattr(settings, 'control_point_enabled', False)
@@ -2774,15 +3710,16 @@ class MainWindow(QMainWindow):
             self.control_point_name_edit.setText(control_point_name)
 
         # Antenna height for radio horizon
-        antenna_height = float(getattr(settings, 'antenna_height_m', 10.0))
-        antenna_height = round(antenna_height)
-        with QSignalBlocker(self.antenna_height_spin):
-            self.antenna_height_spin.setValue(antenna_height)
+        antenna_height = round(float(getattr(settings, 'antenna_height_m', 10.0)))
+        with QSignalBlocker(self.antenna_height_slider):
+            self.antenna_height_slider.setValue(antenna_height)
+        self.antenna_height_value_label.setText(str(antenna_height))
 
         # Max flight height for radio horizon
-        max_flight_height = float(getattr(settings, 'max_flight_height_m', 500.0))
-        with QSignalBlocker(self.max_flight_height_spin):
-            self.max_flight_height_spin.setValue(max_flight_height)
+        max_flight_height = int(float(getattr(settings, 'max_flight_height_m', 500.0)))
+        with QSignalBlocker(self.max_flight_height_slider):
+            self.max_flight_height_slider.setValue(max_flight_height)
+        self.max_flight_height_value_label.setText(str(max_flight_height))
 
         # UAV height reference for radio horizon
         uav_height_ref = getattr(
@@ -2791,44 +3728,54 @@ class MainWindow(QMainWindow):
         self._set_uav_height_reference(uav_height_ref)
 
         # Radar coverage parameters
-        with QSignalBlocker(self.radar_azimuth_spin):
-            self.radar_azimuth_spin.setValue(
-                float(getattr(settings, 'radar_azimuth_deg', 0.0))
-            )
-        with QSignalBlocker(self.radar_sector_spin):
-            self.radar_sector_spin.setValue(
-                float(getattr(settings, 'radar_sector_width_deg', 90.0))
-            )
-        with QSignalBlocker(self.radar_elev_min_spin):
-            self.radar_elev_min_spin.setValue(
-                float(getattr(settings, 'radar_elevation_min_deg', 0.5))
-            )
-        with QSignalBlocker(self.radar_elev_max_spin):
-            self.radar_elev_max_spin.setValue(
-                float(getattr(settings, 'radar_elevation_max_deg', 30.0))
-            )
-        with QSignalBlocker(self.radar_range_spin):
-            self.radar_range_spin.setValue(
-                float(getattr(settings, 'radar_max_range_km', 15.0))
-            )
-        with QSignalBlocker(self.radar_target_h_min_spin):
-            self.radar_target_h_min_spin.setValue(
-                float(getattr(settings, 'radar_target_height_min_m', 30.0))
-            )
-        with QSignalBlocker(self.radar_target_h_max_spin):
-            self.radar_target_h_max_spin.setValue(
-                float(getattr(settings, 'radar_target_height_max_m', 5000.0))
-            )
+        _radar_az = float(getattr(settings, 'radar_azimuth_deg', 0.0))
+        self.radar_azimuth_label.setText(f'{int(_radar_az)}°')
+        with QSignalBlocker(self.radar_azimuth_dial):
+            self.radar_azimuth_dial.setValue(int((540 - _radar_az) % 360))
+        _sector = int(float(getattr(settings, 'radar_sector_width_deg', 90.0)))
+        with QSignalBlocker(self.radar_sector_slider):
+            self.radar_sector_slider.setValue(_sector)
+        self.radar_sector_label.setText(f'{_sector}°')
+        _elev_lo = int(float(getattr(settings, 'radar_elevation_min_deg', 1.0)))
+        _elev_hi = int(float(getattr(settings, 'radar_elevation_max_deg', 30.0)))
+        with QSignalBlocker(self.radar_elev_slider):
+            self.radar_elev_slider.setValue((_elev_lo, _elev_hi))
+        self.radar_elev_label.setText(f'{_elev_lo}—{_elev_hi}°')
+        range_km = float(getattr(settings, 'radar_max_range_km', 15.0))
+        with QSignalBlocker(self.radar_range_slider):
+            self.radar_range_slider.setValue(int(range_km))
+        self.radar_range_label.setText(str(int(range_km)))
+        _th_lo = int(float(getattr(settings, 'radar_target_height_min_m', 30.0)))
+        _th_hi = int(float(getattr(settings, 'radar_target_height_max_m', 5000.0)))
+        with QSignalBlocker(self.radar_target_h_slider):
+            self.radar_target_h_slider.setValue((_th_lo // 10, _th_hi // 10))
+        self.radar_target_h_label.setText(f'{_th_lo}—{_th_hi}')
 
-        # Панель «Радиогоризонт» видна только в режимах НСУ/РЛС
-        self._radio_horizon_group.setVisible(is_radio_horizon or is_radar_coverage)
+        # Панель видна для НСУ/РЛС/Карта высот
+        self._radio_horizon_group.setVisible(
+            is_radio_horizon or is_radar_coverage or is_elev_color
+        )
+
+        # Заголовок панели зависит от режима
+        if is_elev_color:
+            self._radio_horizon_group.setTitle('')
+        else:
+            self._radio_horizon_group.setTitle('')
 
         # Управление видимостью НСУ/РЛС-специфичных виджетов внутри единой панели
         nsu_visible = is_radio_horizon and not is_radar_coverage
-        self.max_flight_height_label.setVisible(nsu_visible)
-        self.max_flight_height_spin.setVisible(nsu_visible)
         self._nsu_height_ref_widget.setVisible(nsu_visible)
-        self._radar_settings_widget.setVisible(is_radar_coverage)
+        self._radar_settings_widget.setVisible(
+            is_radio_horizon or is_radar_coverage or is_elev_color
+        )
+        for w in self._radar_only_widgets:
+            w.setVisible(is_radar_coverage)
+        for w in self._nsu_only_widgets:
+            w.setVisible(nsu_visible)
+        # Виджеты антенны скрыты для ELEVATION_COLOR
+        antenna_visible = is_radio_horizon or is_radar_coverage
+        for w in self._antenna_widgets:
+            w.setVisible(antenna_visible)
 
         # Log the values to ensure no truncation occurs during UI update
         try:
@@ -2885,20 +3832,24 @@ class MainWindow(QMainWindow):
         """
         Update progress bar in status bar during long operations.
 
-        Shows progress bar and label in the lower left corner of the main window.
-        Progress bar always operates in indeterminate (spinner) mode.
+        When total > 0, shows a determinate progress bar (e.g. tile downloads).
+        When total == 0, shows an indeterminate spinner.
         """
-        _ = (done, total)
         # Show progress widgets if not visible
         if not self._progress_bar.isVisible():
             self._progress_bar.setVisible(True)
             self._progress_label.setVisible(True)
+            self._cancel_btn.setVisible(True)
             # Disable all UI controls when showing progress
             self._set_controls_enabled(enabled=False)
 
-        # Always use indeterminate progress (spinner mode) - no specific progress
-        # indication
-        self._progress_bar.setRange(0, 0)
+        if total > 0:
+            # Детерминированный прогресс (загрузка тайлов и т.д.)
+            self._progress_bar.setRange(0, total)
+            self._progress_bar.setValue(done)
+        # Indeterminate mode - show spinner
+        elif self._progress_bar.maximum() != 0:
+            self._progress_bar.setRange(0, 0)
 
         # Update progress label text
         if label:
@@ -2925,8 +3876,10 @@ class MainWindow(QMainWindow):
             if rh_cache is not None:
                 self._rh_cache = rh_cache
                 logger.info('Radio horizon cache saved for interactive rebuilding')
+                # Prepare display-sized layers for interactive alpha blending
+                self._prepare_rh_display_cache()
                 # Compute initial click position using precise coordinate transform
-                # (same method as _update_cp_marker_from_settings / _draw_radar_sector_overlay)
+                # (same as _update_cp_marker / _draw_radar_sector)
                 self._rh_click_pos = self._compute_cp_image_pos(metadata)
             else:
                 self._rh_cache = {}  # Clear cache for non-RH maps
@@ -2972,6 +3925,7 @@ class MainWindow(QMainWindow):
                 if self._progress_bar.isVisible():
                     self._progress_bar.setVisible(False)
                     self._progress_label.setVisible(False)
+                    self._cancel_btn.setVisible(False)
                     # Re-enable all UI controls when hiding progress
                     self._set_controls_enabled(enabled=True)
                     # Explicitly enable quality slider
@@ -3171,92 +4125,34 @@ class MainWindow(QMainWindow):
 
     def _set_controls_enabled(self, *, enabled: bool) -> None:
         """Enable/disable all UI controls and menu when progress bar is shown/hidden."""
-        # Top menu bar
+        # Вся левая панель (включая все QLabel) — одним вызовом
+        self._left_panel.setEnabled(enabled)
+        # Правая панель (надпись «Предпросмотр карты» и кнопка сохранения)
+        self._preview_frame.setEnabled(enabled)
+        # Меню
         self.menuBar().setEnabled(enabled)
 
-        # Profile controls
-        self.profile_combo.setEnabled(enabled)
-        self.save_profile_btn.setEnabled(enabled)
-        self.save_profile_as_btn.setEnabled(enabled)
-
-        # Coordinate input widgets
-        self.from_x_widget.setEnabled(enabled)
-        self.from_y_widget.setEnabled(enabled)
-        self.to_x_widget.setEnabled(enabled)
-        self.to_y_widget.setEnabled(enabled)
-
-        # Control point checkbox and widgets
-        # Для типа карты "Радиогоризонт" чекбокс должен оставаться заблокированным
-        try:
-            idx = max(0, self.map_type_combo.currentIndex())
-            map_type_value = self.map_type_combo.itemData(idx)
-            is_radio_horizon = map_type_value == MapType.RADIO_HORIZON.value
-        except Exception:
-            is_radio_horizon = False
-
-        if is_radio_horizon:
-            # Для радиогоризонта чекбокс всегда включён и заблокирован
-            self.control_point_checkbox.setEnabled(False)
-        else:
-            self.control_point_checkbox.setEnabled(enabled)
-
-        # Control point coordinate widgets should respect checkbox state
         if enabled:
+            # Восстанавливаем условные состояния после разблокировки
+            try:
+                idx = max(0, self.map_type_combo.currentIndex())
+                map_type_value = self.map_type_combo.itemData(idx)
+                is_rh = map_type_value == MapType.RADIO_HORIZON.value
+            except Exception:
+                is_rh = False
+            if is_rh:
+                self.control_point_checkbox.setEnabled(False)
             cp_enabled = self.control_point_checkbox.isChecked()
             self.control_point_x_widget.setEnabled(cp_enabled)
             self.control_point_y_widget.setEnabled(cp_enabled)
             self.control_point_name_edit.setEnabled(cp_enabled)
-        else:
-            self.control_point_x_widget.setEnabled(False)
-            self.control_point_y_widget.setEnabled(False)
-            self.control_point_name_edit.setEnabled(False)
-
-        # Map type and contours
-        self.map_type_combo.setEnabled(enabled)
-        self.contours_checkbox.setEnabled(enabled)
-
-        # Settings widgets
-        self.helmert_widget.setEnabled(enabled)
-        self.grid_widget.setEnabled(enabled)
-        self.output_widget.setEnabled(enabled)
-
-        # Main action buttons
-        self.download_btn.setEnabled(enabled)
-        # Save button availability depends on whether image is loaded
-        if enabled and self._base_image is not None:
-            self.save_map_btn.setEnabled(True)
-            self.save_map_action.setEnabled(True)
+            # Save button depends on whether image is loaded
+            has_image = self._base_image is not None
+            self.save_map_btn.setEnabled(has_image)
+            self.save_map_action.setEnabled(has_image)
         else:
             self.save_map_btn.setEnabled(False)
             self.save_map_action.setEnabled(False)
-
-        # Menu actions
-        if hasattr(self, 'new_profile_action'):
-            self.new_profile_action.setEnabled(enabled)
-        if hasattr(self, 'open_profile_action'):
-            self.open_profile_action.setEnabled(enabled)
-        if hasattr(self, 'save_profile_action'):
-            self.save_profile_action.setEnabled(enabled)
-        if hasattr(self, 'save_profile_as_action'):
-            self.save_profile_as_action.setEnabled(enabled)
-
-        if not enabled:
-            self.setStyleSheet("""
-                QLabel { color: grey; }
-                QGroupBox { color: grey; }
-                QCheckBox { color: grey; }
-                QRadioButton { color: grey; }
-                QTabBar::tab { color: grey; }
-            """)
-        else:
-            self.setStyleSheet('')
-
-        # Ensure progress label stays visible and readable (not grey if it was affected)
-        if not enabled:
-            # We need to make sure the progress label specifically remains readable
-            self._progress_label.setStyleSheet('color: black;')
-        else:
-            self._progress_label.setStyleSheet('')
 
     @Slot()
     def _new_profile(self) -> None:
@@ -3302,8 +4198,7 @@ class MainWindow(QMainWindow):
         QMessageBox.about(
             self,
             'О программе',
-            'SK42mapper v0.2\n\nПриложение для создания карт в системе '
-            'Гаусса-Крюгера\n',
+            'SK42 v0.2\n\nПриложение для создания карт в системе Гаусса-Крюгера\n',
         )
 
     @Slot()
@@ -3311,6 +4206,16 @@ class MainWindow(QMainWindow):
         """Show API key management dialog."""
         dialog = ApiKeyDialog(self._controller, parent=self)
         dialog.exec()
+
+    def _show_advanced_settings(self) -> None:
+        """Show advanced settings dialog (JPEG quality, Helmert parameters)."""
+        dialog = AdvancedSettingsDialog(
+            self.output_widget, self.helmert_widget, self.grid_widget, parent=self
+        )
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            helmert_changed = dialog.apply_to_source()
+            if helmert_changed:
+                self._on_settings_changed()
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         """Handle window resize to update overlay size."""
@@ -3383,6 +4288,7 @@ def create_application() -> tuple[
 ]:
     """Create and configure the PySide6 application."""
     app = QApplication([])
+    apply_theme(app)
     app.setApplicationName('Mil Mapper')
     app.setApplicationVersion('2.0')
 

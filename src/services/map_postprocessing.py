@@ -10,6 +10,9 @@ from shared.constants import (
     CENTER_CROSS_LINE_WIDTH_M,
     CONTROL_POINT_COLOR,
     CONTROL_POINT_SIZE_M,
+    RADAR_COVERAGE_MARKER_COLOR,
+    RADAR_COVERAGE_MARKER_DIR_LENGTH_M,
+    RADAR_COVERAGE_MARKER_SIZE_M,
 )
 
 
@@ -145,3 +148,67 @@ def compute_control_point_image_coords(
     cy_img = img_cy + dx * sin_rot + dy * cos_rot
 
     return cx_img, cy_img
+
+
+def draw_radar_marker(
+    img: Image.Image,
+    cx_img: float,
+    cy_img: float,
+    meters_per_px: float,
+    azimuth_deg: float = 0.0,
+    rotation_deg: float = 0.0,
+    size_m: float | None = None,
+) -> None:
+    """
+    Draw a diamond-shaped radar marker with direction line.
+
+    Args:
+        img: PIL Image to draw on (modified in place, RGBA preferred).
+        cx_img: X coordinate in image pixels.
+        cy_img: Y coordinate in image pixels.
+        meters_per_px: Meters per pixel.
+        azimuth_deg: Radar azimuth (0=north, clockwise).
+        rotation_deg: Map rotation in degrees.
+        size_m: Marker size in meters (defaults to RADAR_COVERAGE_MARKER_SIZE_M).
+
+    """
+    if meters_per_px <= 0:
+        return
+
+    ppm = 1.0 / meters_per_px
+    effective_size_m = size_m if size_m is not None else RADAR_COVERAGE_MARKER_SIZE_M
+    size_px = max(6, round(effective_size_m * ppm))
+    half = size_px / 2.0
+
+    # Diamond shape (rotated square)
+    pts_local = [
+        (0, -half),  # top
+        (half, 0),  # right
+        (0, half),  # bottom
+        (-half, 0),  # left
+    ]
+
+    # Rotate marker to align with map orientation
+    rotation_rad = math.radians(-rotation_deg)
+    cos_r = math.cos(rotation_rad)
+    sin_r = math.sin(rotation_rad)
+
+    pts_rotated = []
+    for px, py in pts_local:
+        rx = px * cos_r - py * sin_r
+        ry = px * sin_r + py * cos_r
+        pts_rotated.append((cx_img + rx, cy_img + ry))
+
+    draw = ImageDraw.Draw(img)
+    color = tuple(RADAR_COVERAGE_MARKER_COLOR)
+    outline_w = max(1, round(2.0 * ppm))
+    draw.polygon(pts_rotated, fill=None, outline=color, width=outline_w)
+
+    # Direction line from center towards azimuth
+    dir_length_px = max(10, round(RADAR_COVERAGE_MARKER_DIR_LENGTH_M * ppm))
+    # Azimuth: 0=north(up), CW. In image: north=negative Y.
+    # Combined with map rotation.
+    combined_rad = math.radians(azimuth_deg) + rotation_rad
+    dir_x = cx_img + dir_length_px * math.sin(combined_rad)
+    dir_y = cy_img - dir_length_px * math.cos(combined_rad)
+    draw.line([(cx_img, cy_img), (dir_x, dir_y)], fill=color, width=outline_w)

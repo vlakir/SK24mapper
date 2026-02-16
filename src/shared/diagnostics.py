@@ -340,7 +340,7 @@ async def run_deep_verification(*, api_key: str, settings: object) -> None:
             # Mirror logic similar to service._resolve_cache_dir()
             local = os.getenv('LOCALAPPDATA')
             cache_dir = (
-                (Path(local) / 'SK42mapper' / '.cache' / 'tiles').resolve()
+                (Path(local) / 'SK42' / '.cache' / 'tiles').resolve()
                 if local
                 else (Path.home() / '.sk42mapper_cache' / 'tiles').resolve()
             )
@@ -537,7 +537,7 @@ async def _make_cached_session_for_diag() -> aiohttp.ClientSession:
         else:
             local = os.getenv('LOCALAPPDATA')
             cache_dir = (
-                (Path(local) / 'SK42mapper' / '.cache' / 'tiles').resolve()
+                (Path(local) / 'SK42' / '.cache' / 'tiles').resolve()
                 if local
                 else (Path.home() / '.sk42mapper_cache' / 'tiles').resolve()
             )

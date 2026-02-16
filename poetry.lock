@@ -1552,6 +1552,23 @@ files = [
 ]
 
 [[package]]
+name = "qtpy"
+version = "2.4.3"
+description = "Provides an abstraction layer on top of the various Qt bindings (PyQt5/6 and PySide2/6)."
+optional = false
+python-versions = ">=3.7"
+files = [
+    {file = "QtPy-2.4.3-py3-none-any.whl", hash = "sha256:72095afe13673e017946cc258b8d5da43314197b741ed2890e563cf384b51aa1"},
+    {file = "qtpy-2.4.3.tar.gz", hash = "sha256:db744f7832e6d3da90568ba6ccbca3ee2b3b4a890c3d6fbbc63142f6e4cdf5bb"},
+]
+
+[package.dependencies]
+packaging = "*"
+
+[package.extras]
+test = ["pytest (>=6,!=7.0.0,!=7.0.1)", "pytest-cov (>=3.0.0)", "pytest-qt"]
+
+[[package]]
 name = "ruff"
 version = "0.12.10"
 description = "An extremely fast Python linter and code formatter, written in Rust."
@@ -1701,6 +1718,35 @@ files = [
     {file = "six-1.17.0-py2.py3-none-any.whl", hash = "sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274"},
     {file = "six-1.17.0.tar.gz", hash = "sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81"},
 ]
+
+[[package]]
+name = "superqt"
+version = "0.7.8"
+description = "Missing widgets and components for PyQt/PySide"
+optional = false
+python-versions = ">=3.9"
+files = [
+    {file = "superqt-0.7.8-py3-none-any.whl", hash = "sha256:63918a649e060d87bd64ff819ebe4a99f4d17b744bbaf7ffebe12c42bc8b53de"},
+    {file = "superqt-0.7.8.tar.gz", hash = "sha256:799c76d780ad9ca289a6a87d481686e28d85e47e2383d1579f57a02b572392a8"},
+]
+
+[package.dependencies]
+pygments = ">=2.4.0"
+qtpy = ">=2.4.0"
+typing-extensions = {version = ">=4.12.0", markers = "python_version >= \"3.13\""}
+
+[package.extras]
+cmap = ["cmap (>=0.2)"]
+font-fa5 = ["fonticon-fontawesome5 (>=5.15.4)"]
+font-fa6 = ["fonticon-fontawesome6 (>=6.4.0)"]
+font-mi6 = ["fonticon-materialdesignicons6 (>=6.9.96)"]
+font-mi7 = ["fonticon-materialdesignicons7 (>=7.2.96)"]
+iconify = ["pyconify (>=0.1.4)"]
+pyqt5 = ["pyqt5 (>=5.15.10)", "pyqt5-qt5 (==5.15.2)", "pyqt5-qt5 (>=5.15.16)"]
+pyqt6 = ["pyqt6 (>=6.4.0,!=6.6)", "pyqt6 (>=6.7.0)"]
+pyside2 = ["numpy (>=1.19,<2)", "numpy (>=1.26,<2)", "pyside2 (>=5.15)"]
+pyside6 = ["pyside6 (>=6.4.0,!=6.5.0,!=6.5.1,!=6.6.2)", "pyside6 (>=6.7.0)"]
+quantity = ["pint (>=0.21)"]
 
 [[package]]
 name = "tomlkit"
@@ -1873,4 +1919,4 @@ propcache = ">=0.2.1"
 [metadata]
 lock-version = "2.0"
 python-versions = ">=3.13,<3.15"
-content-hash = "9affcaf65ddaf5d7714f3271db68cec399a2d3b09cd9c6fc88e24a7b4a34b375"
+content-hash = "a11c28ece315f87129fd39a6973efbda69ee9c84d31e5155a2dc11dacff42a71"

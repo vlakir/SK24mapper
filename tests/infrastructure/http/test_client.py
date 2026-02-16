@@ -29,7 +29,7 @@ class TestResolveCacheDir:
         with patch.dict('os.environ', {'LOCALAPPDATA': 'C:\\Users\\Test\\AppData\\Local'}):
             result = resolve_cache_dir()
             assert result is not None
-            assert 'SK42mapper' in str(result)
+            assert 'SK42' in str(result)
 
     def test_fallback_to_home(self):
         """Should fallback to home directory when LOCALAPPDATA not set."""

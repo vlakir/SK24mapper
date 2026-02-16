@@ -20,20 +20,28 @@ logger = logging.getLogger(__name__)
 
 
 async def process_radar_coverage(ctx: MapDownloadContext) -> Image.Image:
-    """Process radar coverage map (sector-limited detection zone).
+    """
+    Process radar coverage map (sector-limited detection zone).
 
     Args:
         ctx: Map download context with radar_* settings.
 
     Returns:
         Radar coverage visualization image.
+
     """
-    dem_full, topo_base, antenna_row, antenna_col, pixel_size_m, cp_elevation, ds_factor = (
-        await _load_dem_and_topo(
-            ctx,
-            use_retina=RADAR_COVERAGE_USE_RETINA,
-            label='зоны обнаружения РЛС',
-        )
+    (
+        dem_full,
+        topo_base,
+        antenna_row,
+        antenna_col,
+        pixel_size_m,
+        cp_elevation,
+        ds_factor,
+    ) = await _load_dem_and_topo(
+        ctx,
+        use_retina=RADAR_COVERAGE_USE_RETINA,
+        label='зоны обнаружения РЛС',
     )
 
     sp = LiveSpinner('Вычисление зоны обнаружения РЛС')
@@ -75,6 +83,8 @@ async def process_radar_coverage(ctx: MapDownloadContext) -> Image.Image:
     blend_alpha = 1.0 - ctx.settings.radio_horizon_overlay_alpha
     topo_base = topo_base.convert('L').convert('RGBA')
     result = result.convert('RGBA')
+    # Сохраняем слой покрытия до blend для интерактивной альфы
+    ctx.rh_cache_coverage = result.copy()
     result = Image.blend(topo_base, result, blend_alpha)
 
     del topo_base

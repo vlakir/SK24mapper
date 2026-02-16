@@ -6,11 +6,15 @@ import contextlib
 import logging
 from typing import TYPE_CHECKING
 
+from pathlib import Path
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import (
     QColor,
     QImage,
+    QKeyEvent,
     QMouseEvent,
+    QMovie,
     QPainter,
     QPen,
     QPixmap,
@@ -24,6 +28,7 @@ from PySide6.QtWidgets import (
     QGraphicsScene,
     QGraphicsTextItem,
     QGraphicsView,
+    QLabel,
     QWidget,
 )
 
@@ -47,6 +52,8 @@ class OptimizedImageView(QGraphicsView):
 
     mouse_moved_on_map = Signal(object, object)  # (x, y) or (None, None)
     map_right_clicked = Signal(float, float)  # (x, y)
+    shift_wheel_rotated = Signal(float)  # delta_degrees (positive = CW)
+    shift_key_released = Signal()  # Shift released after rotation
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -64,6 +71,7 @@ class OptimizedImageView(QGraphicsView):
         self._updating_image = False
 
         # Configure view for optimal performance with proper antialiasing for thin lines
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setDragMode(QGraphicsView.DragMode.NoDrag)
         # Zoom to cursor: anchor transformations under the mouse pointer
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
@@ -107,12 +115,22 @@ class OptimizedImageView(QGraphicsView):
         self._cp_label_item: QGraphicsTextItem | None = None
         self._meters_per_px: float = 0.0
 
+        # Radar azimuth indicator line (dashed, shown during rotation)
+        self._azimuth_line_item: QGraphicsLineItem | None = None
+        self._azimuth_label_item: QGraphicsTextItem | None = None
+        # Sector boundary lines (dashed, shown during rotation)
+        self._sector_line_items: list[QGraphicsLineItem] = []
+
+        # Loading overlay (QLabel + QMovie over viewport)
+        self._loading_overlay = self._create_loading_overlay()
+
     def set_image(self, pil_image: Image.Image, meters_per_px: float = 0.0) -> None:
         """
         Set the image to display with fixed rotation to improve thin line visibility.
 
         Keeps current zoom/center if an image is already displayed.
         """
+        self.stop_loading()
         try:
             self._updating_image = True
 
@@ -150,8 +168,14 @@ class OptimizedImageView(QGraphicsView):
             # Create QPixmap from QImage
             qpixmap = QPixmap.fromImage(qimage)
 
-            # Clear scene and add image
+            # Clear scene and add image (invalidates all scene item references)
             self._scene.clear()
+            self._cp_cross_items = []
+            self._cp_line_item = None
+            self._cp_label_item = None
+            self._azimuth_line_item = None
+            self._azimuth_label_item = None
+            self._sector_line_items = []
             self._image_item = self._scene.addPixmap(qpixmap)
 
             # Apply fixed rotation to improve thin line visibility
@@ -182,6 +206,7 @@ class OptimizedImageView(QGraphicsView):
 
     def clear(self) -> None:
         """Clear the preview area and release pixmap resources."""
+        self.stop_loading()
         # If there is an existing pixmap item, replace its pixmap with an empty one
         if self._image_item is not None:
             self._image_item.setPixmap(QPixmap())
@@ -354,6 +379,150 @@ class OptimizedImageView(QGraphicsView):
             self._cp_label_item.setZValue(10)
             self._scene.addItem(self._cp_label_item)
 
+    def set_azimuth_line(
+        self,
+        cx: float,
+        cy: float,
+        azimuth_deg: float,
+        length_px: float,
+        sector_width_deg: float = 0.0,
+        rotation_deg: float = 0.0,
+    ) -> None:
+        """
+        Draw a dashed azimuth indicator line from (cx, cy) in azimuth direction.
+
+        Provides instant visual feedback during Shift+wheel rotation.
+        Optionally draws sector boundary lines when sector_width_deg > 0.
+
+        Args:
+            cx: X-coordinate of the azimuth line origin (pixels).
+            cy: Y-coordinate of the azimuth line origin (pixels).
+            azimuth_deg: Azimuth angle in degrees (0=north, clockwise).
+            length_px: Length of the indicator line in pixels.
+            sector_width_deg: Sector width (degrees); 0 = no sector.
+            rotation_deg: Map rotation angle to compensate (so the indicator
+                aligns with the pixel-level sector mask).
+
+        """
+        if self._image_item is None:
+            return
+
+        self.clear_azimuth_line()
+
+        # Pen for azimuth center line (bright cyan, dashed, cosmetic)
+        pen = QPen(QColor(0, 255, 255))
+        pen.setWidth(2)
+        pen.setStyle(Qt.PenStyle.DashLine)
+        pen.setCosmetic(True)
+
+        # Effective azimuth in image coordinates (compensate map rotation)
+        eff_az = azimuth_deg - rotation_deg
+
+        # Azimuth: 0=north, CW → screen: dx=sin(az), dy=-cos(az)
+        az_rad = math.radians(eff_az)
+        ex = cx + length_px * math.sin(az_rad)
+        ey = cy - length_px * math.cos(az_rad)
+
+        self._azimuth_line_item = self._scene.addLine(cx, cy, ex, ey, pen)
+        self._azimuth_line_item.setZValue(20)
+
+        # Label with geographic azimuth angle (not compensated) — placed at
+        # ~15% of the line from center so it stays visible.
+        label_frac = min(0.30, 400.0 / length_px) if length_px > 0 else 0.30
+        label_x = cx + length_px * label_frac * math.sin(az_rad)
+        label_y = cy - length_px * label_frac * math.cos(az_rad)
+
+        label_text = f'{azimuth_deg:.0f}°'
+        self._azimuth_label_item = QGraphicsTextItem(label_text)
+        self._azimuth_label_item.setDefaultTextColor(QColor(0, 255, 255))
+        font = self._azimuth_label_item.font()
+        font.setPointSize(14)
+        font.setBold(True)
+        self._azimuth_label_item.setFont(font)
+        self._azimuth_label_item.setFlag(
+            QGraphicsTextItem.GraphicsItemFlag.ItemIgnoresTransformations
+        )
+        self._azimuth_label_item.setPos(label_x, label_y)
+        self._azimuth_label_item.setZValue(20)
+        self._scene.addItem(self._azimuth_label_item)
+
+        # Sector boundary lines (semi-transparent cyan, dashed)
+        if sector_width_deg > 0:
+            half = sector_width_deg / 2.0
+            sector_pen = QPen(QColor(0, 255, 255, 100))
+            sector_pen.setWidth(1)
+            sector_pen.setStyle(Qt.PenStyle.DashLine)
+            sector_pen.setCosmetic(True)
+
+            for offset_deg in (-half, half):
+                edge_rad = math.radians(eff_az + offset_deg)
+                sx = cx + length_px * math.sin(edge_rad)
+                sy = cy - length_px * math.cos(edge_rad)
+                item = self._scene.addLine(cx, cy, sx, sy, sector_pen)
+                item.setZValue(19)
+                self._sector_line_items.append(item)
+
+    def clear_azimuth_line(self) -> None:
+        """Remove azimuth indicator line and sector boundaries from scene."""
+        if self._azimuth_line_item:
+            with contextlib.suppress(Exception):
+                self._scene.removeItem(self._azimuth_line_item)
+            self._azimuth_line_item = None
+
+        if self._azimuth_label_item:
+            with contextlib.suppress(Exception):
+                self._scene.removeItem(self._azimuth_label_item)
+            self._azimuth_label_item = None
+
+        for item in self._sector_line_items:
+            with contextlib.suppress(Exception):
+                self._scene.removeItem(item)
+        self._sector_line_items.clear()
+
+    # ------------------------------------------------------------------
+    # Loading overlay (GIF + label, parented to viewport)
+    # ------------------------------------------------------------------
+
+    def _create_loading_overlay(self) -> QWidget:
+        """Build a full-viewport overlay with Matrix rain GIF and text."""
+        overlay = QWidget(self.viewport())
+        overlay.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        overlay.setStyleSheet('background: black;')
+        overlay.hide()
+
+        # GIF fills the whole overlay via QMovie pre-scaling
+        gif_label = QLabel(overlay)
+        gif_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        gif_label.setStyleSheet('background: black;')
+
+        gif_path = Path(__file__).parent / 'icons' / 'loading.gif'
+        movie = QMovie(str(gif_path))
+        gif_label.setMovie(movie)
+
+        self._loading_movie = movie
+        self._loading_gif_label = gif_label
+        return overlay
+
+    def _layout_loading_overlay(self) -> None:
+        """Position GIF inside the overlay and pre-scale movie to viewport."""
+        rect = self._loading_overlay.rect()
+        self._loading_gif_label.setGeometry(rect)
+        self._loading_movie.setScaledSize(rect.size())
+
+    def start_loading(self) -> None:
+        """Show the loading overlay with animated GIF."""
+        vp = self.viewport().rect()
+        self._loading_overlay.setGeometry(vp)
+        self._layout_loading_overlay()
+        self._loading_movie.start()
+        self._loading_overlay.show()
+        self._loading_overlay.raise_()
+
+    def stop_loading(self) -> None:
+        """Hide the loading overlay."""
+        self._loading_movie.stop()
+        self._loading_overlay.hide()
+
     def _zoom(self, factor: float) -> None:
         """Apply zoom with limits and pixel-perfect alignment."""
         current_scale = self.transform().m11()
@@ -387,30 +556,39 @@ class OptimizedImageView(QGraphicsView):
         )
 
     def wheelEvent(self, event: QWheelEvent) -> None:
-        """Handle mouse wheel for zooming with zoom-to-cursor behavior."""
+        """Handle mouse wheel for zooming or Shift+wheel for azimuth rotation."""
         if not self._image_item:
             event.ignore()
             return
 
         # Skip if image is being updated (prevents conflicts during image load)
         if self._updating_image:
-            event.accept()  # Accept to prevent propagation, but don't process
+            event.accept()
             return
 
         # Skip if already processing a wheel event (prevents event queue buildup)
         if self._processing_wheel_event:
-            event.accept()  # Accept to prevent propagation, but don't process
+            event.accept()
             return
 
         try:
             self._processing_wheel_event = True
 
-            # Determine scroll amount (support angleDelta and pixelDelta for touchpads)
             delta = event.angleDelta().y()
             if delta == 0:
                 delta = event.pixelDelta().y()
             if delta == 0:
                 event.ignore()
+                return
+
+            # Shift + wheel → rotate azimuth (for radar coverage)
+            if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                # Grab focus so we receive keyReleaseEvent for Shift
+                if not self.hasFocus():
+                    self.setFocus(Qt.FocusReason.OtherFocusReason)
+                step = 5.0 if delta > 0 else -5.0
+                self.shift_wheel_rotated.emit(step)
+                event.accept()
                 return
 
             zoom_in = delta > 0
@@ -422,6 +600,15 @@ class OptimizedImageView(QGraphicsView):
 
         finally:
             self._processing_wheel_event = False
+
+    def keyReleaseEvent(self, event: QKeyEvent) -> None:
+        """Emit shift_key_released when Shift is released (not auto-repeat)."""
+        if (
+            event.key() in (Qt.Key.Key_Shift, Qt.Key.Key_Shift)
+            and not event.isAutoRepeat()
+        ):
+            self.shift_key_released.emit()
+        super().keyReleaseEvent(event)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         """Handle mouse press for panning."""
@@ -457,8 +644,11 @@ class OptimizedImageView(QGraphicsView):
             self.mouse_moved_on_map.emit(None, None)
 
     def resizeEvent(self, event: QResizeEvent) -> None:
-        """Handle widget resize to update fit-to-window scale."""
+        """Handle widget resize to update fit-to-window scale and overlay."""
         super().resizeEvent(event)
+        if self._loading_overlay.isVisible():
+            self._loading_overlay.setGeometry(self.viewport().rect())
+            self._layout_loading_overlay()
         if self._image_item:
             # Recalculate fit-to-window scale when widget is resized
             current_scale = self.transform().m11()

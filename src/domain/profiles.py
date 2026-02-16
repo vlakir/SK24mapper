@@ -20,8 +20,8 @@ def _user_profiles_dir() -> Path:
     2) If <project_root>/configs/profiles exists, use it (useful for
        portable/run-from-repo setups).
     3) Otherwise, fall back to user APPDATA directory:
-       %APPDATA%/SK42mapper/configs/profiles or
-       ~/AppData/Roaming/SK42mapper/configs/profiles when APPDATA is not set.
+       %APPDATA%/SK42/configs/profiles or
+       ~/AppData/Roaming/SK42/configs/profiles when APPDATA is not set.
     """
     # Portable режим: профили в папке приложения
     if is_portable_mode():
@@ -46,7 +46,7 @@ def _user_profiles_dir() -> Path:
     # Fallback to user-specific APPDATA location
     return (
         Path(os.getenv('APPDATA') or (Path.home() / 'AppData' / 'Roaming'))
-        / 'SK42mapper'
+        / 'SK42'
         / 'configs'
         / 'profiles'
     )

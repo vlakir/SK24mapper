@@ -31,12 +31,12 @@ async def test_determine_map_type_xyz(monkeypatch):
     service = MapDownloadService("token")
     settings = SimpleNamespace(control_point_enabled=True, antenna_height_m=10)
 
-    style_id, is_color, is_contours, is_radio = await service._determine_map_type(
+    style_id, is_color, is_contours, is_radio, is_radar = await service._determine_map_type(
         MapType.STREETS, settings
     )
 
     assert style_id is not None
-    assert (is_color, is_contours, is_radio) == (False, False, False)
+    assert (is_color, is_contours, is_radio, is_radar) == (False, False, False, False)
     assert calls["style"][0] == "token"
     assert "terrain" not in calls
 
@@ -59,12 +59,12 @@ async def test_determine_map_type_elevation(monkeypatch):
     service = MapDownloadService("token")
     settings = SimpleNamespace(control_point_enabled=True, antenna_height_m=10)
 
-    style_id, is_color, is_contours, is_radio = await service._determine_map_type(
+    style_id, is_color, is_contours, is_radio, is_radar = await service._determine_map_type(
         MapType.ELEVATION_COLOR, settings
     )
 
     assert style_id is None
-    assert (is_color, is_contours, is_radio) == (True, False, False)
+    assert (is_color, is_contours, is_radio, is_radar) == (True, False, False, False)
     assert calls == ["terrain"]
 
 
@@ -97,8 +97,12 @@ async def test_run_processor_branches(monkeypatch):
         process_radio_horizon=fake_return
     )
 
+    sys.modules["services.processors.radar_coverage"] = SimpleNamespace(
+        process_radar_coverage=fake_return
+    )
+
     service = MapDownloadService("token")
-    ctx = SimpleNamespace(is_elev_color=False, is_elev_contours=False, is_radio_horizon=False)
+    ctx = SimpleNamespace(is_elev_color=False, is_elev_contours=False, is_radio_horizon=False, is_radar_coverage=False)
 
     result = await service._run_processor(ctx)
     assert isinstance(result, Image.Image)
@@ -112,6 +116,10 @@ async def test_run_processor_branches(monkeypatch):
 
     ctx.is_elev_contours = False
     ctx.is_radio_horizon = True
+    assert await service._run_processor(ctx)
+
+    ctx.is_radio_horizon = False
+    ctx.is_radar_coverage = True
     assert await service._run_processor(ctx)
 
 
@@ -244,3 +252,89 @@ async def test_save(tmp_path):
          patch("services.map_download_service._save_jpeg") as mock_save:
         await service._save(ctx)
         assert mock_save.called
+
+
+@pytest.mark.asyncio
+async def test_determine_map_type_radar_coverage(monkeypatch):
+    """RADAR_COVERAGE should require control point and validate terrain API."""
+    calls = []
+
+    async def fake_validate_terrain(_api_key):
+        calls.append("terrain")
+
+    monkeypatch.setattr(map_download_service, "_validate_terrain_api", fake_validate_terrain)
+
+    service = MapDownloadService("token")
+
+    # Without control point should raise
+    settings_no_cp = SimpleNamespace(control_point_enabled=False, antenna_height_m=10)
+    with pytest.raises(ValueError):
+        await service._determine_map_type(MapType.RADAR_COVERAGE, settings_no_cp)
+
+    # With control point should work
+    settings_cp = SimpleNamespace(
+        control_point_enabled=True, antenna_height_m=10,
+        radar_max_range_km=15.0, radar_sector_width_deg=90.0,
+    )
+    style_id, is_color, is_contours, is_radio, is_radar = await service._determine_map_type(
+        MapType.RADAR_COVERAGE, settings_cp
+    )
+
+    assert style_id is None
+    assert (is_color, is_contours, is_radio, is_radar) == (False, False, False, True)
+    assert "terrain" in calls
+
+
+@pytest.mark.asyncio
+async def test_postprocess_radar_coverage(monkeypatch):
+    """_postprocess should handle RADAR_COVERAGE maps (including sector overlay)."""
+    class DummySpinner:
+        def __init__(self, _label):
+            pass
+        def start(self):
+            return None
+        def stop(self, _msg):
+            return None
+
+    monkeypatch.setattr(map_download_service, "LiveSpinner", DummySpinner)
+    monkeypatch.setattr(map_download_service, "rotate_keep_size", lambda img, *_a, **_kw: img)
+    monkeypatch.setattr(map_download_service, "center_crop", lambda img, *_a, **_kw: img)
+    monkeypatch.setattr(map_download_service, "log_memory_usage", lambda *_a, **_kw: None)
+
+    async def fake_overlay(_self, _ctx, img):
+        return img
+
+    monkeypatch.setattr(MapDownloadService, "_apply_overlay_contours", fake_overlay)
+    monkeypatch.setattr(MapDownloadService, "_draw_grid", lambda *_a, **_kw: None)
+    monkeypatch.setattr(MapDownloadService, "_draw_legend", lambda *_a, **_kw: None)
+    monkeypatch.setattr(MapDownloadService, "_draw_center_cross", lambda *_a, **_kw: None)
+    monkeypatch.setattr(MapDownloadService, "_draw_control_point", lambda *_a, **_kw: None)
+    monkeypatch.setattr(MapDownloadService, "_draw_radar_sector_overlay", lambda *_a, **_kw: None)
+
+    ctx = MapDownloadContext(
+        center_x_sk42_gk=0.0,
+        center_y_sk42_gk=0.0,
+        width_m=1.0,
+        height_m=1.0,
+        api_key="token",
+        output_path="out.png",
+        max_zoom=1,
+        settings=SimpleNamespace(
+            control_point_enabled=True, display_grid=True,
+            max_flight_height_m=100.0, map_type=MapType.RADAR_COVERAGE,
+        ),
+    )
+    ctx.result = Image.new("RGB", (10, 10), color=(255, 255, 255))
+    ctx.overlay_contours = False
+    ctx.is_elev_contours = False
+    ctx.is_elev_color = False
+    ctx.is_radio_horizon = False
+    ctx.is_radar_coverage = True
+    ctx.rotation_deg = 0.0
+    ctx.target_w_px = 10
+    ctx.target_h_px = 10
+
+    service = MapDownloadService("token")
+    await service._postprocess(ctx)
+
+    assert ctx.result.size == (10, 10)

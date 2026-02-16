@@ -28,6 +28,9 @@ RETINA_FACTOR = 2
 # Максимальная 6-градусная зона Гаусса-Крюгера
 MAX_GK_ZONE = 60
 
+# Количество видимых символов API-ключа при маскировке
+API_KEY_VISIBLE_PREFIX_LEN = 4
+
 # Максимальное число параллельных HTTP-запросов
 ASYNC_MAX_CONCURRENCY = 10
 
@@ -45,6 +48,9 @@ ROTATION_PAD_MIN_PX = 128
 
 # Эпсилон для проверки, что угол поворота не нулевой
 ROTATION_EPSILON = 1e-6
+
+# Порог угла поворота для обратной трансформации клика (градусы)
+ROTATION_INVERSE_THRESHOLD_DEG = 0.01
 
 # Максимальное число сэмплов для расчёта диапазона высот изолиний
 CONTOUR_MAX_ELEVATION_SAMPLES = 50000
@@ -97,8 +103,6 @@ HTTP_5XX_MAX = 600
 
 # --- Опции ранее находились в профиле (перенесены в constants)
 # В default.toml были помечены как '# -'
-# Желаемый уровень масштаба (при превышении лимитов будет уменьшен автоматически)
-DESIRED_ZOOM = 22
 
 # Тип карты и резолвер стилей Mapbox (Этап 1)
 
@@ -112,6 +116,7 @@ class MapType(str, Enum):
     ELEVATION_CONTOURS = 'ELEVATION_CONTOURS'
     ELEVATION_HILLSHADE = 'ELEVATION_HILLSHADE'
     RADIO_HORIZON = 'RADIO_HORIZON'
+    RADAR_COVERAGE = 'RADAR_COVERAGE'
 
 
 class UavHeightReference(str, Enum):
@@ -132,11 +137,12 @@ MAP_TYPE_LABELS_RU: dict[MapType, str] = {
     MapType.ELEVATION_CONTOURS: 'Карта высот (контуры)',
     MapType.ELEVATION_HILLSHADE: 'Карта высот (hillshade)',
     MapType.RADIO_HORIZON: 'Радиогоризонт НСУ БпЛА',
+    MapType.RADAR_COVERAGE: 'Зона обнаружения РЛС',
 }
 
 UAV_HEIGHT_REFERENCE_LABELS_RU: dict[UavHeightReference, str] = {
     UavHeightReference.CONTROL_POINT: 'От уровня КТ',
-    UavHeightReference.GROUND: 'От земной поверхности',
+    UavHeightReference.GROUND: 'От земли',
     UavHeightReference.SEA_LEVEL: 'От уровня моря',
 }
 
@@ -172,8 +178,10 @@ def map_type_to_style_id(map_type: MapType | str) -> str | None:
 XYZ_TILE_SIZE = 512
 # Использовать ретина-тайлы @2x
 XYZ_USE_RETINA = True
-# Использовать ретину для карт высот (Terrain-RGB)
+# Использовать ретину для карт высот (Terrain-RGB) — контуры и overlay-DEM для курсора
 ELEVATION_USE_RETINA = True
+# Использовать ретину для ELEVATION_COLOR (False = 256px, быстрее в 2-4 раза)
+ELEVATION_COLOR_USE_RETINA = False
 # Параллелизм загрузки HTTP (увеличено для ускорения)
 DOWNLOAD_CONCURRENCY = 40
 # Значения совместимости для «статичного» источника
@@ -444,10 +452,6 @@ MS_AMBIGUOUS_CASES = (MS_MASK_TL_BR, MS_MASK_TR_BL)  # (5, 10) седловые
 MS_CONNECT_TOP_BOTTOM = (MS_MASK_RIGHT, MS_MASK_LEFT)  # (6, 9)  верх ↔ низ (вертикаль)
 MS_CONNECT_LEFT_BOTTOM = (MS_MASK_NOT_BL, MS_MASK_BL)  # (7, 8)  лево ↔ низ
 
-# Пиксельный припуск по краю временного блока при отрисовке контуров
-CONTOUR_BLOCK_EDGE_PAD_PX = 1
-# Размер очереди для второго прохода отрисовки контуров
-CONTOUR_PASS2_QUEUE_MAXSIZE = 4
 # Периодичность логирования использования памяти (каждые N тайлов)
 CONTOUR_LOG_MEMORY_EVERY_TILES = 50
 
@@ -557,3 +561,42 @@ RADIO_HORIZON_GRID_STEP_SMALL = 8
 RADIO_HORIZON_LEGEND_UNIT_LABEL = 'м'
 # Минимальная высота для легенды радиогоризонта
 RADIO_HORIZON_MIN_HEIGHT_M = 0.0
+
+# --- Зона обнаружения РЛС (Radar Coverage)
+# Использовать ретина-тайлы для РЛС
+RADAR_COVERAGE_USE_RETINA = False
+# Цвет затемнения вне сектора обзора (RGBA)
+RADAR_COVERAGE_SECTOR_SHADOW_COLOR = (0, 0, 0, 160)
+# Цвет границ сектора (RGBA)
+RADAR_COVERAGE_SECTOR_BORDER_COLOR = (255, 255, 0, 200)
+# Толщина линий границ сектора (метры)
+RADAR_COVERAGE_SECTOR_BORDER_WIDTH_M = 8.0
+# Цвет дуг потолка (RGBA)
+RADAR_COVERAGE_CEILING_ARC_COLOR = (255, 200, 0, 180)
+# Толщина линий дуг потолка (метры)
+RADAR_COVERAGE_CEILING_ARC_WIDTH_M = 4.0
+# Высоты для дуг потолка (метры, типовые высоты БпЛА)
+RADAR_COVERAGE_CEILING_HEIGHTS_M = (500, 1000, 3000, 5000)
+# Размер маркера РЛС (метры)
+RADAR_COVERAGE_MARKER_SIZE_M = 150.0
+# Цвет маркера РЛС (RGB)
+RADAR_COVERAGE_MARKER_COLOR = (0, 0, 255)
+# Длина линии направления маркера (метры)
+RADAR_COVERAGE_MARKER_DIR_LENGTH_M = 300.0
+# Шаг вращения азимута Shift+колесо (градусы)
+RADAR_COVERAGE_AZIMUTH_STEP_DEG = 5.0
+
+# Минимальный радиус дуги потолка РЛС (пиксели)
+RADAR_CEILING_ARC_MIN_RADIUS_PX = 5
+# Максимальная ширина сектора для подписей на обоих лучах (градусы)
+RADAR_CEILING_LABEL_MAX_SECTOR_DEG = 330.0
+# Нижняя граница нормализованного угла для определения перевёрнутости текста (градусы)
+TEXT_UPSIDE_DOWN_LOW_DEG = 90
+# Верхняя граница нормализованного угла для определения перевёрнутости текста (градусы)
+TEXT_UPSIDE_DOWN_HIGH_DEG = 270
+
+# Атрибут DWM для тёмной темы заголовка окна (Windows API)
+DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+
+# Битовая маска атрибута «скрытый файл» Windows API
+WIN32_FILE_ATTRIBUTE_HIDDEN = 0x2

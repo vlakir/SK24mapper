@@ -1,4 +1,4 @@
-"""Pytest configuration and fixtures for SK42mapper tests."""
+"""Pytest configuration and fixtures for SK42 tests."""
 
 import sys
 from pathlib import Path

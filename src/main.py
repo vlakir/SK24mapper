@@ -10,8 +10,9 @@ from pathlib import Path
 from PySide6.QtCore import QLocale
 from PySide6.QtGui import QIcon
 
+from gui.theme import apply_dark_title_bar
 from gui.view import create_application
-from shared.diagnostics import log_comprehensive_diagnostics, log_memory_usage
+from shared.diagnostics import log_memory_usage
 from shared.portable import get_portable_path, is_portable_mode
 
 logger = logging.getLogger(__name__)
@@ -36,12 +37,11 @@ def setup_logging() -> tuple[Path, Path]:
     else:
         # Обычный режим: стандартные пути Windows
         appdata_base = (
-            Path(os.getenv('APPDATA') or Path.home() / 'AppData' / 'Roaming')
-            / 'SK42mapper'
+            Path(os.getenv('APPDATA') or Path.home() / 'AppData' / 'Roaming') / 'SK42'
         )
         local_base = (
             Path(os.getenv('LOCALAPPDATA') or Path.home() / 'AppData' / 'Local')
-            / 'SK42mapper'
+            / 'SK42'
         )
         log_dir = local_base / 'log'
 
@@ -59,10 +59,72 @@ def setup_logging() -> tuple[Path, Path]:
     return appdata_base, local_base
 
 
+def _migrate_from_old_name(appdata_base: Path, local_base: Path) -> None:
+    """Одноразовая миграция данных из SK42mapper → SK42."""
+    old_appdata = appdata_base.parent / 'SK42mapper'
+    old_local = local_base.parent / 'SK42mapper'
+
+    if not old_appdata.exists():
+        return
+
+    logger.info('Миграция: обнаружена папка %s', old_appdata)
+
+    # .secrets.env (API ключ)
+    old_secrets = old_appdata / '.secrets.env'
+    new_secrets = appdata_base / '.secrets.env'
+    if old_secrets.exists() and not new_secrets.exists():
+        appdata_base.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(old_secrets, new_secrets)
+        logger.info('Миграция: скопирован .secrets.env')
+
+    # Профили
+    old_profiles = old_appdata / 'configs' / 'profiles'
+    new_profiles = appdata_base / 'configs' / 'profiles'
+    if old_profiles.exists():
+        new_profiles.mkdir(parents=True, exist_ok=True)
+        for f in old_profiles.glob('*.toml'):
+            dst = new_profiles / f.name
+            if not dst.exists():
+                shutil.copy2(f, dst)
+                logger.info('Миграция: скопирован профиль %s', f.name)
+
+    # Сохранённые карты
+    old_maps = old_appdata / 'maps'
+    new_maps = appdata_base / 'maps'
+    if old_maps.exists():
+        new_maps.mkdir(parents=True, exist_ok=True)
+        for f in old_maps.iterdir():
+            if f.is_file():
+                dst = new_maps / f.name
+                if not dst.exists():
+                    shutil.copy2(f, dst)
+                    logger.info('Миграция: скопирована карта %s', f.name)
+
+    # Кэш тайлов (переименование)
+    old_cache = old_local / '.cache' / 'tiles'
+    new_cache = local_base / '.cache' / 'tiles'
+    if old_cache.exists() and not new_cache.exists():
+        new_cache.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            old_cache.rename(new_cache)
+            logger.info('Миграция: перемещён кэш тайлов')
+        except OSError:
+            logger.warning('Миграция: не удалось переместить кэш, будет скачан заново')
+
+    logger.info('Миграция из SK42mapper завершена')
+
+
 def main() -> int:
     """Main application entry point."""
     appdata_base, local_base = setup_logging()
     logger.info('Starting Mil Mapper 2.0')
+
+    # Миграция из SK42mapper → SK42 (при первом запуске новой версии)
+    if not is_portable_mode():
+        try:
+            _migrate_from_old_name(appdata_base, local_base)
+        except Exception as e:
+            logger.warning('Миграция не удалась: %s', e)
 
     # Ensure user data directories and bootstrap defaults
     try:
@@ -107,9 +169,6 @@ def main() -> int:
     except Exception as e:
         logger.warning(f'User data bootstrap failed: {e}')
 
-    # Log initial system state
-    log_comprehensive_diagnostics('APPLICATION_STARTUP')
-
     parser = argparse.ArgumentParser(
         description='Mil Mapper 2.0 - создание топографических карт',
     )
@@ -143,21 +202,20 @@ def main() -> int:
         if icon_path.exists():
             app.setWindowIcon(QIcon(str(icon_path)))
 
+        # Dark title bar on Windows 10/11
+        apply_dark_title_bar(int(window.winId()))
+
         # Show main window
         window.showMaximized()
 
         logger.info('Application started successfully')
-        log_comprehensive_diagnostics('APPLICATION_READY')
 
         # Run application event loop
         result = app.exec()
     except Exception:
         logger.exception('Failed to start application')
-        log_comprehensive_diagnostics('APPLICATION_ERROR')
         return 1
     else:
-        # Log final state before exit
-        log_comprehensive_diagnostics('APPLICATION_SHUTDOWN')
         return result
 
 
