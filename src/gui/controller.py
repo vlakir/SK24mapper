@@ -13,6 +13,7 @@ from typing import Any
 import tomlkit
 from dotenv import load_dotenv
 
+from domain.models import DownloadParams
 from domain.profiles import (
     ensure_profiles_dir,
     list_profiles,
@@ -20,9 +21,8 @@ from domain.profiles import (
     save_profile,
 )
 from gui.model import MilMapperModel, ModelEvent
-from service import download_satellite_rectangle
 from shared.constants import API_KEY_VISIBLE_PREFIX_LEN, WIN32_FILE_ATTRIBUTE_HIDDEN
-from shared.diagnostics import ResourceMonitor, log_memory_usage, run_deep_verification
+from shared.diagnostics import log_memory_usage, run_deep_verification
 from shared.portable import get_app_dir, is_portable_mode
 
 logger = logging.getLogger(__name__)
@@ -356,106 +356,87 @@ class MilMapperController:
         else:
             return True
 
-    async def start_map_download(self) -> None:
-        """Запуск процесса загрузки карты."""
+    def prepare_download_params(self) -> DownloadParams:
+        """Подготовка параметров для запуска создания карты.
+
+        Выполняет валидацию API-ключа, deep verification,
+        вычисление координат центра и размеров,
+        переключение модели в состояние «загрузка идёт».
+
+        Raises:
+            RuntimeError: если API-ключ недоступен или проверка не пройдена.
+
+        Returns:
+            Готовый ``DownloadParams`` для передачи в ``DownloadWorker``.
+        """
         if not self.validate_api_key():
             error_msg = 'API-ключ недоступен для загрузки'
             logger.error(error_msg)
-            # Передаём ошибку наверх, чтобы центрально обработать в GUI-потоке
             raise RuntimeError(error_msg)
 
-        with ResourceMonitor('MAP_DOWNLOAD'):
-            try:
-                # Глубокая проверка перед стартом
-                try:
-                    await run_deep_verification(
-                        api_key=self._api_key or '', settings=self._model.settings
-                    )
-                except Exception as e:
-                    error_msg = f'Проверка перед запуском не пройдена: {e}'
-                    logger.exception(error_msg)
-                    # Пробрасываем ошибку, чтобы обработать единообразно в GUI-потоке
-                    raise RuntimeError(error_msg) from e
-
-                self._model.start_download()
-                settings = self._model.settings
-
-                center_x = (
-                    settings.bottom_left_x_sk42_gk + settings.top_right_x_sk42_gk
-                ) / 2
-                center_y = (
-                    settings.bottom_left_y_sk42_gk + settings.top_right_y_sk42_gk
-                ) / 2
-                width_m = settings.top_right_x_sk42_gk - settings.bottom_left_x_sk42_gk
-                height_m = settings.top_right_y_sk42_gk - settings.bottom_left_y_sk42_gk
-
-                logger.info(
-                    f'Starting download: center=({center_x}, {center_y}), '
-                    f'size=({width_m}x{height_m})',
-                )
-                try:
-                    # Military notation in logs: X=northing (GK Y), Y=easting (GK X)
-                    logger.info(
-                        'Starting download with control point (СК-42 ГК): '
-                        'enabled=%s, X(север)=%.3f, Y(восток)=%.3f; raw Xn=%s, '
-                        'raw Ye=%s',
-                        getattr(settings, 'control_point_enabled', False),
-                        getattr(settings, 'control_point_y_sk42_gk', 0.0),  # northing
-                        getattr(settings, 'control_point_x_sk42_gk', 0.0),  # easting
-                        getattr(
-                            settings, 'control_point_y', None
-                        ),  # historically stored northing
-                        getattr(
-                            settings, 'control_point_x', None
-                        ),  # historically stored easting
-                    )
-                except Exception:
-                    logger.debug('Failed to log control point settings at start')
-                log_memory_usage('before download start')
-
-                # Start download
-                await download_satellite_rectangle(
-                    center_x_sk42_gk=center_x,
-                    center_y_sk42_gk=center_y,
-                    width_m=width_m,
-                    height_m=height_m,
-                    api_key=self._api_key,
-                    output_path=settings.output_path,
-                    settings=settings,
-                )
-
-                log_memory_usage('after download complete')
-                self._model.complete_download(success=True)
-                logger.info('Загрузка завершена успешно')
-
-            except Exception as e:
-                error_msg = f'Не удалось выполнить загрузку: {e}'
-                logger.exception(error_msg)
-                # Акуратный откат состояния модели
-                self._model.complete_download(success=False, error_msg=error_msg)
-                # Пробрасываем ошибку для централизованной обработки
-                # в GUI-потоке (DownloadWorker.finished)
-                raise RuntimeError(error_msg) from e
-
-    def start_map_download_sync(self) -> None:
-        """Запуск загрузки карты в синхронном контексте (обёртка над async)."""
-        asyncio.run(self.start_map_download())
-
-    def download_map(self) -> bool:
-        """
-        Синхронный метод загрузки карты для DownloadWorker.
-
-        Returns:
-            True если загрузка успешна, False в случае ошибки.
-
-        """
+        # Глубокая проверка перед стартом
         try:
-            self.start_map_download_sync()
+            asyncio.run(
+                run_deep_verification(
+                    api_key=self._api_key or '',
+                    settings=self._model.settings,
+                )
+            )
+        except Exception as e:
+            error_msg = f'Проверка перед запуском не пройдена: {e}'
+            logger.error(error_msg)
+            raise RuntimeError(error_msg) from e
+
+        self._model.start_download()
+        settings = self._model.settings
+
+        center_x = (
+            settings.bottom_left_x_sk42_gk + settings.top_right_x_sk42_gk
+        ) / 2
+        center_y = (
+            settings.bottom_left_y_sk42_gk + settings.top_right_y_sk42_gk
+        ) / 2
+        width_m = settings.top_right_x_sk42_gk - settings.bottom_left_x_sk42_gk
+        height_m = settings.top_right_y_sk42_gk - settings.bottom_left_y_sk42_gk
+
+        logger.info(
+            'Starting download: center=(%s, %s), size=(%sx%s)',
+            center_x, center_y, width_m, height_m,
+        )
+        try:
+            logger.info(
+                'Starting download with control point (СК-42 ГК): '
+                'enabled=%s, X(север)=%.3f, Y(восток)=%.3f; raw Xn=%s, '
+                'raw Ye=%s',
+                getattr(settings, 'control_point_enabled', False),
+                getattr(settings, 'control_point_y_sk42_gk', 0.0),
+                getattr(settings, 'control_point_x_sk42_gk', 0.0),
+                getattr(settings, 'control_point_y', None),
+                getattr(settings, 'control_point_x', None),
+            )
         except Exception:
-            logger.exception('download_map failed')
-            raise
+            logger.debug('Failed to log control point settings at start')
+        log_memory_usage('before download start')
+
+        return DownloadParams(
+            center_x=center_x,
+            center_y=center_y,
+            width_m=width_m,
+            height_m=height_m,
+            api_key=self._api_key or '',
+            output_path=settings.output_path,
+            settings=settings,
+        )
+
+    def complete_download(self, *, success: bool, error_msg: str = '') -> None:
+        """Обновить модель по завершении загрузки (вызывается из GUI-потока)."""
+        log_memory_usage('after download complete')
+        if success:
+            self._model.complete_download(success=True)
+            logger.info('Загрузка завершена успешно')
         else:
-            return True
+            self._model.complete_download(success=False, error_msg=error_msg)
+            logger.error('Загрузка не удалась: %s', error_msg)
 
     def get_available_profiles(self) -> list[str]:
         """Получение списка доступных профилей (по именам файлов TOML)."""

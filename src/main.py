@@ -220,4 +220,7 @@ def main() -> int:
 
 
 if __name__ == '__main__':
+    # Обязательно для multiprocessing на Windows (особенно PyInstaller)
+    import multiprocessing
+    multiprocessing.freeze_support()
     sys.exit(main())

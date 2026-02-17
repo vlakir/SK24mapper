@@ -116,12 +116,7 @@ from shared.diagnostics import (
     log_memory_usage,
     log_thread_status,
 )
-from shared.progress import (
-    cleanup_all_progress_resources,
-    set_preview_image_callback,
-    set_spinner_callbacks,
-)
-from shared.progress import set_progress_callback as _set_prog
+from shared.progress import cleanup_all_progress_resources
 
 # ---------------------------------------------------------------------------
 # QRangeSlider subclass that survives global-QSS style resets
@@ -918,10 +913,8 @@ class MainWindow(QMainWindow):
             self._download_worker.finished.disconnect()
             self._download_worker.progress_update.disconnect()
             self._download_worker.preview_ready.disconnect()
-            # Ensure the thread is stopped
-            if self._download_worker.isRunning():
-                self._download_worker.quit()
-                self._download_worker.wait(1000)
+            # Остановить дочерний процесс
+            self._download_worker.stop_and_join(timeout_ms=2000)
             # Delete later and drop reference
             self._download_worker.deleteLater()
         finally:
@@ -2052,6 +2045,13 @@ class MainWindow(QMainWindow):
         # (including control_point_enabled) are up-to-date
         self._sync_ui_to_model_now()
 
+        # Подготовка параметров (валидация, deep verification)
+        try:
+            params = self._controller.prepare_download_params()
+        except RuntimeError as e:
+            QMessageBox.critical(self, 'Ошибка', str(e))
+            return
+
         # Clear previous preview and pixmap cache between runs
         self._clear_preview_ui()
         self._preview_area.start_loading()
@@ -2059,7 +2059,7 @@ class MainWindow(QMainWindow):
         # Cleanup any stale worker from previous run
         self._cleanup_download_worker()
 
-        self._download_worker = DownloadWorker(self._controller)
+        self._download_worker = DownloadWorker(params)
         self._download_worker.finished.connect(
             lambda success, error_msg: self._on_download_finished(
                 success=success,
@@ -3376,6 +3376,9 @@ class MainWindow(QMainWindow):
         """Handle download completion."""
         self._preview_area.stop_loading()
 
+        # Обновить состояние модели через контроллер
+        self._controller.complete_download(success=success, error_msg=error_msg)
+
         # Clear coordinate informer on failure
         if not success:
             self._coords_label.setText('')
@@ -3410,14 +3413,6 @@ class MainWindow(QMainWindow):
                 'Ошибка',
                 f'Не удалось создать карту:\n{error_msg}',
             )
-
-        # Disconnect progress/preview callbacks to avoid holding images between runs
-        try:
-            set_preview_image_callback(None)
-            set_spinner_callbacks(None, None)
-            _set_prog(None)
-        except Exception as e:
-            logger.debug(f'Failed to reset progress callbacks: {e}')
 
         # Cleanup and drop references to download worker and its signal connections
         try:
@@ -3855,7 +3850,7 @@ class MainWindow(QMainWindow):
         if label:
             self._progress_label.setText(label)
 
-    @Slot(object, object, object)
+    @Slot(object, object, object, object)
     def _show_preview_in_main_window(
         self,
         image: Image.Image,
@@ -4254,17 +4249,11 @@ class MainWindow(QMainWindow):
         log_memory_usage('after progress cleanup')
         log_thread_status('after progress cleanup')
 
-        # Cleanup download worker with timeout
+        # Cleanup download worker process with timeout
         if self._download_worker and self._download_worker.isRunning():
-            logger.info('Terminating download worker thread')
+            logger.info('Terminating download worker process')
             log_thread_status('before worker termination')
-            self._download_worker.quit()
-            if not self._download_worker.wait(5000):  # 5 second timeout
-                logger.warning(
-                    'Download worker did not terminate gracefully, forcing termination',
-                )
-                self._download_worker.terminate()
-                self._download_worker.wait()
+            self._download_worker.stop_and_join(timeout_ms=5000)
             log_thread_status('after worker termination')
             log_memory_usage('after worker termination')
 

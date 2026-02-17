@@ -1,10 +1,17 @@
+from __future__ import annotations
+
 import asyncio
 import contextlib
 import logging
 import threading
 import time
 from collections.abc import Callable
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from PIL import Image
+
+    from domain.models import MapMetadata
 
 logger = logging.getLogger(__name__)
 
@@ -40,12 +47,84 @@ class _CbStore:
     preview_image: ClassVar[Callable[[object, object, object, object], None] | None] = (
         None
     )
-    cancel_event: ClassVar[threading.Event | None] = None
+    cancel_event: ClassVar[threading.Event | CancelToken | None] = None
 
 
 class CancelledError(Exception):
     """Raised when an operation is cancelled by the user."""
 
+
+# ---------------------------------------------------------------------------
+# Протоколы для GUI-agnostic сервисного слоя
+# ---------------------------------------------------------------------------
+
+@runtime_checkable
+class ProgressSink(Protocol):
+    """Приёмник событий прогресса — реализуется каждым фронтендом."""
+
+    def on_progress(self, done: int, total: int, label: str) -> None: ...
+    def on_spinner(self, label: str) -> None: ...
+    def on_preview(
+        self,
+        image: Image.Image,
+        metadata: MapMetadata | None,
+        dem_grid: object | None,
+        rh_cache: dict | None,
+    ) -> None: ...
+
+
+@runtime_checkable
+class CancelToken(Protocol):
+    """Токен отмены — проверяется сервисным слоем."""
+
+    def is_cancelled(self) -> bool: ...
+
+
+class EventCancelToken:
+    """CancelToken-обёртка над threading.Event / multiprocessing.Event."""
+
+    def __init__(self, event: threading.Event) -> None:
+        self._event = event
+
+    def is_cancelled(self) -> bool:
+        return self._event.is_set()
+
+    def set(self) -> None:
+        self._event.set()
+
+    def clear(self) -> None:
+        self._event.clear()
+
+
+class NullProgressSink:
+    """No-op реализация ProgressSink для тестов."""
+
+    def on_progress(self, done: int, total: int, label: str) -> None:
+        pass
+
+    def on_spinner(self, label: str) -> None:
+        pass
+
+    def on_preview(
+        self,
+        image: Image.Image,
+        metadata: MapMetadata | None,
+        dem_grid: object | None,
+        rh_cache: dict | None,
+    ) -> None:
+        pass
+
+
+class NeverCancelToken:
+    """CancelToken, который никогда не отменяет (для тестов)."""
+
+    def is_cancelled(self) -> bool:
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Глобальные колбэки (обратная совместимость)
+# ---------------------------------------------------------------------------
 
 def get_progress_callback() -> Callable[[int, int, str], None] | None:
     return _CbStore.progress
@@ -86,7 +165,7 @@ def set_preview_image_callback(
     _CbStore.preview_image = cb
 
 
-def set_cancel_event(event: threading.Event | None) -> None:
+def set_cancel_event(event: threading.Event | CancelToken | None) -> None:
     """Устанавливает глобальный Event для отмены текущей операции."""
     _CbStore.cancel_event = event
 
@@ -99,7 +178,11 @@ def clear_cancel_event() -> None:
 def check_cancelled() -> None:
     """Проверяет, запрошена ли отмена, и если да — бросает CancelledError."""
     ev = _CbStore.cancel_event
-    if ev is not None and ev.is_set():
+    if ev is None:
+        return
+    # Поддержка и threading.Event (is_set) и CancelToken (is_cancelled)
+    cancelled = ev.is_cancelled() if isinstance(ev, CancelToken) else ev.is_set()
+    if cancelled:
         msg = 'Операция отменена пользователем'
         raise CancelledError(msg)
 
@@ -177,8 +260,12 @@ class LiveSpinner:
         while not self._stop.is_set():
             # Проверяем отмену на каждой итерации спиннера
             ev = _CbStore.cancel_event
-            if ev is not None and ev.is_set():
-                break
+            if ev is not None:
+                cancelled = (
+                    ev.is_cancelled() if isinstance(ev, CancelToken) else ev.is_set()
+                )
+                if cancelled:
+                    break
             msg = f'{self.label}: {self.frames[i % len(self.frames)]}'
             self._writer.write_line(msg)
             time.sleep(self.interval)

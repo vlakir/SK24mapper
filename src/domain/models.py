@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+
 from pydantic import BaseModel, field_validator
 
 from shared.constants import (
@@ -195,3 +199,19 @@ class MapSettings(BaseModel):
         if any(v is None for v in vals):
             return None
         return vals  # type: ignore[return-value]
+
+
+@dataclass
+class DownloadParams:
+    """Pickle-serializable параметры для запуска создания карты.
+
+    Не зависит от Qt — может передаваться через multiprocessing.
+    """
+
+    center_x: float
+    center_y: float
+    width_m: float
+    height_m: float
+    api_key: str
+    output_path: str
+    settings: MapSettings
