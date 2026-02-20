@@ -101,24 +101,42 @@ async def test_run_processor_branches(monkeypatch):
         process_radar_coverage=fake_return
     )
 
+    sys.modules["services.processors.elevation_hillshade"] = SimpleNamespace(
+        process_elevation_hillshade=fake_return
+    )
+
     service = MapDownloadService("token")
-    ctx = SimpleNamespace(is_elev_color=False, is_elev_contours=False, is_radio_horizon=False, is_radar_coverage=False)
+    ctx = SimpleNamespace(
+        is_elev_color=False,
+        is_elev_contours=False,
+        is_radio_horizon=False,
+        is_radar_coverage=False,
+        settings=SimpleNamespace(map_type=MapType.SATELLITE),
+    )
 
     result = await service._run_processor(ctx)
     assert isinstance(result, Image.Image)
 
     ctx.is_elev_color = True
+    ctx.settings.map_type = MapType.ELEVATION_COLOR
+    assert await service._run_processor(ctx)
+
+    ctx.is_elev_color = True
+    ctx.settings.map_type = MapType.ELEVATION_HILLSHADE
     assert await service._run_processor(ctx)
 
     ctx.is_elev_color = False
+    ctx.settings.map_type = MapType.ELEVATION_CONTOURS
     ctx.is_elev_contours = True
     assert await service._run_processor(ctx)
 
     ctx.is_elev_contours = False
+    ctx.settings.map_type = MapType.RADIO_HORIZON
     ctx.is_radio_horizon = True
     assert await service._run_processor(ctx)
 
     ctx.is_radio_horizon = False
+    ctx.settings.map_type = MapType.RADAR_COVERAGE
     ctx.is_radar_coverage = True
     assert await service._run_processor(ctx)
 

@@ -109,9 +109,11 @@ def test_elev_color_legend_on_overlay():
     """In _create_rh_overlay_layer, _draw_legend must be called for
     ELEVATION_COLOR (condition includes is_elev_color)."""
     src = _get_create_overlay_source()
+    # Support both single-line and multi-line if conditions before _draw_legend
     match = re.search(
-        r'if\s+(.*?):\s*\n\s+self\._draw_legend',
+        r'if\s+(.*?)\s*self\._draw_legend',
         src,
+        re.DOTALL,
     )
     assert match is not None, '_draw_legend call not found in _create_rh_overlay_layer'
     condition = match.group(1)

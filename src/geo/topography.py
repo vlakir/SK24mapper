@@ -554,6 +554,52 @@ def decode_terrain_rgb_to_elevation_m(img: Image.Image) -> np.ndarray:
     return elevation.astype(np.float32)
 
 
+def compute_hillshade(
+    dem: np.ndarray,
+    pixel_size_m: float,
+    azimuth_deg: float = 315.0,
+    altitude_deg: float = 45.0,
+    z_factor: float = 1.0,
+    smooth_sigma: float = 0.0,
+) -> np.ndarray:
+    """Стандартная GDAL/ESRI-совместимая теневая отмывка рельефа.
+
+    Args:
+        dem: DEM-сетка (float32, высоты в метрах).
+        pixel_size_m: Размер пикселя в метрах.
+        azimuth_deg: Азимут источника света (0=север, по часовой), градусы.
+        altitude_deg: Угол источника света над горизонтом, градусы.
+        z_factor: Коэффициент вертикального преувеличения рельефа (1.0 = реальный масштаб).
+        smooth_sigma: Sigma Гауссова сглаживания DEM перед вычислением градиентов
+                      (в пикселях DEM). Убирает ступенчатые артефакты дискретизации.
+                      0 = без сглаживания.
+
+    Returns:
+        Освещённость [0..1] в виде float32-массива той же формы, что и dem.
+    """
+    scaled = dem.astype(np.float64) * z_factor
+
+    if smooth_sigma > 0:
+        from scipy.ndimage import gaussian_filter
+
+        scaled = gaussian_filter(scaled, sigma=smooth_sigma)
+
+    dz_dx = np.gradient(scaled, pixel_size_m, axis=1)
+    dz_dy = np.gradient(scaled, pixel_size_m, axis=0)
+
+    slope = np.arctan(np.sqrt(dz_dx**2 + dz_dy**2))
+    aspect = np.arctan2(dz_dx, -dz_dy)  # 0=север, по часовой
+
+    az_rad = np.radians((360 - azimuth_deg + 90) % 360)
+    alt_rad = np.radians(altitude_deg)
+
+    hs = (
+        np.cos(alt_rad) * np.cos(slope)
+        + np.sin(alt_rad) * np.sin(slope) * np.cos(az_rad - aspect)
+    )
+    return np.clip(hs, 0, 1).astype(np.float32)
+
+
 # Кэш для декодированных DEM-тайлов (~400 MB при 100 тайлах
 # 512x512 float32)
 _dem_tile_cache: dict[tuple[int, int, int], np.ndarray] = {}

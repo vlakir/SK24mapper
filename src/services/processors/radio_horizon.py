@@ -47,9 +47,13 @@ async def _load_dem(
     *,
     use_retina: bool = False,
     label: str = 'DEM',
+    max_dem_pixels: int | None = None,
 ) -> tuple[np.ndarray, int]:
     """
     Загрузка и сборка DEM. Возвращает (dem_full, ds_factor).
+
+    Args:
+        max_dem_pixels: Порог даунсэмплинга (None = дефолт RADIO_HORIZON_MAX_DEM_PIXELS).
 
     Сохраняет ctx.raw_dem_for_cursor (полноразмерный DEM).
     """
@@ -101,7 +105,8 @@ async def _load_dem(
 
     dem_h_orig, dem_w_orig = dem_full.shape
     ctx.rh_cache_crop_size = (dem_w_orig, dem_h_orig)
-    ds_factor = compute_downsample_factor(dem_h_orig, dem_w_orig)
+    ds_kwargs = {} if max_dem_pixels is None else {'max_pixels': max_dem_pixels}
+    ds_factor = compute_downsample_factor(dem_h_orig, dem_w_orig, **ds_kwargs)
 
     if ds_factor > 1:
         logger.info(
