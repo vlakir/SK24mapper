@@ -11,6 +11,7 @@ import numpy as np
 from PIL import Image
 from pyproj import CRS, Transformer
 from pyproj.transformer import TransformerGroup
+from scipy.ndimage import gaussian_filter
 
 from shared.constants import (
     _DEM_CACHE_MAX_SIZE,
@@ -562,26 +563,27 @@ def compute_hillshade(
     z_factor: float = 1.0,
     smooth_sigma: float = 0.0,
 ) -> np.ndarray:
-    """Стандартная GDAL/ESRI-совместимая теневая отмывка рельефа.
+    """
+    Стандартная GDAL/ESRI-совместимая теневая отмывка рельефа.
 
     Args:
         dem: DEM-сетка (float32, высоты в метрах).
         pixel_size_m: Размер пикселя в метрах.
         azimuth_deg: Азимут источника света (0=север, по часовой), градусы.
         altitude_deg: Угол источника света над горизонтом, градусы.
-        z_factor: Коэффициент вертикального преувеличения рельефа (1.0 = реальный масштаб).
+        z_factor: Коэффициент вертикального преувеличения
+            (1.0 = реальный масштаб).
         smooth_sigma: Sigma Гауссова сглаживания DEM перед вычислением градиентов
                       (в пикселях DEM). Убирает ступенчатые артефакты дискретизации.
                       0 = без сглаживания.
 
     Returns:
         Освещённость [0..1] в виде float32-массива той же формы, что и dem.
+
     """
     scaled = dem.astype(np.float64) * z_factor
 
     if smooth_sigma > 0:
-        from scipy.ndimage import gaussian_filter
-
         scaled = gaussian_filter(scaled, sigma=smooth_sigma)
 
     dz_dx = np.gradient(scaled, pixel_size_m, axis=1)
@@ -593,9 +595,8 @@ def compute_hillshade(
     az_rad = np.radians((360 - azimuth_deg + 90) % 360)
     alt_rad = np.radians(altitude_deg)
 
-    hs = (
-        np.cos(alt_rad) * np.cos(slope)
-        + np.sin(alt_rad) * np.sin(slope) * np.cos(az_rad - aspect)
+    hs = np.cos(alt_rad) * np.cos(slope) + np.sin(alt_rad) * np.sin(slope) * np.cos(
+        az_rad - aspect
     )
     return np.clip(hs, 0, 1).astype(np.float32)
 

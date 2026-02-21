@@ -203,7 +203,8 @@ class MapSettings(BaseModel):
 
 @dataclass
 class DownloadParams:
-    """Pickle-serializable параметры для запуска создания карты.
+    """
+    Pickle-serializable параметры для запуска создания карты.
 
     Не зависит от Qt — может передаваться через multiprocessing.
     """

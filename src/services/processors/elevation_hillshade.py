@@ -7,6 +7,7 @@ import gc
 import logging
 from typing import TYPE_CHECKING
 
+import cv2
 import numpy as np
 from PIL import Image
 
@@ -42,7 +43,8 @@ async def _load_dem_native(
     dem_zoom: int,
     use_retina: bool,
 ) -> tuple[np.ndarray, float]:
-    """Load DEM at a specific zoom level (typically z14 = native Mapbox resolution).
+    """
+    Load DEM at a specific zoom level (typically z14 = native Mapbox resolution).
 
     Returns (dem_array, pixel_size_m) where dem_array covers the same
     geographic extent as ctx but at the DEM zoom resolution.
@@ -108,8 +110,6 @@ async def _load_dem_native(
     # Must match ctx.crop_rect size expected by downstream code.
     display_w, display_h = ctx.crop_rect[2], ctx.crop_rect[3]
     if dem.shape[1] != display_w or dem.shape[0] != display_h:
-        import cv2
-
         raw_dem_display = cv2.resize(
             dem, (display_w, display_h), interpolation=cv2.INTER_LINEAR
         )

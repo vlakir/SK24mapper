@@ -184,13 +184,14 @@ ELEVATION_USE_RETINA = True
 ELEVATION_COLOR_USE_RETINA = False
 # --- Hillshade (теневая отмывка рельефа)
 # Азимут источника света (0=север, по часовой), градусы
-HILLSHADE_AZIMUTH_DEG: float = 315.0   # Северо-запад (классика топографии)
+HILLSHADE_AZIMUTH_DEG: float = 315.0  # Северо-запад (классика топографии)
 # Угол источника света над горизонтом, градусы
 HILLSHADE_ALTITUDE_DEG: float = 45.0
 # Использовать ретина-тайлы для hillshade (False = 256px, как ELEVATION_COLOR)
 HILLSHADE_USE_RETINA: bool = False
 # Коэффициент вертикального преувеличения рельефа (z-factor).
-# 1.0 = реальный масштаб, 5-10 = хорошо читается на равнинах, 20+ = для очень плоских районов
+# 1.0 = реальный масштаб, 5-10 = хорошо на равнинах,
+# 20+ = для очень плоских районов
 HILLSHADE_Z_FACTOR: float = 8.0
 # Zoom-уровень DEM для hillshade (14 = нативное разрешение Mapbox Terrain-RGB).
 # При zoom > 14 данные Mapbox — просто интерполяция, создающая ступенчатые артефакты.

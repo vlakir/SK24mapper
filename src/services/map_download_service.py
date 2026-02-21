@@ -452,7 +452,9 @@ class MapDownloadService:
         """Run appropriate processor based on map type."""
         if ctx.is_elev_color:
             if ctx.settings.map_type == MapType.ELEVATION_HILLSHADE:
-                module = importlib.import_module('services.processors.elevation_hillshade')
+                module = importlib.import_module(
+                    'services.processors.elevation_hillshade'
+                )
                 return await module.process_elevation_hillshade(ctx)
             module = importlib.import_module('services.processors.elevation_color')
             return await module.process_elevation_color(ctx)
@@ -552,9 +554,8 @@ class MapDownloadService:
 
         # Legend (not drawn for hillshade — grayscale, no elevation scale)
         if (
-            (ctx.is_elev_color or ctx.is_radio_horizon or ctx.is_radar_coverage)
-            and ctx.settings.map_type != MapType.ELEVATION_HILLSHADE
-        ):
+            ctx.is_elev_color or ctx.is_radio_horizon or ctx.is_radar_coverage
+        ) and ctx.settings.map_type != MapType.ELEVATION_HILLSHADE:
             self._draw_legend(ctx, result)
 
         # For RH / radar / elev_color: create and cache overlay
@@ -884,9 +885,8 @@ class MapDownloadService:
 
             # Draw legend on overlay (not for hillshade — grayscale, no elevation scale)
             if (
-                (ctx.is_radio_horizon or ctx.is_radar_coverage or ctx.is_elev_color)
-                and ctx.settings.map_type != MapType.ELEVATION_HILLSHADE
-            ):
+                ctx.is_radio_horizon or ctx.is_radar_coverage or ctx.is_elev_color
+            ) and ctx.settings.map_type != MapType.ELEVATION_HILLSHADE:
                 self._draw_legend(ctx, overlay)
 
             # Save to cache

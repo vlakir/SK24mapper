@@ -1,4 +1,5 @@
-"""GUI-agnostic точка входа сервисного слоя для создания карт.
+"""
+GUI-agnostic точка входа сервисного слоя для создания карт.
 
 Эта функция одинаково работает из PySide6 (через multiprocessing),
 из веб-фреймворка (через asyncio/WebSocket) и из тестов.
@@ -31,7 +32,8 @@ def run_map_job(
     sink: ProgressSink,
     cancel: CancelToken,
 ) -> None:
-    """GUI-agnostic entry point. Вызывается из любого фронтенда.
+    """
+    GUI-agnostic entry point. Вызывается из любого фронтенда.
 
     Прокидывает *sink* и *cancel* в глобальные callback-и _CbStore
     (обратная совместимость с MapDownloadService / LiveSpinner / ConsoleProgress),

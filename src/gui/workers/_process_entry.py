@@ -1,4 +1,5 @@
-"""Точка входа дочернего процесса для создания карты.
+"""
+Точка входа дочернего процесса для создания карты.
 
 Запускается через ``multiprocessing.Process``.
 Проксирует события прогресса/превью в ``mp.Queue`` для опроса из GUI-потока.
@@ -6,18 +7,26 @@
 
 from __future__ import annotations
 
+import importlib
+import io
 import logging
-import multiprocessing as mp
+import os
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from PIL import Image
+
 if TYPE_CHECKING:
-    from PIL import Image
+    import multiprocessing as mp
+    from multiprocessing.synchronize import Event as _MpEvent
 
     from domain.models import DownloadParams, MapMetadata
 
 logger = logging.getLogger(__name__)
+
+# Number of elements in serialized PIL sentinel: ('__pil__', data, mode, size)
+_PIL_SENTINEL_LEN = 4
 
 
 # ---------------------------------------------------------------------------
@@ -28,10 +37,9 @@ logger = logging.getLogger(__name__)
 # Решение: сжимаем JPEG (RGB) / PNG (RGBA) перед отправкой через Queue.
 # ---------------------------------------------------------------------------
 
+
 def _serialize_pil(img: Image.Image) -> tuple[bytes, str, tuple[int, int]]:
     """Сжать PIL Image для передачи через mp.Queue."""
-    import io
-
     buf = io.BytesIO()
     original_mode = img.mode
     if img.mode in ('RGBA', 'LA', 'PA'):
@@ -44,31 +52,25 @@ def _serialize_pil(img: Image.Image) -> tuple[bytes, str, tuple[int, int]]:
     return (buf.getvalue(), original_mode, img.size)
 
 
-def deserialize_pil(data: bytes, mode: str, size: tuple[int, int]) -> Image.Image:
+def deserialize_pil(data: bytes, mode: str, _size: tuple[int, int]) -> Image.Image:
     """Восстановить PIL Image из сжатых данных IPC."""
-    import io
-
-    from PIL import Image as _Image  # noqa: N811
-
     # Снимаем лимит: данные сгенерированы нашим же кодом, не из внешних источников
-    _Image.MAX_IMAGE_PIXELS = None
-    img = _Image.open(io.BytesIO(data))
-    img.load()  # принудительно читаем пиксели, пока BytesIO жив
+    Image.MAX_IMAGE_PIXELS = None
+    raw = Image.open(io.BytesIO(data))
+    raw.load()  # принудительно читаем пиксели, пока BytesIO жив
     # Восстановить исходный mode (JPEG всегда загружается как RGB)
-    if img.mode != mode:
-        img = img.convert(mode)
-    return img
+    if raw.mode != mode:
+        return raw.convert(mode)
+    return raw
 
 
 def _serialize_rh_cache(rh_cache: dict | None) -> dict | None:
     """Сериализовать rh_cache, сжимая PIL Image."""
     if rh_cache is None:
         return None
-    from PIL import Image as _Image  # noqa: N811
-
     result: dict = {}
     for key, value in rh_cache.items():
-        if isinstance(value, _Image.Image):
+        if isinstance(value, Image.Image):
             result[key] = ('__pil__', *_serialize_pil(value))
         else:
             result[key] = value
@@ -81,7 +83,11 @@ def deserialize_rh_cache(rh_cache: dict | None) -> dict | None:
         return None
     result: dict = {}
     for key, value in rh_cache.items():
-        if isinstance(value, tuple) and len(value) == 4 and value[0] == '__pil__':
+        if (
+            isinstance(value, tuple)
+            and len(value) == _PIL_SENTINEL_LEN
+            and value[0] == '__pil__'
+        ):
             _, data, mode, size = value
             result[key] = deserialize_pil(data, mode, size)
         else:
@@ -92,6 +98,7 @@ def deserialize_rh_cache(rh_cache: dict | None) -> dict | None:
 # ---------------------------------------------------------------------------
 # QueueProgressSink — сериализует события в mp.Queue
 # ---------------------------------------------------------------------------
+
 
 class QueueProgressSink:
     """ProgressSink, пишущий события в mp.Queue для опроса из GUI-потока."""
@@ -121,12 +128,14 @@ class QueueProgressSink:
 # Главная функция дочернего процесса
 # ---------------------------------------------------------------------------
 
+
 def worker_process_main(
     params: DownloadParams,
     queue: mp.Queue,
-    cancel_event: mp.Event,
+    cancel_event: _MpEvent,
 ) -> None:
-    """Запускается в дочернем процессе через ``mp.Process(target=...)``.
+    """
+    Запускается в дочернем процессе через ``mp.Process(target=...)``.
 
     Проксирует все события прогресса/превью в *queue*,
     а результат (success/error) — как финальное сообщение ``('finished', ...)``.
@@ -136,8 +145,7 @@ def worker_process_main(
     if src_dir not in sys.path:
         sys.path.insert(0, src_dir)
 
-    # Настроить логирование в дочернем процессе — тот же формат и те же хендлеры что в main.py
-    import os
+    # Настроить логирование — тот же формат что в main.py
     log_fmt = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
     try:
@@ -146,20 +154,21 @@ def worker_process_main(
         _log_file.parent.mkdir(parents=True, exist_ok=True)
         handlers.append(logging.FileHandler(str(_log_file), encoding='utf-8'))
     except Exception:
-        pass  # если не удалось — пишем только в stdout
+        logger.debug('Failed to set up file logging', exc_info=True)
     logging.basicConfig(level=logging.INFO, format=log_fmt, handlers=handlers)
 
-    from shared.progress import CancelledError, EventCancelToken
+    _progress = importlib.import_module('shared.progress')
+    _cancelled_error = _progress.CancelledError
+    _cancel_token_cls = _progress.EventCancelToken
 
     sink = QueueProgressSink(queue)
-    cancel = EventCancelToken(cancel_event)
+    cancel = _cancel_token_cls(cancel_event)
 
     try:
-        from services.map_job import run_map_job
-
-        run_map_job(params, sink, cancel)
+        _map_job = importlib.import_module('services.map_job')
+        _map_job.run_map_job(params, sink, cancel)
         queue.put(('finished', True, ''))
-    except CancelledError:
+    except _cancelled_error:
         queue.put(('finished', False, 'Операция отменена пользователем'))
     except Exception as e:
         logger.exception('Worker process failed')

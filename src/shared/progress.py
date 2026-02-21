@@ -5,10 +5,11 @@ import contextlib
 import logging
 import threading
 import time
-from collections.abc import Callable
 from typing import TYPE_CHECKING, ClassVar, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from PIL import Image
 
     from domain.models import MapMetadata
@@ -57,6 +58,7 @@ class CancelledError(Exception):
 # ---------------------------------------------------------------------------
 # Протоколы для GUI-agnostic сервисного слоя
 # ---------------------------------------------------------------------------
+
 
 @runtime_checkable
 class ProgressSink(Protocol):
@@ -125,6 +127,7 @@ class NeverCancelToken:
 # ---------------------------------------------------------------------------
 # Глобальные колбэки (обратная совместимость)
 # ---------------------------------------------------------------------------
+
 
 def get_progress_callback() -> Callable[[int, int, str], None] | None:
     return _CbStore.progress

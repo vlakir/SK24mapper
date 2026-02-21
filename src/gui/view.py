@@ -1159,7 +1159,7 @@ class MainWindow(QMainWindow):
             # MapType.STREETS,
             MapType.OUTDOORS,
             MapType.ELEVATION_COLOR,
-            MapType.ELEVATION_HILLSHADE,
+            # MapType.ELEVATION_HILLSHADE,  # скрыт — IN PROGRESS
             MapType.RADIO_HORIZON,
             MapType.RADAR_COVERAGE,
         ]
@@ -3657,7 +3657,10 @@ class MainWindow(QMainWindow):
         # Проверяем режимы: Радиогоризонт, РЛС, Карта высот
         is_radio_horizon = current_mt == MapType.RADIO_HORIZON
         is_radar_coverage = current_mt == MapType.RADAR_COVERAGE
-        is_elev_color = current_mt in (MapType.ELEVATION_COLOR, MapType.ELEVATION_HILLSHADE)
+        is_elev_color = current_mt in (
+            MapType.ELEVATION_COLOR,
+            MapType.ELEVATION_HILLSHADE,
+        )
 
         # Update Helmert settings
         self.helmert_widget.set_values(

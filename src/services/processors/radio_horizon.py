@@ -53,9 +53,14 @@ async def _load_dem(
     Загрузка и сборка DEM. Возвращает (dem_full, ds_factor).
 
     Args:
-        max_dem_pixels: Порог даунсэмплинга (None = дефолт RADIO_HORIZON_MAX_DEM_PIXELS).
+        ctx: Контекст загрузки карты.
+        use_retina: Использовать ретина-тайлы.
+        label: Метка для прогресса.
+        max_dem_pixels: Порог даунсэмплинга
+            (None = дефолт RADIO_HORIZON_MAX_DEM_PIXELS).
 
     Сохраняет ctx.raw_dem_for_cursor (полноразмерный DEM).
+
     """
     provider = ElevationTileProvider(
         client=ctx.client,

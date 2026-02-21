@@ -30,14 +30,15 @@ logger = logging.getLogger(__name__)
 
 def _set_win32_hidden(path: Path, *, hidden: bool) -> None:
     """Установка/снятие атрибута Hidden для файла через Win32 API."""
-    attrs = ctypes.windll.kernel32.GetFileAttributesW(str(path))
-    if attrs == -1:
-        return
-    if hidden:
-        attrs |= WIN32_FILE_ATTRIBUTE_HIDDEN
-    else:
-        attrs &= ~WIN32_FILE_ATTRIBUTE_HIDDEN
-    ctypes.windll.kernel32.SetFileAttributesW(str(path), attrs)
+    if sys.platform == 'win32':
+        attrs = ctypes.windll.kernel32.GetFileAttributesW(str(path))
+        if attrs == -1:
+            return
+        if hidden:
+            attrs |= WIN32_FILE_ATTRIBUTE_HIDDEN
+        else:
+            attrs &= ~WIN32_FILE_ATTRIBUTE_HIDDEN
+        ctypes.windll.kernel32.SetFileAttributesW(str(path), attrs)
 
 
 class MilMapperController:
@@ -357,7 +358,8 @@ class MilMapperController:
             return True
 
     def prepare_download_params(self) -> DownloadParams:
-        """Подготовка параметров для запуска создания карты.
+        """
+        Подготовка параметров для запуска создания карты.
 
         Выполняет валидацию API-ключа, deep verification,
         вычисление координат центра и размеров,
@@ -368,6 +370,7 @@ class MilMapperController:
 
         Returns:
             Готовый ``DownloadParams`` для передачи в ``DownloadWorker``.
+
         """
         if not self.validate_api_key():
             error_msg = 'API-ключ недоступен для загрузки'
@@ -384,24 +387,23 @@ class MilMapperController:
             )
         except Exception as e:
             error_msg = f'Проверка перед запуском не пройдена: {e}'
-            logger.error(error_msg)
+            logger.exception(error_msg)
             raise RuntimeError(error_msg) from e
 
         self._model.start_download()
         settings = self._model.settings
 
-        center_x = (
-            settings.bottom_left_x_sk42_gk + settings.top_right_x_sk42_gk
-        ) / 2
-        center_y = (
-            settings.bottom_left_y_sk42_gk + settings.top_right_y_sk42_gk
-        ) / 2
+        center_x = (settings.bottom_left_x_sk42_gk + settings.top_right_x_sk42_gk) / 2
+        center_y = (settings.bottom_left_y_sk42_gk + settings.top_right_y_sk42_gk) / 2
         width_m = settings.top_right_x_sk42_gk - settings.bottom_left_x_sk42_gk
         height_m = settings.top_right_y_sk42_gk - settings.bottom_left_y_sk42_gk
 
         logger.info(
             'Starting download: center=(%s, %s), size=(%sx%s)',
-            center_x, center_y, width_m, height_m,
+            center_x,
+            center_y,
+            width_m,
+            height_m,
         )
         try:
             logger.info(

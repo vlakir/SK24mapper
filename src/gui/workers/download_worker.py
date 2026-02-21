@@ -1,4 +1,5 @@
-"""Download worker — запускает создание карты в отдельном процессе.
+"""
+Download worker — запускает создание карты в отдельном процессе.
 
 Использует ``multiprocessing.Process`` вместо ``QThread``, чтобы обойти GIL
 и не блокировать GUI-поток во время тяжёлых вычислений (поворот, наложение сетки и пр.).
@@ -11,14 +12,21 @@ from __future__ import annotations
 
 import logging
 import multiprocessing as mp
+import queue as _queue_mod
 from typing import TYPE_CHECKING
 
 from PIL import Image
 from PySide6.QtCore import QObject, QTimer, Signal
 
-from gui.workers._process_entry import deserialize_pil, deserialize_rh_cache
+from gui.workers._process_entry import (
+    deserialize_pil,
+    deserialize_rh_cache,
+    worker_process_main,
+)
 
 if TYPE_CHECKING:
+    from multiprocessing.synchronize import Event as _MpEvent
+
     from domain.models import DownloadParams
 
 logger = logging.getLogger(__name__)
@@ -28,7 +36,8 @@ _POLL_INTERVAL_MS = 50
 
 
 class DownloadWorker(QObject):
-    """Обёртка над ``mp.Process`` для запуска создания карты.
+    """
+    Обёртка над ``mp.Process`` для запуска создания карты.
 
     Сигналы полностью совместимы с предыдущим QThread-вариантом,
     поэтому view.py подключается к ним без изменений.
@@ -37,7 +46,10 @@ class DownloadWorker(QObject):
     finished = Signal(bool, str)  # success, error_message
     progress_update = Signal(int, int, str)  # done, total, label
     preview_ready = Signal(
-        Image.Image, object, object, object,
+        Image.Image,
+        object,
+        object,
+        object,
     )  # PIL Image, MapMetadata, dem_grid, rh_cache
 
     def __init__(self, params: DownloadParams, parent: QObject | None = None) -> None:
@@ -46,7 +58,7 @@ class DownloadWorker(QObject):
 
         # IPC примитивы
         self._queue: mp.Queue = mp.Queue()
-        self._cancel_event: mp.Event = mp.Event()
+        self._cancel_event: _MpEvent = mp.Event()
         self._process: mp.Process | None = None
 
         # QTimer для опроса очереди
@@ -60,8 +72,6 @@ class DownloadWorker(QObject):
 
     def start(self) -> None:
         """Запуск дочернего процесса."""
-        from gui.workers._process_entry import worker_process_main
-
         self._cancel_event.clear()
         self._process = mp.Process(
             target=worker_process_main,
@@ -70,19 +80,23 @@ class DownloadWorker(QObject):
         )
         self._process.start()
         self._poll_timer.start()
-        logger.info('DownloadWorker: child process started (pid=%s)', self._process.pid)
+        logger.info(
+            'DownloadWorker: child process started (pid=%s)',
+            self._process.pid,
+        )
 
     def request_cancel(self) -> None:
         """Запрос отмены операции."""
         self._cancel_event.set()
         logger.info('DownloadWorker: cancel requested')
 
-    def isRunning(self) -> bool:  # noqa: N802 — сохраняем Qt naming convention
+    def isRunning(self) -> bool:
         """True, если дочерний процесс ещё работает."""
         return self._process is not None and self._process.is_alive()
 
     def stop_and_join(self, timeout_ms: int = 5000) -> None:
-        """Остановить процесс и дождаться завершения.
+        """
+        Остановить процесс и дождаться завершения.
 
         Вызывается из ``_cleanup_download_worker`` и ``closeEvent``.
         """
@@ -106,9 +120,7 @@ class DownloadWorker(QObject):
     # ------------------------------------------------------------------
 
     def _poll_queue(self) -> None:
-        """Забрать все сообщения из очереди и проэмитить соответствующие сигналы."""
-        import queue as _queue_mod
-
+        """Забрать все сообщения из очереди и проэмитить сигналы."""
         while True:
             try:
                 msg = self._queue.get_nowait()
@@ -132,11 +144,16 @@ class DownloadWorker(QObject):
                     image = deserialize_pil(pil_bytes, mode, size)
                     rh_cache = deserialize_rh_cache(rh_data)
                     logger.info(
-                        'DownloadWorker: preview received (%dx%d %s)', size[0], size[1], mode
+                        'DownloadWorker: preview received (%dx%d %s)',
+                        size[0],
+                        size[1],
+                        mode,
                     )
                     self.preview_ready.emit(image, metadata, dem_grid, rh_cache)
                 except Exception:
-                    logger.exception('DownloadWorker: failed to process preview message')
+                    logger.exception(
+                        'DownloadWorker: failed to process preview message'
+                    )
 
             elif kind == 'finished':
                 _, success, error_msg = msg
@@ -149,5 +166,12 @@ class DownloadWorker(QObject):
             self._poll_timer.stop()
             exitcode = self._process.exitcode
             if exitcode and exitcode != 0:
-                logger.error('DownloadWorker: child process crashed (exit=%s)', exitcode)
-                self.finished.emit(False, f'Рабочий процесс завершился аварийно (код {exitcode})')
+                logger.error(
+                    'DownloadWorker: child process crashed (exit=%s)',
+                    exitcode,
+                )
+                success = False
+                self.finished.emit(
+                    success,
+                    f'Рабочий процесс завершился аварийно (код {exitcode})',
+                )
