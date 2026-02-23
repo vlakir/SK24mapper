@@ -1454,7 +1454,6 @@ class MainWindow(QMainWindow):
 
         link_a_name_row = QHBoxLayout()
         link_a_name_row.addWidget(link_a_label)
-        link_a_name_row.addWidget(self.link_a_name_label)
         link_a_name_row.addWidget(self.link_a_name_edit)
         link_a_name_row.addStretch()
 
@@ -1479,7 +1478,6 @@ class MainWindow(QMainWindow):
 
         link_b_name_row = QHBoxLayout()
         link_b_name_row.addWidget(link_b_label)
-        link_b_name_row.addWidget(self.link_b_name_label)
         link_b_name_row.addWidget(self.link_b_name_edit)
         link_b_name_row.addStretch()
 

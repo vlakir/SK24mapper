@@ -582,17 +582,13 @@ class MapDownloadService:
             crash_log('postprocess: overlay contours DONE')
 
         # Load DEM for cursor elevation display if not already loaded.
-        # Для link_profile пропускаем: DEM для курсора не критичен,
-        # а загрузка тысяч тайлов при уже занятых ГБ на мозаику — OOM.
-        if ctx.dem_grid is None and not ctx.is_link_profile:
+        if ctx.dem_grid is None:
             crash_log('postprocess: _load_dem_for_cursor START')
             await self._load_dem_for_cursor(ctx)
             crash_log(
                 f'postprocess: _load_dem_for_cursor DONE, '
                 f'dem_grid={ctx.dem_grid.shape if ctx.dem_grid is not None else None}'
             )
-        elif ctx.is_link_profile:
-            crash_log('postprocess: SKIP _load_dem_for_cursor (link_profile mode)')
 
         # Освобождаем полноразмерный DEM перед поворотом — dem_grid уже
         # создан, raw_dem больше не нужен, а поворот требует много памяти.
@@ -1064,8 +1060,6 @@ class MapDownloadService:
             inset = render_profile_inset(
                 link_data,
                 map_size=(result.width, result.height),
-                grid_font_size_m=ctx.settings.grid_font_size_m,
-                mpp=mpp,
             )
 
             # Append inset below the map

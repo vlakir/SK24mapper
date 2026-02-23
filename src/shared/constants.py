@@ -640,6 +640,9 @@ LINK_PROFILE_LOS_LINE_COLOR = (0, 0, 0, 255)
 LINK_PROFILE_LINE_WIDTH_PX = 10
 LINK_PROFILE_POINT_A_COLOR = (0, 0, 255)
 LINK_PROFILE_POINT_B_COLOR = (255, 0, 0)
+# Размер шрифта подписей профиля (мин и макс, пиксели)
+LINK_PROFILE_FONT_MIN_PX = 36
+LINK_PROFILE_FONT_MAX_PX = 196
 # Использовать ретина-тайлы для Link Profile (False = 256px)
 LINK_PROFILE_USE_RETINA = False
 

@@ -27,6 +27,8 @@ from shared.constants import (
     LINK_PROFILE_POINT_A_COLOR,
     LINK_PROFILE_POINT_B_COLOR,
     LINK_PROFILE_REFRACTION_K,
+    LINK_PROFILE_FONT_MAX_PX,
+    LINK_PROFILE_FONT_MIN_PX,
     LINK_PROFILE_TERRAIN_FILL_COLOR,
     SPEED_OF_LIGHT_MPS,
     MapType,
@@ -184,8 +186,6 @@ def compute_link_analysis(
 def render_profile_inset(
     link_data: dict,
     map_size: tuple[int, int],
-    grid_font_size_m: float,
-    mpp: float,
 ) -> Image.Image:
     """
     Render profile inset diagram as RGBA image.
@@ -193,8 +193,6 @@ def render_profile_inset(
     Args:
         link_data: Combined dict with profile + analysis results.
         map_size: (width, height) of the final map image.
-        grid_font_size_m: Font size in meters for scaling.
-        mpp: Meters per pixel at map center.
 
     Returns:
         RGBA PIL Image of the inset.
@@ -211,13 +209,13 @@ def render_profile_inset(
     # Top border line (separation from map)
     draw.line([(0, 0), (inset_w - 1, 0)], fill=(100, 100, 100, 255), width=2)
 
-    # Font
-    ppm = 1.0 / mpp if mpp > 0 else 1.0
-    font_size_px = max(10, int(grid_font_size_m * ppm * 0.35))
-    font_size_px = min(font_size_px, inset_h // 6)
+    # Font — размер пропорционален высоте inset, ограничен константами
+    font_size_px = int(inset_h * 0.07)
+    font_size_px = max(LINK_PROFILE_FONT_MIN_PX, min(font_size_px, LINK_PROFILE_FONT_MAX_PX))
+    small_font_size_px = max(LINK_PROFILE_FONT_MIN_PX, font_size_px * 2 // 3)
     try:
         font = load_grid_font(font_size_px)
-        small_font = load_grid_font(max(8, font_size_px * 2 // 3))
+        small_font = load_grid_font(small_font_size_px)
     except Exception:
         from PIL import ImageFont
         font = ImageFont.load_default()
@@ -350,11 +348,12 @@ def render_profile_inset(
         fill=antenna_color, width=LINK_PROFILE_LINE_WIDTH_PX,
     )
 
-    # --- Point name labels below the plot ---
+    # --- Point name labels below the plot (под подписями оси расстояния) ---
+    point_label_y = plot_y1 + 5 + small_font_size_px + 4
     draw_text_with_outline(
         draw,
-        (xa_base_x, plot_y1 + 5),
-        f'{point_a_name} (h={antenna_a_m:.0f}м)',
+        (xa_base_x, point_label_y),
+        point_a_name,
         font=small_font,
         fill=LINK_PROFILE_POINT_A_COLOR,
         outline=(255, 255, 255),
@@ -363,8 +362,8 @@ def render_profile_inset(
     )
     draw_text_with_outline(
         draw,
-        (xb_base_x, plot_y1 + 5),
-        f'{point_b_name} (h={antenna_b_m:.0f}м)',
+        (xb_base_x, point_label_y),
+        point_b_name,
         font=small_font,
         fill=LINK_PROFILE_POINT_B_COLOR,
         outline=(255, 255, 255),
@@ -376,7 +375,7 @@ def render_profile_inset(
     dist_km = total_d / 1000.0
     if dist_km > 1:
         step_km = max(1, int(dist_km / 6))
-        d_val = 0
+        d_val = step_km
         while d_val <= dist_km:
             gx, _ = to_screen(d_val * 1000, e_min)
             draw.line(
@@ -398,7 +397,7 @@ def render_profile_inset(
     else:
         # Sub-kilometer: use meters
         step_m = max(100, int(total_d / 5 / 100) * 100)
-        d_val = 0
+        d_val = step_m
         while d_val <= total_d:
             gx, _ = to_screen(d_val, e_min)
             draw_text_with_outline(
@@ -436,7 +435,7 @@ def render_profile_inset(
     )
     draw_text_with_outline(
         draw,
-        (inset_w // 2, 6),
+        (inset_w // 2, 6 + font_size_px),
         title,
         font=font,
         fill=(30, 30, 30),
@@ -456,7 +455,7 @@ def render_profile_inset(
     # Bottom status line (centered)
     draw_text_with_outline(
         draw,
-        (inset_w // 2, inset_h - 6),
+        (inset_w // 2, inset_h - 6 - small_font_size_px),
         status,
         font=small_font,
         fill=status_color,
