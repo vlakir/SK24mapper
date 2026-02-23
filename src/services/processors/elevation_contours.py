@@ -228,8 +228,8 @@ async def process_elevation_contours(ctx: MapDownloadContext) -> Image.Image:
             TILE_SIZE * elev_retina_factor * (2**ctx.zoom)
         )
 
-        # Конвертируем PIL Image в numpy array для OpenCV
-        result_array = np.array(result)
+        # Рисуем контуры напрямую на PIL Image (без numpy-копии)
+        draw = ImageDraw.Draw(result)
 
         for li, _level in enumerate(levels):
             is_index = (li % max(1, int(CONTOUR_INDEX_EVERY))) == 0
@@ -237,8 +237,6 @@ async def process_elevation_contours(ctx: MapDownloadContext) -> Image.Image:
             target_width_m = CONTOUR_INDEX_WIDTH if is_index else CONTOUR_WIDTH
             width = max(1, round(target_width_m / max(1e-9, mpp)))
 
-            # Собираем все полилинии для этого уровня
-            polylines_for_level: list[np.ndarray] = []
             for poly in seed_polylines.get(li, []):
                 # Координаты в системе результирующего изображения
                 pts_array = np.array(poly, dtype=np.float32) * seed_ds
@@ -250,24 +248,11 @@ async def process_elevation_contours(ctx: MapDownloadContext) -> Image.Image:
                 if maxx_p < 0 or minx_p > img_w or maxy_p < 0 or miny_p > img_h:
                     continue
 
-                # OpenCV требует int32 координаты
-                polylines_for_level.append(pts_array.astype(np.int32))
+                coords = [tuple(int(v) for v in pt) for pt in pts_array.tolist()]
+                if len(coords) >= 2:
+                    draw.line(coords, fill=color, width=width)
 
-            # Batch-отрисовка всех полилиний уровня через cv2.polylines
-            if polylines_for_level:
-                # OpenCV использует BGR, PIL — RGB
-                cv_color = (color[2], color[1], color[0])
-                cv2.polylines(
-                    result_array,
-                    polylines_for_level,
-                    isClosed=False,
-                    color=cv_color,
-                    thickness=width,
-                    lineType=cv2.LINE_AA,
-                )
-
-        # Конвертируем обратно в PIL Image
-        result = Image.fromarray(result_array)
+        del draw
 
         # Add contour labels if enabled
         if CONTOUR_LABELS_ENABLED:
@@ -829,9 +814,10 @@ async def apply_contours_to_image(
                             return True
             return False
 
-        # Draw contours directly on result image using OpenCV (batch drawing)
-        # Конвертируем PIL Image в numpy array для OpenCV
-        result_array = np.array(result)
+        # Рисуем контуры напрямую на PIL Image (без numpy-копии)
+        draw = ImageDraw.Draw(result)
+        # Цвет с альфа-каналом, если изображение RGBA
+        is_rgba = result.mode == 'RGBA'
 
         for li, _level in enumerate(levels):
             is_index = (li % max(1, int(CONTOUR_INDEX_EVERY))) == 0
@@ -839,8 +825,7 @@ async def apply_contours_to_image(
             target_width_m = CONTOUR_INDEX_WIDTH if is_index else CONTOUR_WIDTH
             width = max(1, round(target_width_m / max(1e-9, mpp)))
 
-            # Собираем полилинии для этого уровня, фильтруя сегменты под подписями
-            polylines_for_level: list[np.ndarray] = []
+            fill_color = (*color, 255) if is_rgba else color
 
             for poly in seed_polylines.get(li, []):
                 # Координаты в системе base_image
@@ -855,58 +840,34 @@ async def apply_contours_to_image(
 
                 if label_bboxes:
                     # Разбиваем полилинию на сегменты, пропуская те, что под подписями
-                    current_segment: list[tuple[float, float]] = []
+                    current_segment: list[tuple[int, int]] = []
                     pts_list = pts_array.tolist()
 
                     for i, (px, py) in enumerate(pts_list):
                         if i == 0:
-                            current_segment.append((px, py))
+                            current_segment.append((int(px), int(py)))
                             continue
 
                         prev_x, prev_y = pts_list[i - 1]
-                        # Проверяем пересечение с bbox подписей через spatial hash
                         skip_segment = segment_intersects_any_bbox(
                             prev_x, prev_y, px, py
                         )
 
                         if skip_segment:
-                            # Сохраняем текущий сегмент и начинаем новый
                             if len(current_segment) >= MIN_POINTS_FOR_SEGMENT:
-                                polylines_for_level.append(
-                                    np.array(current_segment, dtype=np.int32)
-                                )
-                            current_segment = [(px, py)]
+                                draw.line(current_segment, fill=fill_color, width=width)
+                            current_segment = [(int(px), int(py))]
                         else:
-                            current_segment.append((px, py))
+                            current_segment.append((int(px), int(py)))
 
-                    # Добавляем последний сегмент
                     if len(current_segment) >= MIN_POINTS_FOR_SEGMENT:
-                        polylines_for_level.append(
-                            np.array(current_segment, dtype=np.int32)
-                        )
+                        draw.line(current_segment, fill=fill_color, width=width)
                 else:
-                    # Нет подписей — добавляем всю полилинию
-                    polylines_for_level.append(pts_array.astype(np.int32))
+                    coords = [tuple(int(v) for v in pt) for pt in pts_array.tolist()]
+                    if len(coords) >= 2:
+                        draw.line(coords, fill=fill_color, width=width)
 
-            # Batch-отрисовка всех полилиний уровня через cv2.polylines
-            if polylines_for_level:
-                # OpenCV использует BGR, а result может быть RGBA
-                cv_color: tuple[int, int, int] | tuple[int, int, int, int]
-                if result_array.shape[2] == 4:  # noqa: PLR2004
-                    cv_color = (color[2], color[1], color[0], 255)
-                else:
-                    cv_color = (color[2], color[1], color[0])
-                cv2.polylines(
-                    result_array,
-                    polylines_for_level,
-                    isClosed=False,
-                    color=cv_color,
-                    thickness=width,
-                    lineType=cv2.LINE_AA,
-                )
-
-        # Конвертируем обратно в PIL Image
-        result = Image.fromarray(result_array)
+        del draw
 
         # Add contour labels if enabled (final pass - actual drawing)
         if CONTOUR_LABELS_ENABLED:

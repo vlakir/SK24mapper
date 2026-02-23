@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib
 import io
 import logging
@@ -165,6 +166,16 @@ def worker_process_main(
     cancel = _cancel_token_cls(cancel_event)
 
     try:
+        # Глубокая проверка API до старта тяжёлой работы
+        sink.on_spinner('Проверка подключения…')
+        _diag = importlib.import_module('shared.diagnostics')
+        asyncio.run(
+            _diag.run_deep_verification(
+                api_key=params.api_key,
+                settings=params.settings,
+            )
+        )
+
         _map_job = importlib.import_module('services.map_job')
         _map_job.run_map_job(params, sink, cancel)
         queue.put(('finished', True, ''))

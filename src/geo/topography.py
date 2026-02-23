@@ -638,38 +638,57 @@ def assemble_dem(
     crop_rect: tuple[int, int, int, int],
 ) -> np.ndarray:
     """
-    Сшивает список DEM тайлов (в порядке строк) в единый DEM и применяет crop_rect.
+    Сшивает список DEM тайлов (в порядке строк) напрямую в crop_rect.
+
+    Оптимизировано: вместо создания полного холста и последующей обрезки,
+    вставляем только пересекающиеся части тайлов напрямую в результат.
+    Тайлы освобождаются сразу после копирования.
 
     Возвращает numpy array (dtype=float32).
     """
-    full_w = tiles_x * eff_tile_px
-    full_h = tiles_y * eff_tile_px
+    cx, cy, cw, ch = crop_rect
+    result = np.zeros((ch, cw), dtype=np.float32)
 
-    # Инициализация полотна как numpy array
-    canvas = np.zeros((full_h, full_w), dtype=np.float32)
-
-    # Размещение тайлов
     idx = 0
     for ty in range(tiles_y):
         for tx in range(tiles_x):
             tile = tiles_data[idx]
-            idx += 1
-            base_y = ty * eff_tile_px
-            base_x = tx * eff_tile_px
-            # Копируем тайл в полотно
             tile_h, tile_w = tile.shape
-            copy_h = min(eff_tile_px, tile_h)
-            copy_w = min(eff_tile_px, tile_w)
-            canvas[base_y : base_y + copy_h, base_x : base_x + copy_w] = tile[
-                :copy_h,
-                :copy_w,
-            ]
 
-    cx, cy, cw, ch = crop_rect
-    # Обрезка и возврат копии (чтобы освободить память canvas)
-    cropped = canvas[cy : cy + ch, cx : cx + cw].copy()
-    del canvas
-    return cropped
+            # Координаты тайла на полном холсте
+            tile_x0 = tx * eff_tile_px
+            tile_y0 = ty * eff_tile_px
+            tile_x1 = tile_x0 + min(eff_tile_px, tile_w)
+            tile_y1 = tile_y0 + min(eff_tile_px, tile_h)
+
+            # Пересечение с crop_rect
+            inter_x0 = max(tile_x0, cx)
+            inter_y0 = max(tile_y0, cy)
+            inter_x1 = min(tile_x1, cx + cw)
+            inter_y1 = min(tile_y1, cy + ch)
+
+            if inter_x0 < inter_x1 and inter_y0 < inter_y1:
+                # Координаты в исходном тайле
+                src_x0 = inter_x0 - tile_x0
+                src_y0 = inter_y0 - tile_y0
+                src_x1 = inter_x1 - tile_x0
+                src_y1 = inter_y1 - tile_y0
+
+                # Координаты в результате
+                dst_x = inter_x0 - cx
+                dst_y = inter_y0 - cy
+                dst_w = src_x1 - src_x0
+                dst_h = src_y1 - src_y0
+
+                result[dst_y : dst_y + dst_h, dst_x : dst_x + dst_w] = tile[
+                    src_y0:src_y1, src_x0:src_x1
+                ]
+
+            # Освобождаем тайл сразу
+            tiles_data[idx] = None  # type: ignore[call-overload]
+            idx += 1
+
+    return result
 
 
 def compute_percentiles(

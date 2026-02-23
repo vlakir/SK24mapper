@@ -19,11 +19,11 @@ from elevation.provider import ElevationTileProvider
 from geo.topography import (
     ELEVATION_COLOR_RAMP,
     assemble_dem,
-    choose_zoom_with_limit,
     effective_scale_for_xyz,
     latlng_to_pixel_xy,
     meters_per_pixel,
 )
+from shared.memory_estimation import choose_safe_zoom
 from gui.preview import publish_preview_image
 from imaging import (
     center_crop,
@@ -82,7 +82,7 @@ from shared.constants import (
     default_map_type,
     map_type_to_style_id,
 )
-from shared.diagnostics import log_memory_usage, log_thread_status
+from shared.diagnostics import crash_log, crash_log_reset, log_memory_usage, log_thread_status
 from shared.progress import LiveSpinner
 
 logger = logging.getLogger(__name__)
@@ -148,6 +148,21 @@ class MapDownloadService:
         log_memory_usage('before tile download')
         log_thread_status('before tile download')
 
+        crash_log_reset()
+        crash_log(
+            f'START map build: {width_m:.0f}x{height_m:.0f}m, '
+            f'zoom={ctx.zoom}, tiles={len(ctx.tiles)}, '
+            f'target={ctx.target_w_px}x{ctx.target_h_px}px, '
+            f'type={settings.map_type if settings else "?"}'
+        )
+        if ctx.memory_estimate:
+            me = ctx.memory_estimate
+            crash_log(
+                f'MEM estimate: peak~{me.get("peak_mb", 0):.0f}MB, '
+                f'avail~{me.get("available_mb", 0):.0f}MB, '
+                f'zoom {me.get("desired_zoom", "?")}→{me.get("actual_zoom", "?")}'
+            )
+
         try:
             async with session_ctx as client:
                 ctx.client = client
@@ -156,10 +171,21 @@ class MapDownloadService:
                 )
 
                 # Select and run processor
+                crash_log('>>> _run_processor START')
                 ctx.result = await self._run_processor(ctx)
+                crash_log(
+                    f'<<< _run_processor DONE, result='
+                    f'{ctx.result.size if ctx.result else None}'
+                )
+
+                # Принудительная сборка мусора — освободить тайлы из арен
+                gc.collect()
+                crash_log('gc.collect() after processor')
 
                 # Post-processing (may require network for overlay contours)
+                crash_log('>>> _postprocess START')
                 await self._postprocess(ctx)
+                crash_log('<<< _postprocess DONE')
 
         finally:
             self._cleanup_session(session_ctx, cache_dir_resolved)
@@ -220,10 +246,17 @@ class MapDownloadService:
             is_elev_contours,
             is_radio_horizon,
             is_radar_coverage,
+            is_link_profile,
         ) = await self._determine_map_type(mt_enum, settings)
 
         # Determine scale
-        if is_elev_color:
+        if is_link_profile:
+            from shared.constants import LINK_PROFILE_USE_RETINA
+
+            eff_scale = effective_scale_for_xyz(
+                256, use_retina=LINK_PROFILE_USE_RETINA
+            )
+        elif is_elev_color:
             eff_scale = effective_scale_for_xyz(
                 256, use_retina=ELEVATION_COLOR_USE_RETINA
             )
@@ -270,16 +303,41 @@ class MapDownloadService:
                 height_m=height_m,
             )
 
-        # Choose zoom
+        # Validate link profile points A and B
+        if is_link_profile:
+            validate_control_point_bounds(
+                control_x_gk=settings.link_point_a_x_sk42_gk,
+                control_y_gk=settings.link_point_a_y_sk42_gk,
+                center_x_gk=center_x_sk42_gk,
+                center_y_gk=center_y_sk42_gk,
+                width_m=width_m,
+                height_m=height_m,
+            )
+            validate_control_point_bounds(
+                control_x_gk=settings.link_point_b_x_sk42_gk,
+                control_y_gk=settings.link_point_b_y_sk42_gk,
+                center_x_gk=center_x_sk42_gk,
+                center_y_gk=center_y_sk42_gk,
+                width_m=width_m,
+                height_m=height_m,
+            )
+
+        # Choose zoom (with memory-aware limit)
         sp = LiveSpinner('Подготовка: подбор zoom')
         sp.start()
-        zoom = choose_zoom_with_limit(
+        is_dem_mode = (
+            is_elev_color or is_radio_horizon
+            or is_radar_coverage or is_link_profile
+        )
+        zoom, memory_estimate = choose_safe_zoom(
             center_lat=coord_result.center_lat_wgs,
             width_m=width_m,
             height_m=height_m,
             desired_zoom=max_zoom,
-            scale=eff_scale,
+            eff_scale=eff_scale,
             max_pixels=MAX_OUTPUT_PIXELS,
+            is_dem=is_dem_mode,
+            has_contours=is_elev_contours,
         )
         sp.stop('Подготовка: zoom выбран')
 
@@ -303,7 +361,11 @@ class MapDownloadService:
         rotation_deg = coord_transformer_obj.compute_rotation_deg(coverage.map_params)
 
         # Determine effective tile size
-        if is_elev_color:
+        if is_link_profile:
+            from shared.constants import LINK_PROFILE_USE_RETINA
+
+            full_eff_tile_px = 256 * (2 if LINK_PROFILE_USE_RETINA else 1)
+        elif is_elev_color:
             full_eff_tile_px = 256 * (2 if ELEVATION_COLOR_USE_RETINA else 1)
         elif is_elev_contours:
             full_eff_tile_px = 256 * (2 if ELEVATION_USE_RETINA else 1)
@@ -344,8 +406,10 @@ class MapDownloadService:
             is_elev_contours=is_elev_contours,
             is_radio_horizon=is_radio_horizon,
             is_radar_coverage=is_radar_coverage,
+            is_link_profile=is_link_profile,
             overlay_contours=bool(getattr(settings, 'overlay_contours', False)),
             full_eff_tile_px=full_eff_tile_px,
+            memory_estimate=memory_estimate,
         )
 
         # Store additional data for postprocessing
@@ -356,13 +420,14 @@ class MapDownloadService:
 
     async def _determine_map_type(
         self, mt_enum: MapType, settings: MapSettings
-    ) -> tuple[str | None, bool, bool, bool, bool]:
+    ) -> tuple[str | None, bool, bool, bool, bool, bool]:
         """Determine map type and validate API access."""
         style_id = None
         is_elev_color = False
         is_elev_contours = False
         is_radio_horizon = False
         is_radar_coverage = False
+        is_link_profile = False
 
         if mt_enum in (
             MapType.SATELLITE,
@@ -424,6 +489,17 @@ class MapDownloadService:
             )
             is_radar_coverage = True
             await _validate_terrain_api(self.api_key)
+        elif mt_enum == MapType.LINK_PROFILE:
+            logger.info(
+                'Тип карты: %s (профиль радиолинии); частота=%s МГц',
+                mt_enum,
+                settings.link_freq_mhz,
+            )
+            is_link_profile = True
+            await _validate_terrain_api(self.api_key)
+            await _validate_api_and_connectivity(
+                self.api_key, map_type_to_style_id(MapType.HYBRID)
+            )
         elif mt_enum == MapType.ELEVATION_HILLSHADE:
             logger.info(
                 'Тип карты: %s (Terrain-RGB, теневая отмывка); retina=%s',
@@ -446,10 +522,14 @@ class MapDownloadService:
             is_elev_contours,
             is_radio_horizon,
             is_radar_coverage,
+            is_link_profile,
         )
 
     async def _run_processor(self, ctx: MapDownloadContext) -> Image.Image:
         """Run appropriate processor based on map type."""
+        if ctx.is_link_profile:
+            module = importlib.import_module('services.processors.link_profile')
+            return await module.process_link_profile(ctx)
         if ctx.is_elev_color:
             if ctx.settings.map_type == MapType.ELEVATION_HILLSHADE:
                 module = importlib.import_module(
@@ -477,12 +557,12 @@ class MapDownloadService:
         if result is None:
             return
 
-        # Load DEM for cursor elevation display if not already loaded
-        if ctx.dem_grid is None:
-            await self._load_dem_for_cursor(ctx)
+        crash_log(f'postprocess: result={result.size}, mode={result.mode}')
 
-        # Overlay contours if enabled
+        # Overlay contours if enabled (ДО загрузки DEM для курсора,
+        # чтобы не держать dem_grid и raw_dem одновременно с numpy-буферами)
         if ctx.overlay_contours and not ctx.is_elev_contours:
+            crash_log('postprocess: overlay contours START')
             if ctx.is_radio_horizon or ctx.is_radar_coverage or ctx.is_elev_color:
                 # For RH/Radar/ElevColor: draw contours on a separate transparent layer
                 # for inclusion in the cached overlay (interactive alpha slider)
@@ -499,8 +579,31 @@ class MapDownloadService:
             else:
                 result = await self._apply_overlay_contours(ctx, result)
             ctx.result = result
+            crash_log('postprocess: overlay contours DONE')
+
+        # Load DEM for cursor elevation display if not already loaded.
+        # Для link_profile пропускаем: DEM для курсора не критичен,
+        # а загрузка тысяч тайлов при уже занятых ГБ на мозаику — OOM.
+        if ctx.dem_grid is None and not ctx.is_link_profile:
+            crash_log('postprocess: _load_dem_for_cursor START')
+            await self._load_dem_for_cursor(ctx)
+            crash_log(
+                f'postprocess: _load_dem_for_cursor DONE, '
+                f'dem_grid={ctx.dem_grid.shape if ctx.dem_grid is not None else None}'
+            )
+        elif ctx.is_link_profile:
+            crash_log('postprocess: SKIP _load_dem_for_cursor (link_profile mode)')
+
+        # Освобождаем полноразмерный DEM перед поворотом — dem_grid уже
+        # создан, raw_dem больше не нужен, а поворот требует много памяти.
+        if ctx.raw_dem_for_cursor is not None:
+            crash_log('postprocess: freeing raw_dem_for_cursor')
+            ctx.raw_dem_for_cursor = None
+            gc.collect()
+            crash_log('postprocess: raw_dem freed + gc.collect()')
 
         # Rotation
+        crash_log(f'postprocess: ROTATION START, image={result.size}, angle={ctx.rotation_deg:.2f}')
         rotation_start_time = time.monotonic()
         logger.info('Поворот изображения — старт')
         sp = LiveSpinner('Поворот карты')
@@ -512,6 +615,7 @@ class MapDownloadService:
             )
             with contextlib.suppress(Exception):
                 prev_result.close()
+            crash_log('postprocess: main image rotated OK')
             # Also rotate contour layer for RH overlay cache
             if (
                 ctx.rh_contour_layer is not None
@@ -527,8 +631,10 @@ class MapDownloadService:
         rotation_elapsed = time.monotonic() - rotation_start_time
         logger.info('Поворот изображения — завершён (%.2fs)', rotation_elapsed)
         log_memory_usage('after rotation')
+        crash_log(f'postprocess: ROTATION DONE ({rotation_elapsed:.2f}s)')
 
         # Cropping
+        crash_log(f'postprocess: CROP START, {result.size} -> {ctx.target_w_px}x{ctx.target_h_px}')
         crop_start_time = time.monotonic()
         logger.info('Обрезка к целевому размеру — старт')
         prev_result = result
@@ -543,14 +649,17 @@ class MapDownloadService:
         crop_elapsed = time.monotonic() - crop_start_time
         logger.info('Обрезка к целевому размеру — завершена (%.2fs)', crop_elapsed)
         log_memory_usage('after cropping')
+        crash_log(f'postprocess: CROP DONE, result={result.size}')
 
         # Grid
+        crash_log('postprocess: grid START')
         grid_start_time = time.monotonic()
         logger.info('Рисование км-сетки — старт')
         self._draw_grid(ctx, result)
         grid_elapsed = time.monotonic() - grid_start_time
         logger.info('Рисование км-сетки — завершено (%.2fs)', grid_elapsed)
         log_memory_usage('after grid')
+        crash_log('postprocess: grid DONE')
 
         # Legend (not drawn for hillshade — grayscale, no elevation scale)
         if (
@@ -573,9 +682,16 @@ class MapDownloadService:
         if ctx.settings.control_point_enabled:
             self._draw_control_point(ctx, result)
 
+        # Link profile: draw markers and append inset below the map
+        if ctx.is_link_profile and ctx.link_profile_data is not None:
+            crash_log('postprocess: link_profile overlay START')
+            result = self._draw_link_profile_overlay(ctx, result)
+            crash_log('postprocess: link_profile overlay DONE')
+
         # Clear raw DEM reference now that all processing is done
         ctx.raw_dem_for_cursor = None
 
+        crash_log(f'postprocess: ALL DONE, final result={result.size}')
         ctx.result = result
 
     async def _load_dem_for_cursor(self, ctx: MapDownloadContext) -> None:
@@ -595,6 +711,7 @@ class MapDownloadService:
             else:
                 # Need to load DEM from scratch (for XYZ maps without elevation)
                 logger.info('Загрузка DEM для информера высоты — старт')
+                crash_log(f'_load_dem_for_cursor: loading {len(ctx.tiles)} tiles from scratch')
 
                 provider = ElevationTileProvider(
                     client=ctx.client,
@@ -644,6 +761,7 @@ class MapDownloadService:
                 )
                 del dem_tiles_data
                 gc.collect()
+                crash_log(f'_load_dem_for_cursor: assembled DEM {dem_full.shape}, {dem_full.nbytes/1e6:.0f}MB')
 
                 # Scale DEM to match main image size (before rotation/crop)
                 if scale_factor != 1.0:
@@ -858,6 +976,117 @@ class MapDownloadService:
                 )
         except Exception as e:
             logger.warning('Не удалось нарисовать контрольную точку: %s', e)
+
+    def _draw_link_profile_overlay(
+        self,
+        ctx: MapDownloadContext,
+        result: Image.Image,
+    ) -> Image.Image:
+        """Draw link profile overlays and append profile diagram below the map.
+
+        Returns:
+            New image with map on top and profile inset appended below.
+        """
+        from services.processors.link_profile import render_profile_inset
+        from shared.constants import LINK_PROFILE_POINT_A_COLOR, LINK_PROFILE_POINT_B_COLOR
+
+        try:
+            link_data = ctx.link_profile_data
+            mpp = meters_per_pixel(ctx.center_lat_wgs, ctx.zoom, scale=ctx.eff_scale)
+            ppm = 1.0 / mpp if mpp > 0 else 0.0
+            font_size_px = max(12, round(ctx.settings.grid_font_size_m * ppm))
+            label_font = load_grid_font(font_size_px)
+            bg_padding_px = max(
+                2,
+                round(ctx.settings.grid_label_bg_padding_m * ppm),
+            )
+            tri_size_px = font_size_px
+            label_gap_px = max(
+                CONTROL_POINT_LABEL_GAP_MIN_PX,
+                round(tri_size_px * CONTROL_POINT_LABEL_GAP_RATIO),
+            )
+
+            def _draw_marker(lat, lng, name, color):
+                """Draw triangle marker + label at given WGS84 coords."""
+                px, py = compute_control_point_image_coords(
+                    cp_lat_wgs=lat,
+                    cp_lng_wgs=lng,
+                    center_lat_wgs=ctx.center_lat_wgs,
+                    center_lng_wgs=ctx.center_lng_wgs,
+                    zoom=ctx.zoom,
+                    eff_scale=ctx.eff_scale,
+                    img_width=result.width,
+                    img_height=result.height,
+                    rotation_deg=ctx.rotation_deg,
+                    latlng_to_pixel_xy_func=latlng_to_pixel_xy,
+                )
+                if 0 <= px < result.width and 0 <= py < result.height:
+                    draw_control_point_triangle(
+                        result, px, py, mpp, ctx.rotation_deg,
+                        size_m=ctx.settings.grid_font_size_m, color=color,
+                    )
+                    label_y = int(py + tri_size_px / 2 + label_gap_px + bg_padding_px)
+                    draw_label_with_bg(
+                        ImageDraw.Draw(result),
+                        (int(px), label_y),
+                        name,
+                        font=label_font,
+                        anchor='mt',
+                        img_size=result.size,
+                        padding=bg_padding_px,
+                    )
+                return px, py
+
+            # Draw markers A and B
+            ax_img, ay_img = _draw_marker(
+                link_data['point_a_lat_wgs'],
+                link_data['point_a_lng_wgs'],
+                ctx.settings.link_point_a_name or 'A',
+                LINK_PROFILE_POINT_A_COLOR,
+            )
+            bx_img, by_img = _draw_marker(
+                link_data['point_b_lat_wgs'],
+                link_data['point_b_lng_wgs'],
+                ctx.settings.link_point_b_name or 'B',
+                LINK_PROFILE_POINT_B_COLOR,
+            )
+
+            # Line A→B
+            line_draw = ImageDraw.Draw(result)
+            line_w = max(2, round(3.0 / mpp)) if mpp > 0 else 2
+            line_draw.line(
+                [(int(ax_img), int(ay_img)), (int(bx_img), int(by_img))],
+                fill=(255, 255, 0, 200),
+                width=line_w,
+            )
+
+            # Render profile inset with full map width
+            inset = render_profile_inset(
+                link_data,
+                map_size=(result.width, result.height),
+                grid_font_size_m=ctx.settings.grid_font_size_m,
+                mpp=mpp,
+            )
+
+            # Append inset below the map
+            combined = Image.new(
+                result.mode,
+                (result.width, result.height + inset.height),
+                (255, 255, 255),
+            )
+            combined.paste(result, (0, 0))
+            combined.paste(
+                inset.convert(result.mode),
+                (0, result.height),
+            )
+            del inset
+
+            logger.info('Link profile overlay drawn successfully')
+            return combined
+
+        except Exception as e:
+            logger.warning('Не удалось нарисовать overlay профиля радиолинии: %s', e)
+            return result
 
     def _create_rh_overlay_layer(
         self,

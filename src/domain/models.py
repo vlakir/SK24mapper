@@ -122,6 +122,17 @@ class MapSettings(BaseModel):
     radar_target_height_min_m: float = 30.0  # Минимальная высота цели (м)
     radar_target_height_max_m: float = 5000.0  # Максимальная высота цели (м)
 
+    # Параметры профиля радиолинии (Link Profile)
+    link_point_a_x: int = 5415000  # Координата X точки A (СК-42 ГК)
+    link_point_a_y: int = 7440000  # Координата Y точки A (СК-42 ГК)
+    link_point_a_name: str = 'A'  # Название точки A
+    link_point_b_x: int = 5420000  # Координата X точки B (СК-42 ГК)
+    link_point_b_y: int = 7445000  # Координата Y точки B (СК-42 ГК)
+    link_point_b_name: str = 'B'  # Название точки B
+    link_freq_mhz: float = 900.0  # Частота (МГц)
+    link_antenna_a_m: float = 10.0  # Высота антенны A (м)
+    link_antenna_b_m: float = 10.0  # Высота антенны B (м)
+
     # Валидации через Pydantic validators
     @field_validator('mask_opacity', 'radio_horizon_overlay_alpha')
     @classmethod
@@ -184,6 +195,34 @@ class MapSettings(BaseModel):
         return 1e3 * x_low_km + 1e5 * x_high
 
     @property
+    def link_point_a_x_sk42_gk(self) -> float:
+        """GK X (easting) точки A — по аналогии с control_point_x_sk42_gk."""
+        y_high = self.link_point_a_y // 100000
+        y_low_km = (self.link_point_a_y % 100000) / 1000.0
+        return 1e3 * y_low_km + 1e5 * y_high
+
+    @property
+    def link_point_a_y_sk42_gk(self) -> float:
+        """GK Y (northing) точки A — по аналогии с control_point_y_sk42_gk."""
+        x_high = self.link_point_a_x // 100000
+        x_low_km = (self.link_point_a_x % 100000) / 1000.0
+        return 1e3 * x_low_km + 1e5 * x_high
+
+    @property
+    def link_point_b_x_sk42_gk(self) -> float:
+        """GK X (easting) точки B — по аналогии с control_point_x_sk42_gk."""
+        y_high = self.link_point_b_y // 100000
+        y_low_km = (self.link_point_b_y % 100000) / 1000.0
+        return 1e3 * y_low_km + 1e5 * y_high
+
+    @property
+    def link_point_b_y_sk42_gk(self) -> float:
+        """GK Y (northing) точки B — по аналогии с control_point_y_sk42_gk."""
+        x_high = self.link_point_b_x // 100000
+        x_low_km = (self.link_point_b_x % 100000) / 1000.0
+        return 1e3 * x_low_km + 1e5 * x_high
+
+    @property
     def custom_helmert(
         self,
     ) -> tuple[float, float, float, float, float, float, float] | None:
@@ -216,3 +255,4 @@ class DownloadParams:
     api_key: str
     output_path: str
     settings: MapSettings
+    memory_estimate: dict | None = None

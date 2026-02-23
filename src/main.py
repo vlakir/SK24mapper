@@ -18,6 +18,18 @@ from shared.portable import get_portable_path, is_portable_mode
 logger = logging.getLogger(__name__)
 
 
+class _FsyncFileHandler(logging.FileHandler):
+    """FileHandler that flushes + fsyncs after every record — survives OOM/crash."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        super().emit(record)
+        try:
+            self.stream.flush()
+            os.fsync(self.stream.fileno())
+        except Exception:
+            pass
+
+
 def setup_logging() -> tuple[Path, Path]:
     """
     Configure application logging to LOCALAPPDATA and ensure user dirs.
@@ -48,13 +60,16 @@ def setup_logging() -> tuple[Path, Path]:
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / 'mil_mapper.log'
 
+    from shared.constants import LOG_FSYNC_TO_FILE
+
+    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
+    if LOG_FSYNC_TO_FILE:
+        handlers.append(_FsyncFileHandler(str(log_file), mode='w', encoding='utf-8'))
+
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.StreamHandler(sys.stdout),
-            logging.FileHandler(str(log_file), encoding='utf-8'),
-        ],
+        handlers=handlers,
     )
     return appdata_base, local_base
 
@@ -220,8 +235,11 @@ def main() -> int:
 
 
 if __name__ == '__main__':
-    # Обязательно для multiprocessing на Windows (особенно PyInstaller)
     import multiprocessing
 
+    # 'spawn' вместо 'fork': на Linux fork() после инициализации OpenMP
+    # (numpy, cv2) вызывает deadlock/crash. 'spawn' создаёт чистый процесс.
+    # На Windows 'spawn' — уже дефолт, force=True безопасно.
+    multiprocessing.set_start_method('spawn', force=True)
     multiprocessing.freeze_support()
     sys.exit(main())

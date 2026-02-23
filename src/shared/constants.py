@@ -117,6 +117,7 @@ class MapType(str, Enum):
     ELEVATION_HILLSHADE = 'ELEVATION_HILLSHADE'
     RADIO_HORIZON = 'RADIO_HORIZON'
     RADAR_COVERAGE = 'RADAR_COVERAGE'
+    LINK_PROFILE = 'LINK_PROFILE'
 
 
 class UavHeightReference(str, Enum):
@@ -138,6 +139,7 @@ MAP_TYPE_LABELS_RU: dict[MapType, str] = {
     MapType.ELEVATION_HILLSHADE: 'Карта высот (hillshade)',
     MapType.RADIO_HORIZON: 'Радиогоризонт НСУ БпЛА',
     MapType.RADAR_COVERAGE: 'Зона обнаружения РЛС',
+    MapType.LINK_PROFILE: 'Профиль радиолинии',
 }
 
 UAV_HEIGHT_REFERENCE_LABELS_RU: dict[UavHeightReference, str] = {
@@ -617,3 +619,36 @@ DWMWA_USE_IMMERSIVE_DARK_MODE = 20
 
 # Битовая маска атрибута «скрытый файл» Windows API
 WIN32_FILE_ATTRIBUTE_HIDDEN = 0x2
+
+# --- Профиль радиолинии (Link Profile)
+LINK_PROFILE_DEFAULT_FREQ_MHZ = 900.0
+LINK_PROFILE_REFRACTION_K = 4.0 / 3.0
+LINK_PROFILE_NUM_SAMPLES = 500
+LINK_PROFILE_DEFAULT_ANTENNA_A_M = 10.0
+LINK_PROFILE_DEFAULT_ANTENNA_B_M = 10.0
+SPEED_OF_LIGHT_MPS = 299_792_458.0
+# Врезка профиля
+LINK_PROFILE_INSET_HEIGHT_RATIO = 0.25
+LINK_PROFILE_INSET_BG_COLOR = (255, 255, 255, 255)
+LINK_PROFILE_INSET_MARGIN_H = 0.03   # горизонтальные поля (лево = право), доля ширины
+LINK_PROFILE_INSET_MARGIN_V = 0.18   # вертикальные поля (верх = низ), доля высоты
+LINK_PROFILE_TERRAIN_FILL_COLOR = (139, 119, 101, 200)
+LINK_PROFILE_LOS_COLOR = (255, 0, 0)
+LINK_PROFILE_FRESNEL_FILL_COLOR = (255, 165, 0, 60)
+LINK_PROFILE_FRESNEL_BORDER_COLOR = (255, 0, 0, 255)
+LINK_PROFILE_LOS_LINE_COLOR = (0, 0, 0, 255)
+LINK_PROFILE_LINE_WIDTH_PX = 10
+LINK_PROFILE_POINT_A_COLOR = (0, 0, 255)
+LINK_PROFILE_POINT_B_COLOR = (255, 0, 0)
+# Использовать ретина-тайлы для Link Profile (False = 256px)
+LINK_PROFILE_USE_RETINA = False
+
+# --- Логирование ---
+# Дублировать лог в файл с fsync (переживает OOM/crash)
+LOG_FSYNC_TO_FILE = True
+
+# --- OOM Prevention ---
+# Доля доступной RAM, которую можно использовать
+MEMORY_SAFETY_RATIO = 0.75
+# Минимум свободной памяти, которую нужно оставить (МБ)
+MEMORY_MIN_FREE_MB = 512

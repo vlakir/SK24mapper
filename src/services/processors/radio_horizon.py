@@ -133,15 +133,23 @@ async def _load_topo(
     *,
     use_retina: bool = False,
     label: str = 'карты',
+    style: MapType = MapType.OUTDOORS,
 ) -> Image.Image:
-    """Загрузка топографической основы (стиль Outdoors). Возвращает PIL Image."""
+    """Загрузка топографической основы. Возвращает PIL Image."""
+    from shared.diagnostics import crash_log
+
     logger.info('Загрузка топографической основы для %s', label)
     sp_topo = LiveSpinner('Загрузка топографической основы')
     sp_topo.start()
 
-    topo_style_id = MAPBOX_STYLE_BY_TYPE[MapType.OUTDOORS]
+    topo_style_id = MAPBOX_STYLE_BY_TYPE[style]
     topo_tile_size = TILE_SIZE
     topo_use_retina = use_retina
+
+    crash_log(
+        f'_load_topo: START style={style.value}, tiles={len(ctx.tiles)}, '
+        f'zoom={ctx.zoom}, retina={topo_use_retina}'
+    )
 
     async def fetch_topo_tile(
         idx_xy: tuple[int, tuple[int, int]],
@@ -162,10 +170,12 @@ async def _load_topo(
 
     topo_tasks = [fetch_topo_tile(pair) for pair in enumerate(ctx.tiles)]
     topo_results = await asyncio.gather(*topo_tasks)
+    crash_log(f'_load_topo: all {len(topo_results)} tiles downloaded')
     topo_results.sort(key=lambda t: t[0])
     topo_images = [img for _, img in topo_results]
 
     eff_tile_px_topo = topo_tile_size * (2 if topo_use_retina else 1)
+    crash_log(f'_load_topo: assembling mosaic ({ctx.tiles_x}x{ctx.tiles_y} tiles, eff={eff_tile_px_topo}px)')
     topo_base = assemble_and_crop(
         images=topo_images,
         tiles_x=ctx.tiles_x,
@@ -173,6 +183,7 @@ async def _load_topo(
         eff_tile_px=eff_tile_px_topo,
         crop_rect=ctx.crop_rect,
     )
+    crash_log(f'_load_topo: DONE, result={topo_base.size}, mode={topo_base.mode}')
 
     with contextlib.suppress(Exception):
         topo_images.clear()

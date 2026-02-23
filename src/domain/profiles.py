@@ -38,7 +38,8 @@ def _user_profiles_dir() -> Path:
         return result if isinstance(result, Path) else Path(result)
 
     # Try project-local configs/profiles
-    project_root = Path(__file__).resolve().parent.parent
+    # profiles.py is at src/domain/profiles.py → project root is 3 levels up
+    project_root = Path(__file__).resolve().parent.parent.parent
     local_profiles = project_root / 'configs' / 'profiles'
     if local_profiles.exists():
         return local_profiles

@@ -1162,6 +1162,7 @@ class MainWindow(QMainWindow):
             # MapType.ELEVATION_HILLSHADE,  # скрыт — IN PROGRESS
             MapType.RADIO_HORIZON,
             MapType.RADAR_COVERAGE,
+            MapType.LINK_PROFILE,
         ]
         for mt in self._maptype_order:
             self.map_type_combo.addItem(MAP_TYPE_LABELS_RU[mt], userData=mt.value)
@@ -1431,6 +1432,100 @@ class MainWindow(QMainWindow):
         self._radio_horizon_group = radio_horizon_group
         settings_main_layout.addWidget(radio_horizon_group)
 
+        # --- Панель «Профиль радиолинии» ---
+        link_profile_group = QGroupBox('Профиль радиолинии')
+        link_layout = QVBoxLayout()
+
+        # Координаты точки A
+        link_a_label = QLabel('<b>Точка A:</b>')
+        self.link_a_x_widget = CoordinateInputWidget('X (вертикаль):', 54, 15)
+        self.link_a_y_widget = CoordinateInputWidget('Y (горизонталь):', 74, 40)
+
+        link_a_coords_row = QHBoxLayout()
+        link_a_coords_row.addWidget(self.link_a_x_widget)
+        link_a_coords_row.addWidget(self.link_a_y_widget)
+
+        # Имя точки A
+        self.link_a_name_label = QLabel('Название A:')
+        self.link_a_name_edit = QLineEdit()
+        self.link_a_name_edit.setPlaceholderText('A')
+        self.link_a_name_edit.setText('A')
+        self.link_a_name_edit.setMaximumWidth(100)
+
+        link_a_name_row = QHBoxLayout()
+        link_a_name_row.addWidget(link_a_label)
+        link_a_name_row.addWidget(self.link_a_name_label)
+        link_a_name_row.addWidget(self.link_a_name_edit)
+        link_a_name_row.addStretch()
+
+        link_layout.addLayout(link_a_name_row)
+        link_layout.addLayout(link_a_coords_row)
+
+        # Координаты точки B
+        link_b_label = QLabel('<b>Точка B:</b>')
+        self.link_b_x_widget = CoordinateInputWidget('X (вертикаль):', 54, 20)
+        self.link_b_y_widget = CoordinateInputWidget('Y (горизонталь):', 74, 45)
+
+        link_b_coords_row = QHBoxLayout()
+        link_b_coords_row.addWidget(self.link_b_x_widget)
+        link_b_coords_row.addWidget(self.link_b_y_widget)
+
+        # Имя точки B
+        self.link_b_name_label = QLabel('Название B:')
+        self.link_b_name_edit = QLineEdit()
+        self.link_b_name_edit.setPlaceholderText('B')
+        self.link_b_name_edit.setText('B')
+        self.link_b_name_edit.setMaximumWidth(100)
+
+        link_b_name_row = QHBoxLayout()
+        link_b_name_row.addWidget(link_b_label)
+        link_b_name_row.addWidget(self.link_b_name_label)
+        link_b_name_row.addWidget(self.link_b_name_edit)
+        link_b_name_row.addStretch()
+
+        link_layout.addLayout(link_b_name_row)
+        link_layout.addLayout(link_b_coords_row)
+
+        # Параметры радиолинии — grid
+        link_grid = QGridLayout()
+        link_grid.setContentsMargins(0, 0, 0, 0)
+        link_grid.setVerticalSpacing(2)
+        link_grid.setHorizontalSpacing(4)
+
+        # Частота
+        link_grid.addWidget(QLabel('Частота (МГц):'), 0, 0)
+        self.link_freq_spin = QDoubleSpinBox()
+        self.link_freq_spin.setRange(1.0, 100000.0)
+        self.link_freq_spin.setDecimals(1)
+        self.link_freq_spin.setValue(900.0)
+        self.link_freq_spin.setToolTip('Рабочая частота радиолинии (МГц)')
+        link_grid.addWidget(self.link_freq_spin, 0, 1)
+
+        # Высота антенны A
+        link_grid.addWidget(QLabel('Высота ант. A (м):'), 1, 0)
+        self.link_antenna_a_spin = QDoubleSpinBox()
+        self.link_antenna_a_spin.setRange(0.0, 200.0)
+        self.link_antenna_a_spin.setDecimals(1)
+        self.link_antenna_a_spin.setValue(10.0)
+        self.link_antenna_a_spin.setToolTip('Высота антенны в точке A (м)')
+        link_grid.addWidget(self.link_antenna_a_spin, 1, 1)
+
+        # Высота антенны B
+        link_grid.addWidget(QLabel('Высота ант. B (м):'), 2, 0)
+        self.link_antenna_b_spin = QDoubleSpinBox()
+        self.link_antenna_b_spin.setRange(0.0, 200.0)
+        self.link_antenna_b_spin.setDecimals(1)
+        self.link_antenna_b_spin.setValue(10.0)
+        self.link_antenna_b_spin.setToolTip('Высота антенны в точке B (м)')
+        link_grid.addWidget(self.link_antenna_b_spin, 2, 1)
+
+        link_layout.addLayout(link_grid)
+
+        link_profile_group.setLayout(link_layout)
+        link_profile_group.setVisible(False)
+        self._link_profile_group = link_profile_group
+        settings_main_layout.addWidget(link_profile_group)
+
         # Helmert widget (не в layout, хранится для диалога и профилей)
         self.helmert_widget = HelmertSettingsWidget()
 
@@ -1686,6 +1781,25 @@ class MainWindow(QMainWindow):
         self.grid_widget.padding_spin.valueChanged.connect(self._on_settings_changed)
         self.display_grid_cb.stateChanged.connect(self._on_settings_changed)
 
+        # Link profile settings
+        self.link_a_x_widget.coordinate_edit.editingFinished.connect(
+            self._on_settings_changed
+        )
+        self.link_a_y_widget.coordinate_edit.editingFinished.connect(
+            self._on_settings_changed
+        )
+        self.link_a_name_edit.editingFinished.connect(self._on_settings_changed)
+        self.link_b_x_widget.coordinate_edit.editingFinished.connect(
+            self._on_settings_changed
+        )
+        self.link_b_y_widget.coordinate_edit.editingFinished.connect(
+            self._on_settings_changed
+        )
+        self.link_b_name_edit.editingFinished.connect(self._on_settings_changed)
+        self.link_freq_spin.valueChanged.connect(self._on_settings_changed)
+        self.link_antenna_a_spin.valueChanged.connect(self._on_settings_changed)
+        self.link_antenna_b_spin.valueChanged.connect(self._on_settings_changed)
+
         # Helmert settings — changed only via AdvancedSettingsDialog
 
     def _load_initial_data(self) -> None:
@@ -1756,6 +1870,7 @@ class MainWindow(QMainWindow):
             map_type_value = self.map_type_combo.itemData(idx)
             is_radio_horizon = map_type_value == MapType.RADIO_HORIZON.value
             is_radar_coverage = map_type_value == MapType.RADAR_COVERAGE.value
+            is_link_profile = map_type_value == MapType.LINK_PROFILE.value
             is_elev_color = map_type_value in (
                 MapType.ELEVATION_COLOR.value,
                 MapType.ELEVATION_HILLSHADE.value,
@@ -1763,12 +1878,16 @@ class MainWindow(QMainWindow):
         except Exception:
             is_radio_horizon = False
             is_radar_coverage = False
+            is_link_profile = False
             is_elev_color = False
 
         # Панель видна для НСУ/РЛС/Карта высот (слайдер прозрачности)
         self._radio_horizon_group.setVisible(
             is_radio_horizon or is_radar_coverage or is_elev_color
         )
+
+        # Панель профиля радиолинии
+        self._link_profile_group.setVisible(is_link_profile)
 
         # Заголовок панели зависит от режима
         if is_elev_color:
@@ -1792,7 +1911,16 @@ class MainWindow(QMainWindow):
         for w in self._antenna_widgets:
             w.setVisible(antenna_visible)
 
-        if is_radio_horizon or is_radar_coverage:
+        if is_link_profile:
+            # Для профиля радиолинии: контрольная точка заблокирована в выключенном
+            # состоянии — точки A и B задаются в собственной панели
+            self.control_point_checkbox.setChecked(False)
+            self.control_point_checkbox.setEnabled(False)
+            self.control_point_x_widget.setEnabled(False)
+            self.control_point_y_widget.setEnabled(False)
+            self.control_point_name_label.setEnabled(False)
+            self.control_point_name_edit.setEnabled(False)
+        elif is_radio_horizon or is_radar_coverage:
             # Принудительно включаем контрольную точку
             # и блокируем возможность отключения
             self.control_point_checkbox.setChecked(True)
@@ -1883,6 +2011,16 @@ class MainWindow(QMainWindow):
         target_lo, target_hi = self.radar_target_h_slider.value()
         payload['radar_target_height_min_m'] = float(target_lo * 10)
         payload['radar_target_height_max_m'] = float(target_hi * 10)
+        # Link profile parameters
+        payload['link_point_a_x'] = self.link_a_x_widget.get_coordinate()
+        payload['link_point_a_y'] = self.link_a_y_widget.get_coordinate()
+        payload['link_point_a_name'] = self.link_a_name_edit.text() or 'A'
+        payload['link_point_b_x'] = self.link_b_x_widget.get_coordinate()
+        payload['link_point_b_y'] = self.link_b_y_widget.get_coordinate()
+        payload['link_point_b_name'] = self.link_b_name_edit.text() or 'B'
+        payload['link_freq_mhz'] = self.link_freq_spin.value()
+        payload['link_antenna_a_m'] = self.link_antenna_a_spin.value()
+        payload['link_antenna_b_m'] = self.link_antenna_b_spin.value()
         self._controller.update_settings_bulk(**payload)
 
     def _get_current_coordinates(self) -> dict[str, int | bool | float | str]:
@@ -3654,9 +3792,10 @@ class MainWindow(QMainWindow):
         with QSignalBlocker(self.contours_checkbox):
             self.contours_checkbox.setChecked(overlay_flag)
 
-        # Проверяем режимы: Радиогоризонт, РЛС, Карта высот
+        # Проверяем режимы: Радиогоризонт, РЛС, Карта высот, Профиль радиолинии
         is_radio_horizon = current_mt == MapType.RADIO_HORIZON
         is_radar_coverage = current_mt == MapType.RADAR_COVERAGE
+        is_link_profile = current_mt == MapType.LINK_PROFILE
         is_elev_color = current_mt in (
             MapType.ELEVATION_COLOR,
             MapType.ELEVATION_HILLSHADE,
@@ -3683,16 +3822,19 @@ class MainWindow(QMainWindow):
         # Update control point settings
         control_point_enabled = getattr(settings, 'control_point_enabled', False)
 
-        # Для радиогоризонта/РЛС принудительно включаем контрольную точку
+        # Для радиогоризонта/РЛС принудительно включаем КТ
         if is_radio_horizon or is_radar_coverage:
             control_point_enabled = True
+        elif is_link_profile:
+            # Для профиля радиолинии: КТ принудительно выключена и заблокирована
+            control_point_enabled = False
 
         with QSignalBlocker(self.control_point_checkbox):
             self.control_point_checkbox.setChecked(control_point_enabled)
 
         # Блокируем/разблокируем чекбокс в зависимости от типа карты
         self.control_point_checkbox.setEnabled(
-            not is_radio_horizon and not is_radar_coverage
+            not is_radio_horizon and not is_radar_coverage and not is_link_profile
         )
 
         # Programmatically set full control point coordinates without splitting
@@ -3752,10 +3894,47 @@ class MainWindow(QMainWindow):
             self.radar_target_h_slider.setValue((_th_lo // 10, _th_hi // 10))
         self.radar_target_h_label.setText(f'{_th_lo}—{_th_hi}')
 
+        # Link profile parameters
+        _link_ax = int(getattr(settings, 'link_point_a_x', 5415000))
+        _link_ay = int(getattr(settings, 'link_point_a_y', 7440000))
+        with QSignalBlocker(self.link_a_x_widget.coordinate_edit):
+            self.link_a_x_widget.set_coordinate(_link_ax)
+        with QSignalBlocker(self.link_a_y_widget.coordinate_edit):
+            self.link_a_y_widget.set_coordinate(_link_ay)
+        with QSignalBlocker(self.link_a_name_edit):
+            self.link_a_name_edit.setText(
+                str(getattr(settings, 'link_point_a_name', 'A'))
+            )
+        _link_bx = int(getattr(settings, 'link_point_b_x', 5420000))
+        _link_by = int(getattr(settings, 'link_point_b_y', 7445000))
+        with QSignalBlocker(self.link_b_x_widget.coordinate_edit):
+            self.link_b_x_widget.set_coordinate(_link_bx)
+        with QSignalBlocker(self.link_b_y_widget.coordinate_edit):
+            self.link_b_y_widget.set_coordinate(_link_by)
+        with QSignalBlocker(self.link_b_name_edit):
+            self.link_b_name_edit.setText(
+                str(getattr(settings, 'link_point_b_name', 'B'))
+            )
+        with QSignalBlocker(self.link_freq_spin):
+            self.link_freq_spin.setValue(
+                float(getattr(settings, 'link_freq_mhz', 900.0))
+            )
+        with QSignalBlocker(self.link_antenna_a_spin):
+            self.link_antenna_a_spin.setValue(
+                float(getattr(settings, 'link_antenna_a_m', 10.0))
+            )
+        with QSignalBlocker(self.link_antenna_b_spin):
+            self.link_antenna_b_spin.setValue(
+                float(getattr(settings, 'link_antenna_b_m', 10.0))
+            )
+
         # Панель видна для НСУ/РЛС/Карта высот
         self._radio_horizon_group.setVisible(
             is_radio_horizon or is_radar_coverage or is_elev_color
         )
+
+        # Панель профиля радиолинии
+        self._link_profile_group.setVisible(is_link_profile)
 
         # Заголовок панели зависит от режима
         if is_elev_color:

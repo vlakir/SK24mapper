@@ -52,6 +52,7 @@ def draw_control_point_triangle(
     meters_per_px: float,
     rotation_deg: float = 0.0,
     size_m: float | None = None,
+    color: tuple[int, int, int] = CONTROL_POINT_COLOR,
 ) -> None:
     """
     Draw a triangular control point marker at specified position.
@@ -63,6 +64,7 @@ def draw_control_point_triangle(
         meters_per_px: Meters per pixel
         rotation_deg: Image rotation in degrees (for marker orientation)
         size_m: Marker size in meters (defaults to CONTROL_POINT_SIZE_M)
+        color: Marker color as (R, G, B) tuple
 
     """
     if meters_per_px <= 0:
@@ -93,8 +95,8 @@ def draw_control_point_triangle(
         pts_rotated.append((cx_img + rx, cy_img + ry))
 
     draw = ImageDraw.Draw(img)
-    color = tuple(CONTROL_POINT_COLOR)
-    draw.polygon(pts_rotated, fill=color, outline=color)
+    c = tuple(color)
+    draw.polygon(pts_rotated, fill=c, outline=c)
 
 
 def compute_control_point_image_coords(

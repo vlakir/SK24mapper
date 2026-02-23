@@ -4,8 +4,9 @@ Download worker — запускает создание карты в отдел
 Использует ``multiprocessing.Process`` вместо ``QThread``, чтобы обойти GIL
 и не блокировать GUI-поток во время тяжёлых вычислений (поворот, наложение сетки и пр.).
 
-``QTimer(50 ms)`` опрашивает ``mp.Queue``, десериализует PIL Image
-и эмитит Qt-сигналы точно так же, как раньше делал ``QThread``.
+Фоновый ``threading.Thread`` читает ``mp.Queue`` и десериализует тяжёлые
+данные (preview, dem_grid, rh_cache), а лёгкие сигналы пересылаются
+в GUI-поток через ``QTimer(50 ms)`` опрос ``queue.Queue``.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from __future__ import annotations
 import logging
 import multiprocessing as mp
 import queue as _queue_mod
+import threading
 from typing import TYPE_CHECKING
 
 from PIL import Image
@@ -31,7 +33,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Интервал опроса очереди из дочернего процесса (мс)
+# Интервал опроса внутренней очереди из GUI-потока (мс)
 _POLL_INTERVAL_MS = 50
 
 
@@ -57,28 +59,42 @@ class DownloadWorker(QObject):
         self._params = params
 
         # IPC примитивы
-        self._queue: mp.Queue = mp.Queue()
+        self._mp_queue: mp.Queue = mp.Queue()
         self._cancel_event: _MpEvent = mp.Event()
         self._process: mp.Process | None = None
 
-        # QTimer для опроса очереди
+        # Внутренняя лёгкая очередь: reader thread → GUI thread
+        self._gui_queue: _queue_mod.Queue = _queue_mod.Queue()
+        self._reader_thread: threading.Thread | None = None
+        self._reader_stop = threading.Event()
+
+        # QTimer для опроса _gui_queue (лёгкие сообщения, без десериализации)
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(_POLL_INTERVAL_MS)
-        self._poll_timer.timeout.connect(self._poll_queue)
+        self._poll_timer.timeout.connect(self._poll_gui_queue)
 
     # ------------------------------------------------------------------
     # Public API (совместим со старым DownloadWorker)
     # ------------------------------------------------------------------
 
     def start(self) -> None:
-        """Запуск дочернего процесса."""
+        """Запуск дочернего процесса и reader-потока."""
         self._cancel_event.clear()
+        self._reader_stop.clear()
         self._process = mp.Process(
             target=worker_process_main,
-            args=(self._params, self._queue, self._cancel_event),
+            args=(self._params, self._mp_queue, self._cancel_event),
             daemon=True,
         )
         self._process.start()
+
+        # Фоновый поток: читает mp.Queue, десериализует тяжёлые данные,
+        # кладёт готовые python-объекты в _gui_queue
+        self._reader_thread = threading.Thread(
+            target=self._reader_loop, daemon=True, name='download-reader',
+        )
+        self._reader_thread.start()
+
         self._poll_timer.start()
         logger.info(
             'DownloadWorker: child process started (pid=%s)',
@@ -101,6 +117,8 @@ class DownloadWorker(QObject):
         Вызывается из ``_cleanup_download_worker`` и ``closeEvent``.
         """
         self._poll_timer.stop()
+        self._reader_stop.set()
+
         if self._process is None:
             return
         if self._process.is_alive():
@@ -115,15 +133,63 @@ class DownloadWorker(QObject):
                 self._process.join(timeout=2)
         self._process = None
 
+        if self._reader_thread is not None:
+            self._reader_thread.join(timeout=2)
+            self._reader_thread = None
+
     # ------------------------------------------------------------------
-    # Опрос очереди из GUI-потока
+    # Reader thread: mp.Queue → десериализация → _gui_queue
     # ------------------------------------------------------------------
 
-    def _poll_queue(self) -> None:
-        """Забрать все сообщения из очереди и проэмитить сигналы."""
+    def _reader_loop(self) -> None:
+        """Фоновый поток: читает mp.Queue, десериализует, кладёт в _gui_queue."""
+        while not self._reader_stop.is_set():
+            try:
+                # Блокирующее чтение с таймаутом, чтобы периодически
+                # проверять _reader_stop
+                msg = self._mp_queue.get(timeout=0.1)
+            except _queue_mod.Empty:
+                continue
+            except Exception:
+                logger.debug('Reader: queue.get failed', exc_info=True)
+                break
+
+            kind = msg[0]
+
+            if kind in ('progress', 'spinner'):
+                # Лёгкие сообщения — пробрасываем как есть
+                self._gui_queue.put(msg)
+
+            elif kind == 'preview':
+                # Тяжёлая десериализация — в этом потоке, НЕ в GUI
+                try:
+                    _, img_data, metadata, dem_grid, rh_data = msg
+                    pil_bytes, mode, size = img_data
+                    image = deserialize_pil(pil_bytes, mode, size)
+                    rh_cache = deserialize_rh_cache(rh_data)
+                    logger.info(
+                        'Reader: preview deserialized (%dx%d %s)',
+                        size[0], size[1], mode,
+                    )
+                    self._gui_queue.put(
+                        ('preview_ready', image, metadata, dem_grid, rh_cache)
+                    )
+                except Exception:
+                    logger.exception('Reader: failed to deserialize preview')
+
+            elif kind == 'finished':
+                self._gui_queue.put(msg)
+                return  # reader завершается
+
+    # ------------------------------------------------------------------
+    # GUI thread: опрос _gui_queue (только лёгкие объекты)
+    # ------------------------------------------------------------------
+
+    def _poll_gui_queue(self) -> None:
+        """Забрать готовые сообщения из _gui_queue и проэмитить сигналы."""
         while True:
             try:
-                msg = self._queue.get_nowait()
+                msg = self._gui_queue.get_nowait()
             except _queue_mod.Empty:
                 break
 
@@ -137,23 +203,9 @@ class DownloadWorker(QObject):
                 _, label = msg
                 self.progress_update.emit(0, 0, label)
 
-            elif kind == 'preview':
-                try:
-                    _, img_data, metadata, dem_grid, rh_data = msg
-                    pil_bytes, mode, size = img_data
-                    image = deserialize_pil(pil_bytes, mode, size)
-                    rh_cache = deserialize_rh_cache(rh_data)
-                    logger.info(
-                        'DownloadWorker: preview received (%dx%d %s)',
-                        size[0],
-                        size[1],
-                        mode,
-                    )
-                    self.preview_ready.emit(image, metadata, dem_grid, rh_cache)
-                except Exception:
-                    logger.exception(
-                        'DownloadWorker: failed to process preview message'
-                    )
+            elif kind == 'preview_ready':
+                _, image, metadata, dem_grid, rh_cache = msg
+                self.preview_ready.emit(image, metadata, dem_grid, rh_cache)
 
             elif kind == 'finished':
                 _, success, error_msg = msg
@@ -163,6 +215,9 @@ class DownloadWorker(QObject):
 
         # Если процесс умер без отправки 'finished' — это crash
         if self._process is not None and not self._process.is_alive():
+            # Дождаться, пока reader вычитает оставшиеся сообщения
+            if self._reader_thread is not None and self._reader_thread.is_alive():
+                return  # ещё читает
             self._poll_timer.stop()
             exitcode = self._process.exitcode
             if exitcode and exitcode != 0:

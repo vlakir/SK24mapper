@@ -119,7 +119,14 @@ class MapDownloadContext:
     is_elev_contours: bool = False
     is_radio_horizon: bool = False
     is_radar_coverage: bool = False
+    is_link_profile: bool = False
     overlay_contours: bool = False
+
+    # Link profile data (filled by processor for postprocessing)
+    link_profile_data: dict | None = None
+
+    # Memory estimation (filled during context creation)
+    memory_estimate: dict | None = None
 
     # Tile size settings
     full_eff_tile_px: int = 512

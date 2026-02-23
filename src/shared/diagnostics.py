@@ -65,6 +65,43 @@ SQLiteBackend = _SQLiteBackend
 _AIOHTTP_CACHE_AVAILABLE = True
 
 
+# ─── Crash-safe log ───────────────────────────────────────────────────
+# Пишет в файл с fsync после каждой строки — переживёт OOM kill.
+_CRASH_LOG_PATH = Path.home() / '.sk42_crash_log.txt'
+
+
+def crash_log(msg: str) -> None:
+    """Write one line to the crash-safe log file (fsync'd immediately)."""
+    ts = time.strftime('%H:%M:%S')
+    rss = '?'
+    avail = '?'
+    try:
+        proc = psutil.Process()
+        rss = f'{proc.memory_info().rss / 1024 / 1024:.0f}'
+        avail = f'{psutil.virtual_memory().available / 1024 / 1024:.0f}'
+    except Exception:
+        pass
+    line = f'[{ts}] RSS={rss}MB Avail={avail}MB | {msg}\n'
+    try:
+        with open(_CRASH_LOG_PATH, 'a', encoding='utf-8') as f:
+            f.write(line)
+            f.flush()
+            os.fsync(f.fileno())
+    except Exception:
+        pass
+
+
+def crash_log_reset() -> None:
+    """Clear the crash log at the start of a new map build."""
+    try:
+        with open(_CRASH_LOG_PATH, 'w', encoding='utf-8') as f:
+            f.write(f'=== SK42mapper crash log — {time.strftime("%Y-%m-%d %H:%M:%S")} ===\n')
+            f.flush()
+            os.fsync(f.fileno())
+    except Exception:
+        pass
+
+
 def get_memory_info() -> dict[str, Any]:
     """Get comprehensive memory usage information."""
     if not _PSUTIL_AVAILABLE:

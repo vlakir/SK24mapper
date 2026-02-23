@@ -188,7 +188,7 @@ def load_grid_font(font_size: int = 86) -> ImageFont.FreeTypeFont | ImageFont.Im
     Порядок:
       1) GRID_FONT_PATH_BOLD (если задан) — жирный шрифт.
       2) GRID_FONT_PATH (если задан) — обычный шрифт.
-      3) Системные шрифты Windows (Arial Bold, Segoe UI Bold и др.).
+      3) Системные шрифты (Windows, Linux, macOS).
       4) Резерв: встроенный маленький шрифт PIL.
     """
     if GRID_FONT_PATH_BOLD:
@@ -203,12 +203,26 @@ def load_grid_font(font_size: int = 86) -> ImageFont.FreeTypeFont | ImageFont.Im
             logger.debug('Failed to load grid font from %s', GRID_FONT_PATH)
 
     _system_fonts = (
-        'arialbd.ttf',  # Arial Bold
-        'arial.ttf',  # Arial
-        'segoeuib.ttf',  # Segoe UI Bold
-        'segoeui.ttf',  # Segoe UI
-        'tahomabd.ttf',  # Tahoma Bold
-        'tahoma.ttf',  # Tahoma
+        # Windows
+        'arialbd.ttf',
+        'arial.ttf',
+        'segoeuib.ttf',
+        'segoeui.ttf',
+        'tahomabd.ttf',
+        'tahoma.ttf',
+        # Linux (абсолютные пути — truetype() не ищет по системным каталогам)
+        '/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf',
+        '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
+        '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+        '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+        '/usr/share/fonts/truetype/freefont/FreeSansBold.ttf',
+        '/usr/share/fonts/truetype/freefont/FreeSans.ttf',
+        '/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf',
+        '/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf',
+        # macOS
+        '/System/Library/Fonts/Helvetica.ttc',
+        '/Library/Fonts/Arial Bold.ttf',
+        '/Library/Fonts/Arial.ttf',
     )
     for name in _system_fonts:
         try:

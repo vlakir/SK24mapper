@@ -21,8 +21,14 @@ from domain.profiles import (
     save_profile,
 )
 from gui.model import MilMapperModel, ModelEvent
-from shared.constants import API_KEY_VISIBLE_PREFIX_LEN, WIN32_FILE_ATTRIBUTE_HIDDEN
-from shared.diagnostics import log_memory_usage, run_deep_verification
+from shared.constants import (
+    API_KEY_VISIBLE_PREFIX_LEN,
+    MAX_OUTPUT_PIXELS,
+    WIN32_FILE_ATTRIBUTE_HIDDEN,
+    MapType,
+)
+from shared.diagnostics import log_memory_usage
+from shared.memory_estimation import choose_safe_zoom, get_available_memory_mb
 from shared.portable import get_app_dir, is_portable_mode
 
 logger = logging.getLogger(__name__)
@@ -377,19 +383,6 @@ class MilMapperController:
             logger.error(error_msg)
             raise RuntimeError(error_msg)
 
-        # Глубокая проверка перед стартом
-        try:
-            asyncio.run(
-                run_deep_verification(
-                    api_key=self._api_key or '',
-                    settings=self._model.settings,
-                )
-            )
-        except Exception as e:
-            error_msg = f'Проверка перед запуском не пройдена: {e}'
-            logger.exception(error_msg)
-            raise RuntimeError(error_msg) from e
-
         self._model.start_download()
         settings = self._model.settings
 
@@ -420,6 +413,34 @@ class MilMapperController:
             logger.debug('Failed to log control point settings at start')
         log_memory_usage('before download start')
 
+        # Pre-flight memory estimate (approximate, using rough latitude)
+        memory_estimate = None
+        try:
+            mt_enum = MapType(settings.map_type)
+            is_dem = mt_enum in (
+                MapType.ELEVATION_COLOR, MapType.ELEVATION_HILLSHADE,
+                MapType.RADIO_HORIZON, MapType.RADAR_COVERAGE,
+                MapType.LINK_PROFILE,
+            )
+            has_contours = mt_enum == MapType.ELEVATION_CONTOURS
+            # Rough latitude from GK northing (approximate)
+            approx_lat = center_y / 111_320.0
+            max_zoom = getattr(settings, 'max_zoom', 18)
+            from geo.topography import effective_scale_for_xyz
+            eff_scale = effective_scale_for_xyz(256, use_retina=False)
+            _, memory_estimate = choose_safe_zoom(
+                center_lat=approx_lat,
+                width_m=width_m,
+                height_m=height_m,
+                desired_zoom=max_zoom,
+                eff_scale=eff_scale,
+                max_pixels=MAX_OUTPUT_PIXELS,
+                is_dem=is_dem,
+                has_contours=has_contours,
+            )
+        except Exception:
+            logger.debug('Memory pre-estimation failed', exc_info=True)
+
         return DownloadParams(
             center_x=center_x,
             center_y=center_y,
@@ -428,6 +449,7 @@ class MilMapperController:
             api_key=self._api_key or '',
             output_path=settings.output_path,
             settings=settings,
+            memory_estimate=memory_estimate,
         )
 
     def complete_download(self, *, success: bool, error_msg: str = '') -> None:
