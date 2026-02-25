@@ -97,19 +97,12 @@ QGroupBox {{
     margin-top: 16px;
     padding: 12px 4px 4px 4px;
     font-weight: bold;
-    color: {p.text_primary};
 }}
 QGroupBox::title {{
     subcontrol-origin: margin;
     subcontrol-position: top left;
     padding: 2px 6px;
     color: {p.text_primary};
-}}
-QGroupBox:disabled {{
-    color: {p.text_disabled};
-}}
-QGroupBox:disabled::title {{
-    color: {p.text_disabled};
 }}
 
 /* ===== Buttons ===== */

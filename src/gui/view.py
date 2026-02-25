@@ -87,6 +87,7 @@ from imaging import (
     draw_label_with_subscript_bg,
     load_grid_font,
 )
+from imaging.text import draw_text_with_outline
 from imaging.transforms import center_crop, rotate_keep_size
 from services.coordinate_transformer import CoordinateTransformer
 from services.map_postprocessing import (
@@ -314,6 +315,252 @@ class CoverageRecomputeWorker(QThread):
             self.error.emit(str(e))
 
 
+class LinkProfileRecomputeWorker(QThread):
+    """Worker для быстрого пересчёта профиля радиолинии при перетаскивании точки."""
+
+    finished = Signal(Image.Image, dict)  # composite_image, new_link_data
+    error = Signal(str)
+
+    def __init__(
+        self,
+        link_cache: dict[str, Any],
+        metadata: Any,
+        dragged_point: str,  # 'A' or 'B'
+        new_lat_wgs: float,
+        new_lng_wgs: float,
+        api_key: str,
+    ) -> None:
+        super().__init__()
+        self._link_cache = link_cache
+        self._metadata = metadata
+        self._dragged_point = dragged_point
+        self._new_lat_wgs = new_lat_wgs
+        self._new_lng_wgs = new_lng_wgs
+        self._api_key = api_key
+
+    def run(self) -> None:
+        """Execute link profile recomputation in background thread."""
+        import asyncio
+
+        try:
+            start = time.monotonic()
+            asyncio.run(self._async_run())
+            logger.info(
+                'LinkProfileRecomputeWorker: done in %.3f sec',
+                time.monotonic() - start,
+            )
+        except Exception as e:
+            logger.exception('LinkProfileRecomputeWorker failed')
+            self.error.emit(str(e))
+
+    async def _async_run(self) -> None:
+        """Async core: download DEM tiles, compute profile, draw overlay."""
+        import asyncio
+
+        from elevation.provider import ElevationTileProvider
+        from geo.topography import meters_per_pixel as geo_mpp
+        from infrastructure.http.client import make_http_session, resolve_cache_dir
+        from services.processors.link_profile import (
+            _extract_profile_from_tiles,
+            _haversine_distance,
+            compute_link_analysis,
+            render_profile_inset,
+        )
+        from shared.constants import (
+            LINK_PROFILE_POINT_A_COLOR,
+            LINK_PROFILE_POINT_B_COLOR,
+            LINK_PROFILE_REFRACTION_K,
+        )
+
+        link_data_old = self._link_cache['link_profile_data']
+        settings = self._link_cache['settings']
+        clean_base = self._link_cache['clean_base']
+        rotation_deg = self._link_cache.get('rotation_deg', 0.0)
+        meta = self._metadata
+
+        # Determine A and B WGS84 coords
+        if self._dragged_point == 'A':
+            lat_a, lng_a = self._new_lat_wgs, self._new_lng_wgs
+            lat_b = link_data_old['point_b_lat_wgs']
+            lng_b = link_data_old['point_b_lng_wgs']
+        else:
+            lat_a = link_data_old['point_a_lat_wgs']
+            lng_a = link_data_old['point_a_lng_wgs']
+            lat_b, lng_b = self._new_lat_wgs, self._new_lng_wgs
+
+        # Build a lightweight ctx-like namespace for _extract_profile_from_tiles
+        cache_dir = resolve_cache_dir()
+        async with make_http_session(cache_dir) as client:
+            sem = asyncio.Semaphore(8)
+            ctx_ns = type('Ctx', (), {
+                'client': client,
+                'api_key': self._api_key,
+                'semaphore': sem,
+                'zoom': meta.zoom,
+                'tiles': [],  # only used for logging
+            })()
+
+            profile = await _extract_profile_from_tiles(
+                ctx_ns, lat_a, lng_a, lat_b, lng_b,
+            )
+
+        # Compute analysis
+        analysis = compute_link_analysis(
+            profile,
+            antenna_a_m=settings.link_antenna_a_m,
+            antenna_b_m=settings.link_antenna_b_m,
+            freq_mhz=settings.link_freq_mhz,
+            k=LINK_PROFILE_REFRACTION_K,
+        )
+
+        # Build new link_data
+        link_data = {**profile, **analysis}
+        link_data['point_a_name'] = settings.link_point_a_name or 'A'
+        link_data['point_b_name'] = settings.link_point_b_name or 'B'
+        link_data['freq_mhz'] = settings.link_freq_mhz
+        link_data['point_a_lat_wgs'] = lat_a
+        link_data['point_a_lng_wgs'] = lng_a
+        link_data['point_b_lat_wgs'] = lat_b
+        link_data['point_b_lng_wgs'] = lng_b
+
+        # Draw overlay on clean base copy
+        composite = self._draw_overlay(
+            clean_base.copy(), link_data, settings, meta, rotation_deg,
+        )
+
+        self.finished.emit(composite, link_data)
+
+    @staticmethod
+    def _draw_overlay(
+        result: Image.Image,
+        link_data: dict,
+        settings: Any,
+        meta: Any,
+        rotation_deg: float,
+    ) -> Image.Image:
+        """Draw markers, yellow line, and inset on the clean base copy."""
+        from services.processors.link_profile import render_profile_inset
+        from shared.constants import (
+            LINK_PROFILE_MAP_TICK_FACTOR,
+            LINK_PROFILE_POINT_A_COLOR,
+            LINK_PROFILE_POINT_B_COLOR,
+        )
+
+        mpp = meta.meters_per_pixel
+        ppm = 1.0 / mpp if mpp > 0 else 0.0
+        font_size_px = max(12, round(settings.grid_font_size_m * ppm))
+        label_font = load_grid_font(font_size_px)
+        bg_padding_px = max(2, round(settings.grid_label_bg_padding_m * ppm))
+        tri_size_px = font_size_px
+        label_gap_px = max(
+            CONTROL_POINT_LABEL_GAP_MIN_PX,
+            round(tri_size_px * CONTROL_POINT_LABEL_GAP_RATIO),
+        )
+
+        def _draw_marker(lat, lng, name, color):
+            px, py = compute_control_point_image_coords(
+                cp_lat_wgs=lat, cp_lng_wgs=lng,
+                center_lat_wgs=meta.center_lat_wgs,
+                center_lng_wgs=meta.center_lng_wgs,
+                zoom=meta.zoom, eff_scale=meta.scale,
+                img_width=result.width, img_height=result.height,
+                rotation_deg=rotation_deg,
+                latlng_to_pixel_xy_func=latlng_to_pixel_xy,
+            )
+            if 0 <= px < result.width and 0 <= py < result.height:
+                draw_control_point_triangle(
+                    result, px, py, mpp, rotation_deg,
+                    size_m=settings.grid_font_size_m, color=color,
+                )
+                label_y = int(py + tri_size_px / 2 + label_gap_px + bg_padding_px)
+                draw_label_with_bg(
+                    ImageDraw.Draw(result),
+                    (int(px), label_y), name,
+                    font=label_font, anchor='mt',
+                    img_size=result.size, padding=bg_padding_px,
+                )
+            return px, py
+
+        ax_img, ay_img = _draw_marker(
+            link_data['point_a_lat_wgs'], link_data['point_a_lng_wgs'],
+            link_data.get('point_a_name', 'A'), LINK_PROFILE_POINT_A_COLOR,
+        )
+        bx_img, by_img = _draw_marker(
+            link_data['point_b_lat_wgs'], link_data['point_b_lng_wgs'],
+            link_data.get('point_b_name', 'B'), LINK_PROFILE_POINT_B_COLOR,
+        )
+
+        # Yellow line A→B
+        line_draw = ImageDraw.Draw(result)
+        line_w = max(2, round(3.0 / mpp)) if mpp > 0 else 2
+        line_draw.line(
+            [(int(ax_img), int(ay_img)), (int(bx_img), int(by_img))],
+            fill=(255, 255, 0, 200), width=line_w,
+        )
+
+        # Distance tick marks + labels on A→B line
+        total_d = link_data['total_distance_m']
+        dist_km = total_d / 1000.0
+        if total_d < 500:
+            tick_step_m = 0  # no ticks
+        elif total_d < 1000:
+            tick_step_m = 500
+        elif dist_km > 1:
+            tick_step_m = max(1, int(dist_km / 6)) * 1000
+        else:
+            tick_step_m = max(100, int(total_d / 5 / 100) * 100)
+
+        if tick_step_m > 0 and total_d > 0 and mpp > 0:
+            dx_line = bx_img - ax_img
+            dy_line = by_img - ay_img
+            line_len = math.sqrt(dx_line ** 2 + dy_line ** 2)
+            if line_len > 0:
+                ux, uy = dx_line / line_len, dy_line / line_len
+                px_perp, py_perp = -uy, ux
+                tick_half = line_w * LINK_PROFILE_MAP_TICK_FACTOR
+                label_offset = tick_half + font_size_px
+
+                d_val = tick_step_m
+                while d_val < total_d:
+                    frac = d_val / total_d
+                    cx = ax_img + dx_line * frac
+                    cy = ay_img + dy_line * frac
+                    line_draw.line(
+                        [
+                            (int(cx - px_perp * tick_half),
+                             int(cy - py_perp * tick_half)),
+                            (int(cx + px_perp * tick_half),
+                             int(cy + py_perp * tick_half)),
+                        ],
+                        fill=(255, 255, 0, 200),
+                        width=line_w,
+                    )
+                    lbl = f'{d_val / 1000:g}'
+                    lx = int(cx + px_perp * label_offset)
+                    ly = int(cy + py_perp * label_offset)
+                    draw_text_with_outline(
+                        line_draw, (lx, ly), lbl,
+                        font=label_font,
+                        fill=(255, 255, 0),
+                        outline=(0, 0, 0),
+                        outline_width=2,
+                        anchor='mm',
+                    )
+                    d_val += tick_step_m
+
+        # Profile inset
+        inset = render_profile_inset(link_data, map_size=(result.width, result.height))
+        combined = Image.new(
+            result.mode,
+            (result.width, result.height + inset.height),
+            (255, 255, 255),
+        )
+        combined.paste(result, (0, 0))
+        combined.paste(inset.convert(result.mode), (0, result.height))
+        del inset
+        return combined
+
+
 class GridSettingsWidget(QWidget):
     """Widget for grid configuration settings."""
 
@@ -520,17 +767,11 @@ class HelmertSettingsWidget(QWidget):
             w.setEnabled(bool(enabled))
 
     def get_values(self) -> dict[str, float | None]:
-        """Return dict of helmert_* values; None if disabled."""
-        if not self.enable_cb.isChecked():
-            return {
-                'helmert_dx': None,
-                'helmert_dy': None,
-                'helmert_dz': None,
-                'helmert_rx_as': None,
-                'helmert_ry_as': None,
-                'helmert_rz_as': None,
-                'helmert_ds_ppm': None,
-            }
+        """Return dict of helmert_* values (always from spinboxes, regardless of checkbox).
+
+        The checkbox controls whether params are *used* at runtime,
+        but values are always persisted so they survive profile save/load.
+        """
         return {
             'helmert_dx': float(self.dx.value()),
             'helmert_dy': float(self.dy.value()),
@@ -541,6 +782,10 @@ class HelmertSettingsWidget(QWidget):
             'helmert_ds_ppm': float(self.ds.value()),
         }
 
+    def is_enabled(self) -> bool:
+        """Return whether Helmert transform is enabled by the user."""
+        return self.enable_cb.isChecked()
+
     def set_values(
         self,
         dx: float | None,
@@ -550,9 +795,13 @@ class HelmertSettingsWidget(QWidget):
         ry_as: float | None,
         rz_as: float | None,
         ds_ppm: float | None,
+        *,
+        enabled: bool | None = None,
     ) -> None:
         values = [dx, dy, dz, rx_as, ry_as, rz_as, ds_ppm]
-        enabled = all(v is not None for v in values)
+        # If enabled not explicitly passed, infer from values (backward compat)
+        if enabled is None:
+            enabled = all(v is not None for v in values)
         # Block signals during programmatic set
         with QSignalBlocker(self.enable_cb):
             self.enable_cb.setChecked(enabled)
@@ -858,6 +1107,7 @@ class MainWindow(QMainWindow):
         self._model = model
         self._controller = controller
         self._download_worker: DownloadWorker | None = None
+        self._controls_pending_fade_in = False
         self._busy_dialog: QProgressDialog | None = None
         self._modal_overlay: ModalOverlay | None = None  # Will be created in _setup_ui
         self._current_image: Any = None  # Store current image for saving
@@ -872,6 +1122,8 @@ class MainWindow(QMainWindow):
         self._base_image: Image.Image | None = None
         # DEM grid for cursor elevation display
         self._dem_grid: Any = None
+        # Cached pyproj transformers for cursor informer (invalidated on new map)
+        self._cursor_tf_cache: dict[str, Any] | None = None
 
         # Radio horizon cache for interactive rebuilding
         self._rh_cache: dict[str, Any] = {}
@@ -883,6 +1135,10 @@ class MainWindow(QMainWindow):
         # store params and trigger recompute when current worker finishes.
         self._pending_recompute_pos: tuple[float, float] | None = None
 
+        # Link profile drag recompute
+        self._link_profile_worker: QThread | None = None
+        self._pending_link_drag: tuple[str, float, float] | None = None
+
         # True when azimuth was changed and recompute hasn't fired yet
         self._azimuth_needs_recompute: bool = False
         # True when parameter was changed interactively and recompute hasn't fired yet
@@ -893,6 +1149,7 @@ class MainWindow(QMainWindow):
         self._elev_needs_recompute: bool = False
         self._flight_height_needs_recompute: bool = False
         self._target_h_needs_recompute: bool = False
+        self._link_params_needs_recompute: bool = False
 
         # Guard flag to prevent model updates while UI is being populated
         # programmatically
@@ -1275,7 +1532,6 @@ class MainWindow(QMainWindow):
         azimuth_col = QVBoxLayout(self._azimuth_widget)
         azimuth_col.setContentsMargins(0, 0, 0, 0)
         azimuth_col.setSpacing(0)
-        azimuth_col.addStretch()
         azimuth_col.addWidget(self._azimuth_top_label)
         azimuth_col.addWidget(self.radar_azimuth_dial, 0, Qt.AlignmentFlag.AlignCenter)
         azimuth_col.addWidget(self.radar_azimuth_label)
@@ -1391,6 +1647,11 @@ class MainWindow(QMainWindow):
         grid.addWidget(self._alpha_label, 6, 0)
         grid.addLayout(alpha_col_row, 6, 1)
 
+        # Prevent grid rows from stretching — labels stay tight to sliders
+        for row in range(7):
+            grid.setRowStretch(row, 0)
+        grid.setRowStretch(7, 1)  # extra stretch row absorbs leftover space
+
         # Виджеты, видимые только в режиме РЛС (строки 0-3 сетки)
         self._radar_only_widgets = [
             self._azimuth_widget,
@@ -1490,32 +1751,52 @@ class MainWindow(QMainWindow):
         link_grid.setVerticalSpacing(2)
         link_grid.setHorizontalSpacing(4)
 
-        # Частота
+        # Частота — value label + slider (vertical layout, like НСУ)
+        freq_col = QVBoxLayout()
+        freq_col.setContentsMargins(0, 0, 0, 0)
+        freq_col.setSpacing(0)
+        self.link_freq_label = QLabel('900')
+        self.link_freq_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.link_freq_slider = QSlider(Qt.Orientation.Horizontal)
+        self.link_freq_slider.setRange(100, 6000)
+        self.link_freq_slider.setSingleStep(100)
+        self.link_freq_slider.setPageStep(100)
+        self.link_freq_slider.setValue(900)
+        self.link_freq_slider.setToolTip('Рабочая частота радиолинии (МГц)')
+        freq_col.addWidget(self.link_freq_label)
+        freq_col.addWidget(self.link_freq_slider)
         link_grid.addWidget(QLabel('Частота (МГц):'), 0, 0)
-        self.link_freq_spin = QDoubleSpinBox()
-        self.link_freq_spin.setRange(1.0, 100000.0)
-        self.link_freq_spin.setDecimals(1)
-        self.link_freq_spin.setValue(900.0)
-        self.link_freq_spin.setToolTip('Рабочая частота радиолинии (МГц)')
-        link_grid.addWidget(self.link_freq_spin, 0, 1)
+        link_grid.addLayout(freq_col, 0, 1)
 
-        # Высота антенны A
+        # Высота антенны A — value label + slider
+        ant_a_col = QVBoxLayout()
+        ant_a_col.setContentsMargins(0, 0, 0, 0)
+        ant_a_col.setSpacing(0)
+        self.link_antenna_a_label = QLabel('10')
+        self.link_antenna_a_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.link_antenna_a_slider = QSlider(Qt.Orientation.Horizontal)
+        self.link_antenna_a_slider.setRange(0, 50)
+        self.link_antenna_a_slider.setValue(10)
+        self.link_antenna_a_slider.setToolTip('Высота антенны в точке A (м)')
+        ant_a_col.addWidget(self.link_antenna_a_label)
+        ant_a_col.addWidget(self.link_antenna_a_slider)
         link_grid.addWidget(QLabel('Высота ант. A (м):'), 1, 0)
-        self.link_antenna_a_spin = QDoubleSpinBox()
-        self.link_antenna_a_spin.setRange(0.0, 200.0)
-        self.link_antenna_a_spin.setDecimals(1)
-        self.link_antenna_a_spin.setValue(10.0)
-        self.link_antenna_a_spin.setToolTip('Высота антенны в точке A (м)')
-        link_grid.addWidget(self.link_antenna_a_spin, 1, 1)
+        link_grid.addLayout(ant_a_col, 1, 1)
 
-        # Высота антенны B
+        # Высота антенны B — value label + slider
+        ant_b_col = QVBoxLayout()
+        ant_b_col.setContentsMargins(0, 0, 0, 0)
+        ant_b_col.setSpacing(0)
+        self.link_antenna_b_label = QLabel('10')
+        self.link_antenna_b_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.link_antenna_b_slider = QSlider(Qt.Orientation.Horizontal)
+        self.link_antenna_b_slider.setRange(0, 50)
+        self.link_antenna_b_slider.setValue(10)
+        self.link_antenna_b_slider.setToolTip('Высота антенны в точке B (м)')
+        ant_b_col.addWidget(self.link_antenna_b_label)
+        ant_b_col.addWidget(self.link_antenna_b_slider)
         link_grid.addWidget(QLabel('Высота ант. B (м):'), 2, 0)
-        self.link_antenna_b_spin = QDoubleSpinBox()
-        self.link_antenna_b_spin.setRange(0.0, 200.0)
-        self.link_antenna_b_spin.setDecimals(1)
-        self.link_antenna_b_spin.setValue(10.0)
-        self.link_antenna_b_spin.setToolTip('Высота антенны в точке B (м)')
-        link_grid.addWidget(self.link_antenna_b_spin, 2, 1)
+        link_grid.addLayout(ant_b_col, 2, 1)
 
         link_layout.addLayout(link_grid)
 
@@ -1678,6 +1959,8 @@ class MainWindow(QMainWindow):
         self._preview_area.map_right_clicked.connect(self._on_map_right_clicked)
         self._preview_area.shift_wheel_rotated.connect(self._rotate_radar_azimuth)
         self._preview_area.shift_key_released.connect(self._on_shift_released_recompute)
+        self._preview_area.point_drag_finished.connect(self._on_link_point_dragged)
+        self._preview_area.fade_in_finished.connect(self._on_fade_in_finished)
 
         # Profile management
         # Подключение сигнала выбора профиля произойдет после первичной инициализации
@@ -1794,9 +2077,23 @@ class MainWindow(QMainWindow):
             self._on_settings_changed
         )
         self.link_b_name_edit.editingFinished.connect(self._on_settings_changed)
-        self.link_freq_spin.valueChanged.connect(self._on_settings_changed)
-        self.link_antenna_a_spin.valueChanged.connect(self._on_settings_changed)
-        self.link_antenna_b_spin.valueChanged.connect(self._on_settings_changed)
+        # Link profile sliders (interactive recompute on release)
+        self.link_freq_slider.valueChanged.connect(self._on_link_freq_slider_changed)
+        self.link_freq_slider.sliderReleased.connect(
+            self._on_link_param_slider_released
+        )
+        self.link_antenna_a_slider.valueChanged.connect(
+            self._on_link_antenna_a_slider_changed
+        )
+        self.link_antenna_a_slider.sliderReleased.connect(
+            self._on_link_param_slider_released
+        )
+        self.link_antenna_b_slider.valueChanged.connect(
+            self._on_link_antenna_b_slider_changed
+        )
+        self.link_antenna_b_slider.sliderReleased.connect(
+            self._on_link_param_slider_released
+        )
 
         # Helmert settings — changed only via AdvancedSettingsDialog
 
@@ -1974,6 +2271,7 @@ class MainWindow(QMainWindow):
         grid_settings = self.grid_widget.get_settings()
         grid_settings['display_grid'] = self.display_grid_cb.isChecked()
         helmert_settings = self.helmert_widget.get_values()
+        helmert_settings['helmert_enabled'] = self.helmert_widget.is_enabled()
 
         # Map type from combo (stored as enum value string)
         try:
@@ -2016,9 +2314,9 @@ class MainWindow(QMainWindow):
         payload['link_point_b_x'] = self.link_b_x_widget.get_coordinate()
         payload['link_point_b_y'] = self.link_b_y_widget.get_coordinate()
         payload['link_point_b_name'] = self.link_b_name_edit.text() or 'B'
-        payload['link_freq_mhz'] = self.link_freq_spin.value()
-        payload['link_antenna_a_m'] = self.link_antenna_a_spin.value()
-        payload['link_antenna_b_m'] = self.link_antenna_b_spin.value()
+        payload['link_freq_mhz'] = float(self.link_freq_slider.value())
+        payload['link_antenna_a_m'] = float(self.link_antenna_a_slider.value())
+        payload['link_antenna_b_m'] = float(self.link_antenna_b_slider.value())
         self._controller.update_settings_bulk(**payload)
 
     def _get_current_coordinates(self) -> dict[str, int | bool | float | str]:
@@ -2191,8 +2489,8 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, 'Ошибка', str(e))
             return
 
-        # Clear previous preview and pixmap cache between runs
-        self._clear_preview_ui()
+        # Grey out stale profile inset for LINK_PROFILE, else clear preview
+        self._dim_stale_preview()
         self._preview_area.start_loading()
 
         # Cleanup any stale worker from previous run
@@ -2246,6 +2544,17 @@ class MainWindow(QMainWindow):
     @Slot(object, object)
     def _on_mouse_moved_on_map(self, px: float | None, py: float | None) -> None:
         """Handle mouse movement over preview to show SK-42 coords and elevation."""
+        # Hide informer when cursor is over the profile inset area
+        metadata = self._model.state.last_map_metadata
+        if (
+            metadata
+            and metadata.map_type == MapType.LINK_PROFILE
+            and py is not None
+            and py >= metadata.height_px
+        ):
+            self._coords_label.setText('')
+            return
+
         coords = self._calculate_sk42_from_scene_pos(px, py)
         if coords is None:
             self._coords_label.setText('')
@@ -2279,6 +2588,47 @@ class MainWindow(QMainWindow):
             f'X: {format_coord(x_val)}  Y: {format_coord(y_val)}{elevation_str}'
         )
 
+    def _ensure_cursor_tf_cache(self) -> dict[str, Any] | None:
+        """Lazily build and cache pyproj transformers + map constants for cursor."""
+        if self._cursor_tf_cache is not None:
+            return self._cursor_tf_cache
+
+        metadata = self._model.state.last_map_metadata
+        if not metadata:
+            return None
+
+        try:
+            _, t_wgs_to_sk42 = build_transformers_sk42(
+                custom_helmert=metadata.helmert_params
+            )
+            zone = determine_zone(metadata.center_x_gk)
+            crs_sk42_gk = build_sk42_gk_crs(zone)
+            t_sk42gk = Transformer.from_crs(
+                crs_sk42_geog, crs_sk42_gk, always_xy=True
+            )
+
+            rotation_rad = math.radians(-metadata.rotation_deg)
+            cx_world, cy_world = latlng_to_pixel_xy(
+                metadata.center_lat_wgs, metadata.center_lng_wgs, metadata.zoom
+            )
+
+            self._cursor_tf_cache = {
+                't_wgs_to_sk42': t_wgs_to_sk42,
+                't_sk42gk': t_sk42gk,
+                'cx_px': metadata.width_px / 2.0,
+                'cy_px': metadata.height_px / 2.0,
+                'cos_rot': math.cos(rotation_rad),
+                'sin_rot': math.sin(rotation_rad),
+                'inv_scale': 1.0 / metadata.scale if metadata.scale else 1.0,
+                'cx_world': cx_world,
+                'cy_world': cy_world,
+                'zoom': metadata.zoom,
+            }
+            return self._cursor_tf_cache
+        except Exception:
+            logger.exception('Failed to build cursor transformer cache')
+            return None
+
     def _calculate_sk42_from_scene_pos(
         self, px: float | None, py: float | None
     ) -> tuple[int, int] | None:
@@ -2286,51 +2636,25 @@ class MainWindow(QMainWindow):
         if px is None or py is None:
             return None
 
-        metadata = self._model.state.last_map_metadata
-        if not metadata:
+        c = self._ensure_cursor_tf_cache()
+        if c is None:
             return None
 
         try:
-            # 1. Смещение от центра изображения в пикселях
-            cx_px = metadata.width_px / 2.0
-            cy_px = metadata.height_px / 2.0
+            dx_px = px - c['cx_px']
+            dy_px = py - c['cy_px']
 
-            dx_px = px - cx_px
-            dy_px = py - cy_px
+            dx = dx_px * c['cos_rot'] + dy_px * c['sin_rot']
+            dy = -dx_px * c['sin_rot'] + dy_px * c['cos_rot']
 
-            # 2. Учет поворота (обратное преобразование)
-            rotation_rad = math.radians(-metadata.rotation_deg)
-            cos_rot = math.cos(rotation_rad)
-            sin_rot = math.sin(rotation_rad)
+            x_world = dx * c['inv_scale'] + c['cx_world']
+            y_world = dy * c['inv_scale'] + c['cy_world']
 
-            dx = dx_px * cos_rot + dy_px * sin_rot
-            dy = -dx_px * sin_rot + dy_px * cos_rot
+            lat_wgs, lng_wgs = pixel_xy_to_latlng(x_world, y_world, c['zoom'])
 
-            # 3. Переход к "мировым" пикселям Web Mercator
-            cx_world, cy_world = latlng_to_pixel_xy(
-                metadata.center_lat_wgs, metadata.center_lng_wgs, metadata.zoom
-            )
-
-            x_world = dx / metadata.scale + cx_world
-            y_world = dy / metadata.scale + cy_world
-
-            # 4. Обратная проекция: Мировые пиксели -> WGS-84 -> SK-42 Geog -> SK-42 GK
-            lat_wgs, lng_wgs = pixel_xy_to_latlng(x_world, y_world, metadata.zoom)
-
-            t_sk42_to_wgs, t_wgs_to_sk42 = build_transformers_sk42(
-                custom_helmert=metadata.helmert_params
-            )
-            lng_sk42, lat_sk42 = t_wgs_to_sk42.transform(lng_wgs, lat_wgs)
-
-            zone = determine_zone(metadata.center_x_gk)
-            crs_sk42_gk = build_sk42_gk_crs(zone)
-
-            t_sk42gk_from_sk42 = Transformer.from_crs(
-                crs_sk42_geog, crs_sk42_gk, always_xy=True
-            )
-
+            lng_sk42, lat_sk42 = c['t_wgs_to_sk42'].transform(lng_wgs, lat_wgs)
             # Получаем (easting, northing) для GK
-            y_val_m, x_val_m = t_sk42gk_from_sk42.transform(lng_sk42, lat_sk42)
+            y_val_m, x_val_m = c['t_sk42gk'].transform(lng_sk42, lat_sk42)
 
             return round(x_val_m), round(y_val_m)
 
@@ -3252,6 +3576,117 @@ class MainWindow(QMainWindow):
                     self._set_controls_enabled(enabled=True)
         self._sync_ui_to_model_now()
 
+    # ── Link profile param sliders (freq, antenna heights) ────
+
+    @Slot(int)
+    def _on_link_freq_slider_changed(self, value: int) -> None:
+        self.link_freq_label.setText(str(value))
+        self._link_params_needs_recompute = True
+
+    @Slot(int)
+    def _on_link_antenna_a_slider_changed(self, value: int) -> None:
+        self.link_antenna_a_label.setText(str(value))
+        self._link_params_needs_recompute = True
+
+    @Slot(int)
+    def _on_link_antenna_b_slider_changed(self, value: int) -> None:
+        self.link_antenna_b_label.setText(str(value))
+        self._link_params_needs_recompute = True
+
+    @Slot()
+    def _on_link_param_slider_released(self) -> None:
+        """Freq/antenna slider released — recompute analysis + redraw overlay."""
+        if not self._link_params_needs_recompute:
+            return
+        self._link_params_needs_recompute = False
+
+        if not self._rh_cache.get('is_link_profile'):
+            self._sync_ui_to_model_now()
+            return
+
+        try:
+            from services.processors.link_profile import compute_link_analysis
+            from shared.constants import LINK_PROFILE_REFRACTION_K
+
+            old_data = self._rh_cache['link_profile_data']
+            settings = self._rh_cache['settings']
+            clean_base = self._rh_cache['clean_base']
+            rotation_deg = self._rh_cache.get('rotation_deg', 0.0)
+            metadata = self._model.state.last_map_metadata
+
+            # Read current values from sliders
+            freq_mhz = float(self.link_freq_slider.value())
+            antenna_a_m = float(self.link_antenna_a_slider.value())
+            antenna_b_m = float(self.link_antenna_b_slider.value())
+
+            # Build profile dict (terrain data unchanged)
+            profile = {
+                'distances_m': old_data['distances_m'],
+                'elevations_m': old_data['elevations_m'],
+                'total_distance_m': old_data['total_distance_m'],
+            }
+
+            analysis = compute_link_analysis(
+                profile,
+                antenna_a_m=antenna_a_m,
+                antenna_b_m=antenna_b_m,
+                freq_mhz=freq_mhz,
+                k=LINK_PROFILE_REFRACTION_K,
+            )
+
+            link_data = {**profile, **analysis}
+            link_data['point_a_name'] = old_data.get('point_a_name', 'A')
+            link_data['point_b_name'] = old_data.get('point_b_name', 'B')
+            link_data['freq_mhz'] = freq_mhz
+            link_data['antenna_a_m'] = antenna_a_m
+            link_data['antenna_b_m'] = antenna_b_m
+            link_data['point_a_lat_wgs'] = old_data['point_a_lat_wgs']
+            link_data['point_a_lng_wgs'] = old_data['point_a_lng_wgs']
+            link_data['point_b_lat_wgs'] = old_data['point_b_lat_wgs']
+            link_data['point_b_lng_wgs'] = old_data['point_b_lng_wgs']
+
+            # Sync settings object for _draw_overlay
+            settings.link_freq_mhz = freq_mhz
+            settings.link_antenna_a_m = antenna_a_m
+            settings.link_antenna_b_m = antenna_b_m
+
+            composite = LinkProfileRecomputeWorker._draw_overlay(
+                clean_base.copy(), link_data, settings, metadata, rotation_deg,
+            )
+
+            # Update cache and display
+            self._rh_cache['link_profile_data'] = link_data
+            self._base_image = (
+                composite.convert('RGB') if composite.mode != 'RGB' else composite
+            )
+            self._current_image = self._base_image
+            mpp = metadata.meters_per_pixel if metadata else 0.0
+            self._preview_area.set_image(self._current_image, meters_per_px=mpp)
+
+            # Update clean base pixmap cache for next drag
+            self._preview_area.set_clean_base_pixmap(
+                clean_base, full_image=self._current_image,
+            )
+
+            # Recalculate draggable points
+            if metadata:
+                points: dict[str, tuple[float, float]] = {}
+                pos_a = self._compute_link_point_pos('A', metadata)
+                if pos_a:
+                    points['A'] = pos_a
+                pos_b = self._compute_link_point_pos('B', metadata)
+                if pos_b:
+                    points['B'] = pos_b
+                self._preview_area.set_draggable_points(points)
+
+            self._status_proxy.show_message('Параметры радиолинии обновлены', 2000)
+
+        except Exception as e:
+            logger.exception('Failed to recompute link profile params')
+            self._status_proxy.show_message(f'Ошибка пересчёта: {e}', 5000)
+
+        self._sync_ui_to_model_now()
+
     # ── Sector slider interactive slots ────────────────────────
 
     def _apply_interactive_sector(self, sector_deg: float) -> None:
@@ -3460,6 +3895,192 @@ class MainWindow(QMainWindow):
             return self._dem_to_final_coords(ant_row, ant_col)
         return None
 
+    def _compute_link_point_pos(
+        self,
+        point_id: str,
+        metadata: MapMetadata | None = None,
+    ) -> tuple[float, float] | None:
+        """Compute link profile point A or B position on the final image."""
+        if metadata is None:
+            metadata = self._model.state.last_map_metadata
+        settings = self._model.settings
+        if not metadata or not settings:
+            return None
+
+        try:
+            if point_id == 'A':
+                x_gk = settings.link_point_a_x_sk42_gk
+                y_gk = settings.link_point_a_y_sk42_gk
+            else:
+                x_gk = settings.link_point_b_x_sk42_gk
+                y_gk = settings.link_point_b_y_sk42_gk
+
+            transformer = CoordinateTransformer(
+                x_gk, y_gk, helmert_params=metadata.helmert_params,
+            )
+            lat_wgs, lng_wgs = transformer.get_wgs84_center()
+            px, py = compute_control_point_image_coords(
+                lat_wgs, lng_wgs,
+                metadata.center_lat_wgs, metadata.center_lng_wgs,
+                metadata.zoom, metadata.scale,
+                metadata.width_px, metadata.height_px,
+                metadata.rotation_deg, latlng_to_pixel_xy,
+            )
+            return (px, py)
+        except Exception:
+            logger.debug('Failed to compute link point %s image pos', point_id)
+            return None
+
+    @Slot(str, float, float)
+    def _on_link_point_dragged(
+        self, point_id: str, px: float, py: float
+    ) -> None:
+        """Handle drag-and-drop of a link profile point marker."""
+        coords = self._calculate_sk42_from_scene_pos(px, py)
+        if coords is None:
+            return
+
+        x_val, y_val = coords
+
+        if point_id == 'A':
+            self.link_a_x_widget.set_coordinate(x_val)
+            self.link_a_y_widget.set_coordinate(y_val)
+        else:
+            self.link_b_x_widget.set_coordinate(x_val)
+            self.link_b_y_widget.set_coordinate(y_val)
+
+        self._sync_ui_to_model_now()
+
+        # Check if we have link profile cache for lightweight recompute
+        if not self._rh_cache.get('is_link_profile'):
+            self._start_download()
+            return
+
+        # Worker busy? → store pending drag, return
+        if self._link_profile_worker is not None:
+            self._pending_link_drag = (point_id, px, py)
+            return
+
+        # Convert to WGS84
+        # x_val = northing (X-север), y_val = easting (Y-восток)
+        # CoordinateTransformer expects (easting, northing)
+        metadata = self._model.state.last_map_metadata
+        if metadata is None:
+            self._start_download()
+            return
+
+        try:
+            transformer = CoordinateTransformer(
+                y_val, x_val, helmert_params=metadata.helmert_params,
+            )
+            lat_wgs, lng_wgs = transformer.get_wgs84_center()
+        except Exception:
+            logger.exception('Failed to convert dragged point to WGS84')
+            self._start_download()
+            return
+
+        # UI feedback: cursor + progress label (inset already dimmed above)
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        self._set_controls_enabled(enabled=False)
+        self._progress_label.setText('Пересчет профиля радиолинии…')
+        self._progress_label.setVisible(True)
+        self._progress_bar.setRange(0, 0)  # indeterminate
+        self._progress_bar.setVisible(True)
+
+        api_key = self._controller.get_api_key()
+        worker = LinkProfileRecomputeWorker(
+            link_cache=self._rh_cache,
+            metadata=metadata,
+            dragged_point=point_id,
+            new_lat_wgs=lat_wgs,
+            new_lng_wgs=lng_wgs,
+            api_key=api_key,
+        )
+        worker.finished.connect(self._on_link_profile_recompute_finished)
+        worker.error.connect(self._on_link_profile_recompute_error)
+        self._link_profile_worker = worker
+        worker.start()
+
+    @Slot(Image.Image, dict)
+    def _on_link_profile_recompute_finished(
+        self, composite: Image.Image, link_data: dict,
+    ) -> None:
+        """Handle link profile recompute completion."""
+        try:
+            # Update link_data in cache
+            self._rh_cache['link_profile_data'] = link_data
+
+            # Display
+            self._base_image = (
+                composite.convert('RGB') if composite.mode != 'RGB' else composite
+            )
+            self._current_image = self._base_image
+            metadata = self._model.state.last_map_metadata
+            mpp = metadata.meters_per_pixel if metadata else 0.0
+            self._preview_area.set_image(self._current_image, meters_per_px=mpp)
+
+            # Update clean base pixmap cache for next drag
+            clean_base = self._rh_cache.get('clean_base')
+            if clean_base is not None:
+                self._preview_area.set_clean_base_pixmap(
+                    clean_base, full_image=self._current_image,
+                )
+
+            # Recalculate draggable points
+            if metadata:
+                points: dict[str, tuple[float, float]] = {}
+                pos_a = self._compute_link_point_pos('A', metadata)
+                if pos_a:
+                    points['A'] = pos_a
+                pos_b = self._compute_link_point_pos('B', metadata)
+                if pos_b:
+                    points['B'] = pos_b
+                self._preview_area.set_draggable_points(points)
+
+            QApplication.restoreOverrideCursor()
+            self._status_proxy.show_message('Профиль радиолинии пересчитан', 2000)
+
+        except Exception as e:
+            logger.exception('Failed to display recomputed link profile')
+            QApplication.restoreOverrideCursor()
+            self._status_proxy.show_message(f'Ошибка отображения: {e}', 5000)
+        finally:
+            self._progress_bar.setVisible(False)
+            self._progress_label.setVisible(False)
+            self._cancel_btn.setVisible(False)
+            self._set_controls_enabled(enabled=True)
+
+            if self._link_profile_worker is not None:
+                self._link_profile_worker.deleteLater()
+                self._link_profile_worker = None
+
+            self._flush_pending_link_drag()
+
+    @Slot(str)
+    def _on_link_profile_recompute_error(self, error_msg: str) -> None:
+        """Handle link profile recompute error."""
+        logger.error('Link profile recompute failed: %s', error_msg)
+        QApplication.restoreOverrideCursor()
+        self._progress_bar.setVisible(False)
+        self._progress_label.setVisible(False)
+        self._cancel_btn.setVisible(False)
+        self._set_controls_enabled(enabled=True)
+        self._status_proxy.show_message(f'Ошибка пересчета профиля: {error_msg}', 5000)
+
+        if self._link_profile_worker is not None:
+            self._link_profile_worker.deleteLater()
+            self._link_profile_worker = None
+
+        self._flush_pending_link_drag()
+
+    def _flush_pending_link_drag(self) -> None:
+        """If a link drag was deferred while worker was busy, start it now."""
+        if self._pending_link_drag is not None:
+            point_id, px, py = self._pending_link_drag
+            self._pending_link_drag = None
+            logger.info('Flushing pending link drag: %s at (%.1f, %.1f)', point_id, px, py)
+            self._on_link_point_dragged(point_id, px, py)
+
     def _get_final_pixel_size_m(self) -> float:
         """
         Get effective pixel size for the final (displayed) image.
@@ -3522,15 +4143,19 @@ class MainWindow(QMainWindow):
         if not success:
             self._coords_label.setText('')
 
-        # Hide progress widgets and re-enable controls
+        # Hide progress widgets
         try:
             self._progress_bar.setVisible(False)
             self._progress_label.setVisible(False)
             self._cancel_btn.setVisible(False)
-            # Re-enable all UI controls when download is finished
-            self._set_controls_enabled(enabled=True)
         except Exception as e:
             logger.debug(f'Failed to hide progress widgets: {e}')
+
+        # Re-enable controls after fade-in completes (or immediately on error)
+        if success and self._preview_area.is_fading_in():
+            self._controls_pending_fade_in = True
+        else:
+            self._set_controls_enabled(enabled=True)
 
         cancelled = error_msg == 'Операция отменена пользователем'
 
@@ -3558,6 +4183,14 @@ class MainWindow(QMainWindow):
             self._cleanup_download_worker()
         except Exception as e:
             logger.debug(f'Failed to cleanup download worker: {e}')
+
+    @Slot()
+    def _on_fade_in_finished(self) -> None:
+        """Re-enable controls after the map has fully appeared from darkness."""
+        if self._controls_pending_fade_in:
+            self._controls_pending_fade_in = False
+            self._set_controls_enabled(enabled=True)
+            self._set_sliders_enabled(enabled=True)
 
     def _handle_model_event(self, event_data: EventData) -> None:
         """Handle model events (Observer pattern)."""
@@ -3590,9 +4223,9 @@ class MainWindow(QMainWindow):
                 data.get('label', ''),
             )
         elif event == ModelEvent.PREVIEW_UPDATED:
-            self._show_preview_in_main_window(data.get('image'))
-            # Также обновляем метаданные в модели, но MainWindow просто реагирует
-            # на движение мыши, используя актуальные метаданные из состояния модели.
+            # Model event carries metadata only (no PIL image);
+            # actual preview is delivered via preview_ready signal.
+            pass
         elif event == ModelEvent.ERROR_OCCURRED:
             error_msg = data.get('error', 'Неизвестная ошибка')
             # Только статус-бар; модальные диалоги показываются централизованно
@@ -3808,6 +4441,7 @@ class MainWindow(QMainWindow):
             getattr(settings, 'helmert_ry_as', None),
             getattr(settings, 'helmert_rz_as', None),
             getattr(settings, 'helmert_ds_ppm', None),
+            enabled=getattr(settings, 'helmert_enabled', None),
         )
 
         # Update radio horizon overlay alpha
@@ -3913,18 +4547,23 @@ class MainWindow(QMainWindow):
             self.link_b_name_edit.setText(
                 str(getattr(settings, 'link_point_b_name', 'B'))
             )
-        with QSignalBlocker(self.link_freq_spin):
-            self.link_freq_spin.setValue(
-                float(getattr(settings, 'link_freq_mhz', 900.0))
-            )
-        with QSignalBlocker(self.link_antenna_a_spin):
-            self.link_antenna_a_spin.setValue(
-                float(getattr(settings, 'link_antenna_a_m', 10.0))
-            )
-        with QSignalBlocker(self.link_antenna_b_spin):
-            self.link_antenna_b_spin.setValue(
-                float(getattr(settings, 'link_antenna_b_m', 10.0))
-            )
+        freq_val = float(getattr(settings, 'link_freq_mhz', 900.0))
+        freq_int = max(100, min(6000, round(int(freq_val) / 100) * 100))
+        with QSignalBlocker(self.link_freq_slider):
+            self.link_freq_slider.setValue(freq_int)
+        self.link_freq_label.setText(str(freq_int))
+
+        ant_a_val = float(getattr(settings, 'link_antenna_a_m', 10.0))
+        ant_a_int = max(0, min(50, int(ant_a_val)))
+        with QSignalBlocker(self.link_antenna_a_slider):
+            self.link_antenna_a_slider.setValue(ant_a_int)
+        self.link_antenna_a_label.setText(str(ant_a_int))
+
+        ant_b_val = float(getattr(settings, 'link_antenna_b_m', 10.0))
+        ant_b_int = max(0, min(50, int(ant_b_val)))
+        with QSignalBlocker(self.link_antenna_b_slider):
+            self.link_antenna_b_slider.setValue(ant_b_int)
+        self.link_antenna_b_label.setText(str(ant_b_int))
 
         # Панель видна для НСУ/РЛС/Карта высот
         self._radio_horizon_group.setVisible(
@@ -4043,30 +4682,47 @@ class MainWindow(QMainWindow):
     ) -> None:
         """Show preview image in the main window's integrated preview area."""
         try:
-            if not isinstance(image, Image.Image):
-                logger.warning('Invalid image object for preview')
+            t_start = time.monotonic()
+            if not hasattr(image, 'mode') or not hasattr(image, 'size'):
+                logger.warning('Invalid image object for preview: %s', type(image))
                 return
 
             # Save DEM grid for cursor elevation display
             self._dem_grid = dem_grid
+            # Invalidate cursor transformer cache (new map = new params)
+            self._cursor_tf_cache = None
 
             # Save radio horizon cache for interactive rebuilding
             if rh_cache is not None:
                 self._rh_cache = rh_cache
-                logger.info('Radio horizon cache saved for interactive rebuilding')
-                # Prepare display-sized layers for interactive alpha blending
-                self._prepare_rh_display_cache()
-                # Compute initial click position using precise coordinate transform
-                # (same as _update_cp_marker / _draw_radar_sector)
-                self._rh_click_pos = self._compute_cp_image_pos(metadata)
+                if rh_cache.get('is_link_profile'):
+                    logger.info('Link profile cache saved for interactive drag')
+                    # Pre-render clean base QPixmap for instant swap on drag start
+                    clean_base = rh_cache.get('clean_base')
+                    if clean_base is not None:
+                        t_cb = time.monotonic()
+                        self._preview_area.set_clean_base_pixmap(
+                            clean_base, full_image=image,
+                        )
+                        logger.info('  set_clean_base_pixmap: %.3f sec', time.monotonic() - t_cb)
+                else:
+                    logger.info('Radio horizon cache saved for interactive rebuilding')
+                    self._prepare_rh_display_cache()
+                    self._rh_click_pos = self._compute_cp_image_pos(metadata)
             else:
                 self._rh_cache = {}  # Clear cache for non-RH maps
 
             # Update model with metadata for informer
             self._model.update_preview(None, metadata)
+            t_pre = time.monotonic()
+            logger.info('  _show_preview pre-processing: %.3f sec (mode=%s %dx%d)',
+                        t_pre - t_start, image.mode, *image.size)
 
-            # Set base image (full size)
+            # Set base image (full size, ensure RGB for blending paths)
             self._base_image = image.convert('RGB') if image.mode != 'RGB' else image
+            t_conv = time.monotonic()
+            if t_conv - t_pre > 0.01:
+                logger.info('  convert RGB: %.3f sec', t_conv - t_pre)
 
             # Display image
             self._current_image = self._base_image
@@ -4081,8 +4737,25 @@ class MainWindow(QMainWindow):
             # Update control point markers from settings (e.g. if loaded from profile)
             self._update_cp_marker_from_settings(self._model.settings)
 
+            # Set draggable points for link profile A/B markers
+            if metadata and metadata.map_type == MapType.LINK_PROFILE:
+                points: dict[str, tuple[float, float]] = {}
+                pos_a = self._compute_link_point_pos('A', metadata)
+                if pos_a:
+                    points['A'] = pos_a
+                pos_b = self._compute_link_point_pos('B', metadata)
+                if pos_b:
+                    points['B'] = pos_b
+                self._preview_area.set_draggable_points(points)
+            else:
+                self._preview_area.set_draggable_points({})
+
             # Set tooltip for coordinate informer and preview area
-            if metadata and metadata.map_type == MapType.RADIO_HORIZON and rh_cache:
+            if metadata and metadata.map_type == MapType.LINK_PROFILE:
+                tooltip = 'Перетащите маркер A или B для перемещения точки'
+                self._coords_label.setToolTip(tooltip)
+                self._preview_area.setToolTip(tooltip)
+            elif metadata and metadata.map_type == MapType.RADIO_HORIZON and rh_cache:
                 tooltip = 'ПКМ - перестроение радиогоризонта с новой контрольной точкой'
                 self._coords_label.setToolTip(tooltip)
                 self._preview_area.setToolTip(tooltip)
@@ -4104,10 +4777,12 @@ class MainWindow(QMainWindow):
                     self._progress_bar.setVisible(False)
                     self._progress_label.setVisible(False)
                     self._cancel_btn.setVisible(False)
-                    # Re-enable all UI controls when hiding progress
-                    self._set_controls_enabled(enabled=True)
-                    # Explicitly enable quality slider
-                    self._set_sliders_enabled(enabled=True)
+                    # Defer re-enable until fade-in finishes
+                    if self._preview_area.is_fading_in():
+                        self._controls_pending_fade_in = True
+                    else:
+                        self._set_controls_enabled(enabled=True)
+                        self._set_sliders_enabled(enabled=True)
             except Exception as _e:
                 logger.debug(f'Failed to hide progress widgets on preview: {_e}')
 
@@ -4117,6 +4792,18 @@ class MainWindow(QMainWindow):
             error_msg = f'Ошибка при отображении предпросмотра: {e}'
             logger.exception(error_msg)
             QMessageBox.warning(self, 'Ошибка предпросмотра', error_msg)
+
+    def _dim_stale_preview(self) -> None:
+        """Show a lightweight Qt overlay on the old profile inset to mark it stale."""
+        metadata = self._model.state.last_map_metadata
+        if (
+            self._current_image is not None
+            and metadata is not None
+            and metadata.map_type == MapType.LINK_PROFILE
+        ):
+            self._preview_area.show_inset_mask(metadata.height_px)
+        else:
+            self._clear_preview_ui()
 
     def _clear_preview_ui(self) -> None:
         """Clear preview image, drop pixmap cache, and disable related controls."""
@@ -4303,8 +4990,19 @@ class MainWindow(QMainWindow):
 
     def _set_controls_enabled(self, *, enabled: bool) -> None:
         """Enable/disable all UI controls and menu when progress bar is shown/hidden."""
-        # Вся левая панель (включая все QLabel) — одним вызовом
+        # Вся левая панель — и контент внутри scroll area (QScrollArea
+        # не пробрасывает setEnabled к виджету, заданному через setWidget)
         self._left_panel.setEnabled(enabled)
+        self._left_content_widget.setEnabled(enabled)
+        # Явно для QGroupBox — гарантируем затенение title
+        self._link_profile_group.setEnabled(enabled)
+        self._radio_horizon_group.setEnabled(enabled)
+        # Программная смена цвета заголовка (QSS :disabled ненадёжен для ::title)
+        from gui.theme import PALETTE as _pal
+        _title_color = _pal.text_primary if enabled else _pal.text_disabled
+        _title_ss = f'QGroupBox::title {{ color: {_title_color}; }}'
+        for _gb in self._left_content_widget.findChildren(QGroupBox):
+            _gb.setStyleSheet(_title_ss)
         # Правая панель (надпись «Предпросмотр карты» и кнопка сохранения)
         self._preview_frame.setEnabled(enabled)
         # Меню

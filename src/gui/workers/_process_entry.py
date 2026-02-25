@@ -13,6 +13,7 @@ import io
 import logging
 import os
 import sys
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -41,27 +42,44 @@ _PIL_SENTINEL_LEN = 4
 
 def _serialize_pil(img: Image.Image) -> tuple[bytes, str, tuple[int, int]]:
     """Сжать PIL Image для передачи через mp.Queue."""
+    t0 = time.monotonic()
     buf = io.BytesIO()
     original_mode = img.mode
     if img.mode in ('RGBA', 'LA', 'PA'):
-        # PNG для изображений с альфа-каналом (lossless, быстрое сжатие)
         img.save(buf, format='PNG', compress_level=1)
+        fmt = 'PNG'
     else:
-        # JPEG для RGB/L — отличное сжатие, минимальные потери
         save_img = img.convert('RGB') if img.mode not in ('RGB', 'L') else img
         save_img.save(buf, format='JPEG', quality=95)
-    return (buf.getvalue(), original_mode, img.size)
+        fmt = 'JPEG'
+    data = buf.getvalue()
+    logger.info(
+        'serialize_pil: %s %dx%d → %s %.1f MB in %.3f sec',
+        original_mode, *img.size, fmt, len(data) / 1e6, time.monotonic() - t0,
+    )
+    return (data, original_mode, img.size)
 
 
 def deserialize_pil(data: bytes, mode: str, _size: tuple[int, int]) -> Image.Image:
     """Восстановить PIL Image из сжатых данных IPC."""
+    t0 = time.monotonic()
     # Снимаем лимит: данные сгенерированы нашим же кодом, не из внешних источников
     Image.MAX_IMAGE_PIXELS = None
     raw = Image.open(io.BytesIO(data))
     raw.load()  # принудительно читаем пиксели, пока BytesIO жив
+    t1 = time.monotonic()
     # Восстановить исходный mode (JPEG всегда загружается как RGB)
     if raw.mode != mode:
-        return raw.convert(mode)
+        result = raw.convert(mode)
+        logger.info(
+            'deserialize_pil: %.1f MB → %dx%d, decode=%.3fs, convert %s→%s=%.3fs',
+            len(data) / 1e6, *_size, t1 - t0, raw.mode, mode, time.monotonic() - t1,
+        )
+        return result
+    logger.info(
+        'deserialize_pil: %.1f MB → %s %dx%d in %.3f sec',
+        len(data) / 1e6, mode, *_size, t1 - t0,
+    )
     return raw
 
 

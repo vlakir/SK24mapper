@@ -58,8 +58,8 @@ class MapSettings(BaseModel):
     to_x_low: int
     to_y_low: int
 
-    # Путь к итоговому файлу
-    output_path: str
+    # Путь к итоговому файлу (fallback — используется только вне GUI)
+    output_path: str = 'map.jpg'
 
     # Тип карты (этап 1 — стилевые карты Mapbox)
     map_type: MapType = default_map_type()
@@ -85,14 +85,15 @@ class MapSettings(BaseModel):
     contrast: float = 1.0
     saturation: float = 1.0
 
-    # Опциональные 7 параметров Хельмерта (единицы: м, угловые секунды, ppm)
-    helmert_dx: float | None = None
-    helmert_dy: float | None = None
-    helmert_dz: float | None = None
-    helmert_rx_as: float | None = None
-    helmert_ry_as: float | None = None
-    helmert_rz_as: float | None = None
-    helmert_ds_ppm: float | None = None
+    # Параметры Хельмерта (единицы: м, угловые секунды, ppm)
+    helmert_enabled: bool = True
+    helmert_dx: float = -50.957
+    helmert_dy: float = -39.724
+    helmert_dz: float = -76.877
+    helmert_rx_as: float = 2.33295
+    helmert_ry_as: float = 2.13987
+    helmert_rz_as: float = -2.03005
+    helmert_ds_ppm: float = -1.43065
 
     # Контрольная точка
     control_point_enabled: bool = False
@@ -226,7 +227,9 @@ class MapSettings(BaseModel):
     def custom_helmert(
         self,
     ) -> tuple[float, float, float, float, float, float, float] | None:
-        vals = (
+        if not self.helmert_enabled:
+            return None
+        return (
             self.helmert_dx,
             self.helmert_dy,
             self.helmert_dz,
@@ -235,9 +238,6 @@ class MapSettings(BaseModel):
             self.helmert_rz_as,
             self.helmert_ds_ppm,
         )
-        if any(v is None for v in vals):
-            return None
-        return vals  # type: ignore[return-value]
 
 
 @dataclass

@@ -138,6 +138,75 @@ class TestMapSettingsValidation:
         assert settings.control_point_y_sk42_gk == 5415000.0
 
 
+class TestLinkPointGkProperties:
+    """Tests for link point GK coordinate conversions.
+
+    SK-42 convention: X=northing (5xxxxxx), Y=easting (7xxxxxx).
+    GK X=easting (from Y field), GK Y=northing (from X field).
+    """
+
+    def test_link_point_a_x_sk42_gk(self):
+        """link_point_a_x_sk42_gk (easting) should be derived from link_point_a_y."""
+        # link_point_a_y = 7448250 → y_high=74, y_low_km=48.25
+        # GK X = 1e3*48.25 + 1e5*74 = 48250 + 7400000 = 7448250
+        settings = create_settings(link_point_a_y=7448250)
+        assert settings.link_point_a_x_sk42_gk == 7448250.0
+
+    def test_link_point_a_y_sk42_gk(self):
+        """link_point_a_y_sk42_gk (northing) should be derived from link_point_a_x."""
+        # link_point_a_x = 5420770 → x_high=54, x_low_km=20.77
+        # GK Y = 1e3*20.77 + 1e5*54 = 20770 + 5400000 = 5420770
+        settings = create_settings(link_point_a_x=5420770)
+        assert settings.link_point_a_y_sk42_gk == 5420770.0
+
+    def test_link_point_b_x_sk42_gk(self):
+        """link_point_b_x_sk42_gk (easting) should be derived from link_point_b_y."""
+        settings = create_settings(link_point_b_y=7444720)
+        assert settings.link_point_b_x_sk42_gk == 7444720.0
+
+    def test_link_point_b_y_sk42_gk(self):
+        """link_point_b_y_sk42_gk (northing) should be derived from link_point_b_x."""
+        settings = create_settings(link_point_b_x=5417552)
+        assert settings.link_point_b_y_sk42_gk == 5417552.0
+
+    def test_link_point_gk_mirrors_control_point_logic(self):
+        """Link point GK conversion should match control_point GK logic."""
+        # Same coordinate values → same GK results
+        settings = create_settings(
+            control_point_x=5420770,
+            control_point_y=7448250,
+            link_point_a_x=5420770,
+            link_point_a_y=7448250,
+        )
+        assert settings.link_point_a_x_sk42_gk == settings.control_point_x_sk42_gk
+        assert settings.link_point_a_y_sk42_gk == settings.control_point_y_sk42_gk
+
+    def test_link_point_defaults(self):
+        """Default link point values should produce valid GK coordinates."""
+        settings = create_settings()
+        # Default: link_point_a_x=5415000, link_point_a_y=7440000
+        assert settings.link_point_a_x_sk42_gk == 7440000.0
+        assert settings.link_point_a_y_sk42_gk == 5415000.0
+        # Default: link_point_b_x=5420000, link_point_b_y=7445000
+        assert settings.link_point_b_x_sk42_gk == 7445000.0
+        assert settings.link_point_b_y_sk42_gk == 5420000.0
+
+    def test_link_fields_stored_correctly(self):
+        """All link profile fields should be stored."""
+        settings = create_settings(
+            link_point_a_name='Узел-1',
+            link_point_b_name='Узел-2',
+            link_freq_mhz=2400.0,
+            link_antenna_a_m=15.0,
+            link_antenna_b_m=25.0,
+        )
+        assert settings.link_point_a_name == 'Узел-1'
+        assert settings.link_point_b_name == 'Узел-2'
+        assert settings.link_freq_mhz == 2400.0
+        assert settings.link_antenna_a_m == 15.0
+        assert settings.link_antenna_b_m == 25.0
+
+
 class TestMapSettingsMapType:
     """Tests for map type settings."""
 
@@ -185,9 +254,9 @@ class TestMapSettingsHelmertExtended:
     """Extended tests for Helmert parameters."""
 
     def test_helmert_dx_default(self):
-        """Helmert dx should be None by default."""
+        """Helmert dx should have standard value by default."""
         settings = create_settings()
-        assert settings.helmert_dx is None
+        assert settings.helmert_dx == -50.957
 
     def test_helmert_all_params(self):
         """All Helmert params can be set."""

@@ -6,6 +6,7 @@ from pathlib import Path
 import tomlkit
 
 from domain.models import MapSettings
+from domain.toml_sections import flat_to_sectioned, sectioned_to_flat
 from shared.constants import CONTROL_POINT_PRECISION_TOLERANCE_M
 from shared.portable import get_portable_path, is_portable_mode
 
@@ -86,7 +87,7 @@ def load_profile(name_or_path: str) -> MapSettings:
         msg = f'Профиль не найден: {path}'
         raise FileNotFoundError(msg)
     text = path.read_text(encoding='utf-8')
-    data = tomlkit.parse(text)
+    data = sectioned_to_flat(dict(tomlkit.parse(text)))
     logger.info(
         'Profile TOML data: control_point_enabled=%s',
         data.get('control_point_enabled', 'NOT_FOUND'),
@@ -178,7 +179,8 @@ def save_profile(name: str, settings: MapSettings) -> Path:
     except Exception:
         logger.debug('Failed to log detailed settings in save_profile')
 
-    data = settings.model_dump(exclude_none=True)
+    data = settings.model_dump(exclude={'output_path', 'brightness', 'contrast', 'saturation'})
+    data = flat_to_sectioned(data)
     text = tomlkit.dumps(data)
     path.write_text(text, encoding='utf-8')
     return path

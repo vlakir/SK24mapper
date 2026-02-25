@@ -125,6 +125,9 @@ class MapDownloadContext:
     # Link profile data (filled by processor for postprocessing)
     link_profile_data: dict | None = None
 
+    # Clean base map (before markers/inset) for interactive link profile drag
+    link_profile_clean_base: Image.Image | None = None
+
     # Memory estimation (filled during context creation)
     memory_estimate: dict | None = None
 

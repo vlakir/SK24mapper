@@ -143,19 +143,16 @@ class TestMapSettingsHelmert:
         assert helmert[0] == -50.957  # dx
         assert helmert[6] == -1.43065  # ds_ppm
 
-    def test_custom_helmert_none_when_partial(self):
-        """Partial Helmert parameters should return None."""
-        settings = create_base_settings(
-            helmert_dx=-50.957,
-            helmert_dy=-39.724,
-            # Other parameters not set (None by default)
-        )
+    def test_custom_helmert_none_when_disabled(self):
+        """helmert_enabled=False should return None."""
+        settings = create_base_settings(helmert_enabled=False)
         assert settings.custom_helmert is None
 
-    def test_custom_helmert_none_by_default(self):
-        """Default settings should have None custom_helmert."""
+    def test_custom_helmert_enabled_by_default(self):
+        """Default settings should have Helmert enabled with standard params."""
         settings = create_base_settings()
-        assert settings.custom_helmert is None
+        assert settings.custom_helmert is not None
+        assert settings.helmert_dx == -50.957
 
 
 class TestMapSettingsExtraFields:

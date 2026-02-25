@@ -4,16 +4,16 @@ from __future__ import annotations
 
 import contextlib
 import logging
-from pathlib import Path
-from typing import TYPE_CHECKING
+import time
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QEventLoop, QRectF, QTimer, Qt, Signal
 from PySide6.QtGui import (
+    QBrush,
     QColor,
+    QCursor,
     QImage,
     QKeyEvent,
     QMouseEvent,
-    QMovie,
     QPainter,
     QPen,
     QPixmap,
@@ -24,22 +24,24 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QGraphicsLineItem,
     QGraphicsPixmapItem,
+    QGraphicsRectItem,
     QGraphicsScene,
     QGraphicsTextItem,
     QGraphicsView,
-    QLabel,
     QWidget,
 )
 
+from gui.matrix_rain import MatrixRainWidget
+
 from shared.constants import (
     CONTROL_POINT_SIZE_M,
+    LOADING_FADE_IN_MS,
     PREVIEW_MIN_LINE_LENGTH_FOR_LABEL,
     PREVIEW_ROTATION_ANGLE,
     PREVIEW_UPRIGHT_TEXT_ANGLE_LIMIT,
 )
 
-if TYPE_CHECKING:
-    from PIL import Image
+from PIL import Image
 
 import math
 
@@ -53,6 +55,9 @@ class OptimizedImageView(QGraphicsView):
     map_right_clicked = Signal(float, float)  # (x, y)
     shift_wheel_rotated = Signal(float)  # delta_degrees (positive = CW)
     shift_key_released = Signal()  # Shift released after rotation
+    point_drag_started = Signal()  # emitted when user grabs a draggable point
+    point_drag_finished = Signal(str, float, float)  # (point_id, scene_x, scene_y)
+    fade_in_finished = Signal()  # emitted when map fully revealed after loading
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -120,8 +125,32 @@ class OptimizedImageView(QGraphicsView):
         # Sector boundary lines (dashed, shown during rotation)
         self._sector_line_items: list[QGraphicsLineItem] = []
 
-        # Loading overlay (QLabel + QMovie over viewport)
-        self._loading_overlay = self._create_loading_overlay()
+        # Draggable points for link profile A/B markers
+        self._draggable_points: dict[str, tuple[float, float]] = {}  # id → (x, y) scene
+        self._dragging_point_id: str | None = None
+        self._drag_hit_radius = 20  # pixels on screen
+
+        # Drag visual feedback (crosshair + rubber band line)
+        self._drag_marker_items: list[QGraphicsLineItem] = []
+        self._drag_line_item: QGraphicsLineItem | None = None
+        self._drag_other_point: tuple[float, float] | None = None
+
+        # Semi-transparent mask over stale inset during recompute
+        self._inset_mask_item: QGraphicsRectItem | None = None
+
+        # Pre-rendered QPixmap of clean base (no overlay) for instant swap on drag
+        self._clean_base_pixmap: QPixmap | None = None
+
+        # Loading overlay (Matrix rain, parented to viewport)
+        self._loading_overlay = MatrixRainWidget(self.viewport())
+        self._loading_overlay.hide()
+        # Fade-in: black QGraphicsRectItem in the scene with decreasing opacity
+        self._fade_rect: QGraphicsRectItem | None = None
+        self._fade_in_opacity = 0.0
+        self._fade_in_step = 0.0
+        self._fade_in_timer = QTimer(self)
+        self._fade_in_timer.setInterval(40)  # ~25 fps
+        self._fade_in_timer.timeout.connect(self._fade_in_tick)
 
     def set_image(self, pil_image: Image.Image, meters_per_px: float = 0.0) -> None:
         """
@@ -129,7 +158,13 @@ class OptimizedImageView(QGraphicsView):
 
         Keeps current zoom/center if an image is already displayed.
         """
-        self.stop_loading()
+        t0 = time.monotonic()
+        was_loading = self._loading_overlay.isVisible()
+        if was_loading:
+            self._fade_out_loading_sync()
+        else:
+            self.stop_loading()
+        t_fade_out = time.monotonic()
         try:
             self._updating_image = True
 
@@ -147,13 +182,15 @@ class OptimizedImageView(QGraphicsView):
             self._original_image = pil_image
             self._meters_per_px = meters_per_px
 
-            # Convert PIL image to QPixmap efficiently
+            # Convert PIL image to QPixmap (callers guarantee RGB)
             if pil_image.mode != 'RGB':
+                logger.warning('set_image: unexpected mode %s, converting to RGB', pil_image.mode)
                 pil_image = pil_image.convert('RGB')
 
-            # Create QImage directly from PIL data
             width, height = pil_image.size
+            t1 = time.monotonic()
             image_data = pil_image.tobytes()
+            t2 = time.monotonic()
             # Keep a reference to the backing bytes to prevent premature GC
             self._qimage_bytes = image_data
             qimage = QImage(
@@ -163,19 +200,26 @@ class OptimizedImageView(QGraphicsView):
                 width * 3,
                 QImage.Format.Format_RGB888,
             )
-
-            # Create QPixmap from QImage
+            t3 = time.monotonic()
             qpixmap = QPixmap.fromImage(qimage)
+            t4 = time.monotonic()
 
             # Clear scene and add image (invalidates all scene item references)
+            self._fade_in_timer.stop()
             self._scene.clear()
+            self._fade_rect = None
             self._cp_cross_items = []
             self._cp_line_item = None
             self._cp_label_item = None
             self._azimuth_line_item = None
             self._azimuth_label_item = None
             self._sector_line_items = []
+            self._drag_marker_items = []
+            self._drag_line_item = None
+            self._drag_other_point = None
+            self._inset_mask_item = None
             self._image_item = self._scene.addPixmap(qpixmap)
+            t5 = time.monotonic()
 
             # Apply fixed rotation to improve thin line visibility
             if PREVIEW_ROTATION_ANGLE != 0:
@@ -192,13 +236,23 @@ class OptimizedImageView(QGraphicsView):
 
             # Fit or restore transform
             if preserve_transform and current_transform is not None:
-                # Restore previous transform and keep center
                 self.setTransform(current_transform)
                 if current_center is not None:
                     self.centerOn(current_center)
             else:
-                # First time: fit image to view
                 self.fit_to_window()
+
+            # Smooth fade-in when replacing the loading screen
+            if was_loading:
+                self._start_fade_in()
+
+            logger.info(
+                'set_image %dx%d: fade_out=%.3fs  tobytes=%.3fs  '
+                'QImage=%.3fs  QPixmap=%.3fs  scene=%.3fs  TOTAL=%.3fs',
+                width, height,
+                t_fade_out - t0, t2 - t1, t3 - t2, t4 - t3,
+                t5 - t4, time.monotonic() - t0,
+            )
 
         finally:
             self._updating_image = False
@@ -216,6 +270,13 @@ class OptimizedImageView(QGraphicsView):
         self._cp_line_item = None
         self._cp_label_item = None
         self._meters_per_px = 0.0
+        self._draggable_points = {}
+        self._dragging_point_id = None
+        self._drag_marker_items = []
+        self._drag_line_item = None
+        self._drag_other_point = None
+        self._inset_mask_item = None
+        self._clean_base_pixmap = None
         # Allow GC of previous image bytes when clearing
         if hasattr(self, '_qimage_bytes'):
             self._qimage_bytes = None
@@ -479,48 +540,200 @@ class OptimizedImageView(QGraphicsView):
         self._sector_line_items.clear()
 
     # ------------------------------------------------------------------
-    # Loading overlay (GIF + label, parented to viewport)
+    # Draggable points (link profile A/B markers)
     # ------------------------------------------------------------------
 
-    def _create_loading_overlay(self) -> QWidget:
-        """Build a full-viewport overlay with Matrix rain GIF and text."""
-        overlay = QWidget(self.viewport())
-        overlay.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        overlay.setStyleSheet('background: black;')
-        overlay.hide()
+    def set_draggable_points(self, points: dict[str, tuple[float, float]]) -> None:
+        """Set draggable point positions (scene/image coordinates)."""
+        self._draggable_points = dict(points)
 
-        # GIF fills the whole overlay via QMovie pre-scaling
-        gif_label = QLabel(overlay)
-        gif_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        gif_label.setStyleSheet('background: black;')
+    def _hit_test_draggable(self, event: QMouseEvent) -> str | None:
+        """Return point_id if cursor is near a draggable point, else None."""
+        if not self._draggable_points or self._image_item is None:
+            return None
+        view_pos = event.position().toPoint()
+        for pid, (sx, sy) in self._draggable_points.items():
+            # Convert scene point to view (screen) coordinates for distance check
+            view_pt = self.mapFromScene(sx, sy)
+            dx = view_pos.x() - view_pt.x()
+            dy = view_pos.y() - view_pt.y()
+            if dx * dx + dy * dy <= self._drag_hit_radius ** 2:
+                return pid
+        return None
 
-        gif_path = Path(__file__).parent / 'icons' / 'loading.gif'
-        movie = QMovie(str(gif_path))
-        gif_label.setMovie(movie)
+    # ------------------------------------------------------------------
+    # Drag visual feedback (crosshair + rubber band line)
+    # ------------------------------------------------------------------
 
-        self._loading_movie = movie
-        self._loading_gif_label = gif_label
-        return overlay
+    def set_clean_base_pixmap(
+        self,
+        pil_image: Image.Image,
+        full_image: Image.Image | None = None,
+    ) -> None:
+        """Pre-render and cache QPixmap of the clean base map for instant swap on drag.
 
-    def _layout_loading_overlay(self) -> None:
-        """Position GIF inside the overlay and pre-scale movie to viewport."""
-        rect = self._loading_overlay.rect()
-        self._loading_gif_label.setGeometry(rect)
-        self._loading_movie.setScaledSize(rect.size())
+        Args:
+            pil_image: Clean base (map only, no overlay).
+            full_image: Full composite (map + inset). Inset area is blended with grey.
+        """
+        if pil_image.mode != 'RGB':
+            pil_image = pil_image.convert('RGB')
+        w, h = pil_image.size
+        if full_image is not None and full_image.height > h:
+            # Blend inset portion with grey for semi-transparent mask effect
+            inset_region = full_image.crop((0, h, w, full_image.height)).convert('RGB')
+            grey = Image.new('RGB', inset_region.size, (128, 128, 128))
+            dimmed = Image.blend(inset_region, grey, alpha=0.55)
+            extended = Image.new('RGB', (w, full_image.height), (128, 128, 128))
+            extended.paste(pil_image, (0, 0))
+            extended.paste(dimmed, (0, h))
+            pil_image = extended
+            h = full_image.height
+        data = pil_image.tobytes()
+        qimg = QImage(data, w, h, w * 3, QImage.Format.Format_RGB888)
+        self._clean_base_pixmap = QPixmap.fromImage(qimg)
+
+    def _start_drag_feedback(self, point_id: str) -> None:
+        """Swap to clean base pixmap and remember the other point for rubber band."""
+        # Instantly remove yellow line + inset by swapping to clean base
+        if self._clean_base_pixmap is not None and self._image_item is not None:
+            self._image_item.setPixmap(self._clean_base_pixmap)
+
+        other_id = 'B' if point_id == 'A' else 'A'
+        other = self._draggable_points.get(other_id)
+        self._drag_other_point = other
+
+    def _update_drag_feedback(self, sx: float, sy: float) -> None:
+        """Draw crosshair at (sx, sy) and a yellow dashed line to the other point."""
+        self._clear_drag_feedback()
+
+        # Crosshair color: blue for A, red for B
+        if self._dragging_point_id == 'A':
+            color = QColor(0, 0, 255)
+        else:
+            color = QColor(255, 0, 0)
+
+        pen = QPen(color)
+        pen.setWidth(2)
+        pen.setCosmetic(True)
+
+        arm = 12  # pixels on screen → convert to scene via current scale
+        scale = self.transform().m11()
+        arm_scene = arm / scale if scale > 0 else arm
+
+        line1 = self._scene.addLine(sx - arm_scene, sy, sx + arm_scene, sy, pen)
+        line2 = self._scene.addLine(sx, sy - arm_scene, sx, sy + arm_scene, pen)
+        line1.setZValue(30)
+        line2.setZValue(30)
+        self._drag_marker_items = [line1, line2]
+
+        # Rubber band yellow dashed line to the other point
+        if self._drag_other_point is not None:
+            ox, oy = self._drag_other_point
+            line_pen = QPen(QColor(255, 255, 0))
+            line_pen.setWidth(2)
+            line_pen.setStyle(Qt.PenStyle.DashLine)
+            line_pen.setCosmetic(True)
+            self._drag_line_item = self._scene.addLine(sx, sy, ox, oy, line_pen)
+            self._drag_line_item.setZValue(29)
+
+    def show_inset_mask(self, y_top: float) -> None:
+        """Show a semi-transparent grey rectangle over the inset area (below y_top)."""
+        self._hide_inset_mask()
+        if self._image_item is None:
+            return
+        img_rect = self._image_item.pixmap().rect()
+        if y_top >= img_rect.height():
+            return
+        rect = QRectF(0, y_top, img_rect.width(), img_rect.height() - y_top)
+        brush = QBrush(QColor(128, 128, 128, 140))
+        self._inset_mask_item = self._scene.addRect(rect, QPen(Qt.PenStyle.NoPen), brush)
+        self._inset_mask_item.setZValue(20)
+
+    def _hide_inset_mask(self) -> None:
+        """Remove the inset mask from the scene."""
+        if self._inset_mask_item is not None:
+            with contextlib.suppress(Exception):
+                self._scene.removeItem(self._inset_mask_item)
+            self._inset_mask_item = None
+
+    def _clear_drag_feedback(self) -> None:
+        """Remove drag feedback items from the scene."""
+        for item in self._drag_marker_items:
+            with contextlib.suppress(Exception):
+                self._scene.removeItem(item)
+        self._drag_marker_items.clear()
+
+        if self._drag_line_item is not None:
+            with contextlib.suppress(Exception):
+                self._scene.removeItem(self._drag_line_item)
+            self._drag_line_item = None
+
+    # ------------------------------------------------------------------
+    # Loading overlay & fade transitions
+    # ------------------------------------------------------------------
 
     def start_loading(self) -> None:
-        """Show the loading overlay with animated GIF."""
-        vp = self.viewport().rect()
-        self._loading_overlay.setGeometry(vp)
-        self._layout_loading_overlay()
-        self._loading_movie.start()
+        """Show the loading overlay with Matrix rain animation."""
+        self._stop_fade_in()
+        self._loading_overlay.setGeometry(self.viewport().rect())
+        self._loading_overlay.start()
         self._loading_overlay.show()
         self._loading_overlay.raise_()
 
     def stop_loading(self) -> None:
         """Hide the loading overlay."""
-        self._loading_movie.stop()
+        self._loading_overlay.stop()
         self._loading_overlay.hide()
+
+    def _fade_out_loading_sync(self) -> None:
+        """Fade-out the Matrix rain and block until fully black.
+
+        Runs a local event loop so the animation keeps playing while we wait.
+        """
+        loop = QEventLoop()
+        self._loading_overlay.faded_out.connect(loop.quit)
+        self._loading_overlay.fade_out()
+        loop.exec()
+        self._loading_overlay.stop()
+        self._loading_overlay.hide()
+
+    def _start_fade_in(self, duration_ms: int = LOADING_FADE_IN_MS) -> None:
+        """Add a black rect on top of the scene that dissolves to reveal the map."""
+        self._remove_fade_rect()
+        scene_rect = self._scene.sceneRect()
+        self._fade_rect = self._scene.addRect(
+            scene_rect, QPen(Qt.PenStyle.NoPen), QBrush(QColor(0, 0, 0)),
+        )
+        self._fade_rect.setZValue(10000)
+        self._fade_rect.setOpacity(1.0)
+        self._fade_in_opacity = 1.0
+        ticks = max(1, duration_ms // 40)
+        self._fade_in_step = 1.0 / ticks
+        self._fade_in_timer.start()
+
+    def _stop_fade_in(self) -> None:
+        self._fade_in_timer.stop()
+        self._remove_fade_rect()
+        self.fade_in_finished.emit()
+
+    def is_fading_in(self) -> bool:
+        """Return True if the fade-in animation is currently running."""
+        return self._fade_in_timer.isActive()
+
+    def _remove_fade_rect(self) -> None:
+        if self._fade_rect is not None:
+            with contextlib.suppress(Exception):
+                self._scene.removeItem(self._fade_rect)
+            self._fade_rect = None
+
+    def _fade_in_tick(self) -> None:
+        self._fade_in_opacity -= self._fade_in_step
+        if self._fade_in_opacity <= 0:
+            self._stop_fade_in()
+            return
+        if self._fade_rect is not None:
+            self._fade_rect.setOpacity(self._fade_in_opacity)
 
     def _zoom(self, factor: float) -> None:
         """Apply zoom with limits and pixel-perfect alignment."""
@@ -610,8 +823,17 @@ class OptimizedImageView(QGraphicsView):
         super().keyReleaseEvent(event)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
-        """Handle mouse press for panning."""
+        """Handle mouse press for panning or dragging a link profile point."""
         if event.button() == Qt.MouseButton.LeftButton:
+            # Check if we hit a draggable point first
+            hit = self._hit_test_draggable(event)
+            if hit is not None:
+                self._dragging_point_id = hit
+                self.point_drag_started.emit()
+                self._start_drag_feedback(hit)
+                self.viewport().setCursor(QCursor(Qt.CursorShape.ClosedHandCursor))
+                event.accept()
+                return
             self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
         elif (
             event.button() == Qt.MouseButton.RightButton
@@ -623,13 +845,33 @@ class OptimizedImageView(QGraphicsView):
         super().mousePressEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
-        """Handle mouse release."""
+        """Handle mouse release — finish drag or end panning."""
         if event.button() == Qt.MouseButton.LeftButton:
+            if self._dragging_point_id is not None:
+                # Keep drag feedback visible until recompute finishes and set_image() clears the scene
+                scene_pos = self.mapToScene(event.position().toPoint())
+                self.point_drag_finished.emit(
+                    self._dragging_point_id, scene_pos.x(), scene_pos.y()
+                )
+                self._dragging_point_id = None
+                self._drag_other_point = None
+                self.viewport().unsetCursor()
+                event.accept()
+                return
             self.setDragMode(QGraphicsView.DragMode.NoDrag)
         super().mouseReleaseEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
-        """Track mouse movement over the map."""
+        """Track mouse movement over the map, update cursor for draggable points."""
+        if self._dragging_point_id is not None:
+            # During drag — keep closed hand cursor, draw feedback, emit coordinates
+            self.viewport().setCursor(QCursor(Qt.CursorShape.ClosedHandCursor))
+            scene_pos = self.mapToScene(event.position().toPoint())
+            self._update_drag_feedback(scene_pos.x(), scene_pos.y())
+            self.mouse_moved_on_map.emit(scene_pos.x(), scene_pos.y())
+            event.accept()
+            return
+
         super().mouseMoveEvent(event)
 
         if self._image_item is None:
@@ -639,15 +881,20 @@ class OptimizedImageView(QGraphicsView):
         scene_pos = self.mapToScene(event.position().toPoint())
         if self._image_item.contains(scene_pos):
             self.mouse_moved_on_map.emit(scene_pos.x(), scene_pos.y())
+            # Show open hand cursor when hovering over a draggable point
+            if self._hit_test_draggable(event) is not None:
+                self.viewport().setCursor(QCursor(Qt.CursorShape.OpenHandCursor))
+            else:
+                self.viewport().unsetCursor()
         else:
             self.mouse_moved_on_map.emit(None, None)
+            self.viewport().unsetCursor()
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         """Handle widget resize to update fit-to-window scale and overlay."""
         super().resizeEvent(event)
         if self._loading_overlay.isVisible():
             self._loading_overlay.setGeometry(self.viewport().rect())
-            self._layout_loading_overlay()
         if self._image_item:
             # Recalculate fit-to-window scale when widget is resized
             current_scale = self.transform().m11()

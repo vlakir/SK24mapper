@@ -31,7 +31,7 @@ class TestProfiles:
         
         loaded = load_profile("test_profile")
         assert loaded.from_x_high == 54
-        assert loaded.output_path == "test.jpg"
+        assert loaded.output_path == "map.jpg"  # output_path не сохраняется в профиль
 
     def test_save_profile_by_absolute_path(self, temp_profiles_dir, base_settings_dict):
         settings = MapSettings(**base_settings_dict)

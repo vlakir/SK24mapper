@@ -154,13 +154,37 @@ def main() -> int:
             (appdata_base / 'configs' / 'profiles').mkdir(parents=True, exist_ok=True)
             (appdata_base / 'maps').mkdir(parents=True, exist_ok=True)
             (local_base / '.cache' / 'tiles').mkdir(parents=True, exist_ok=True)
+        # Remove legacy flat-format profiles (will be replaced by sectioned defaults)
+        _profiles_dir = (
+            get_portable_path('configs/profiles')
+            if is_portable_mode()
+            else appdata_base / 'configs' / 'profiles'
+        )
+        if _profiles_dir.exists():
+            for _pf in list(_profiles_dir.glob('*.toml')):
+                try:
+                    _head = _pf.read_text(encoding='utf-8').lstrip()
+                    if _head and not _head.startswith('['):
+                        _pf.unlink()
+                        logger.info('Удалён устаревший профиль: %s', _pf.name)
+                except Exception:
+                    pass
+
         # Copy default configs if not present
         install_dir = Path(sys.argv[0]).resolve().parent
-        # В PyInstaller onedir сборке данные находятся в _internal/
-        # В onefile или при разработке - рядом с exe/скриптом
-        default_cfg_root = install_dir / '_internal' / 'configs'
+        # Приоритет поиска configs/:
+        # 1. sys._MEIPASS (PyInstaller onefile — данные во временной папке)
+        # 2. install_dir/_internal/configs (PyInstaller onedir — стандартная структура)
+        # 3. install_dir/configs (рядом с exe/скриптом)
+        # 4. install_dir/../configs (разработка: src/../configs)
+        meipass = getattr(sys, '_MEIPASS', None)
+        default_cfg_root = Path(meipass) / 'configs' if meipass else None
+        if default_cfg_root is None or not default_cfg_root.exists():
+            default_cfg_root = install_dir / '_internal' / 'configs'
         if not default_cfg_root.exists():
             default_cfg_root = install_dir / 'configs'
+        if not default_cfg_root.exists():
+            default_cfg_root = install_dir.parent / 'configs'
 
         logger.info(f'Looking for default configs in: {default_cfg_root}')
         if default_cfg_root.exists():

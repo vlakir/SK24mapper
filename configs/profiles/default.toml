@@ -1,32 +1,59 @@
+[common]
 from_x_high = 54
 from_y_high = 74
 to_x_high = 54
 to_y_high = 74
-from_x_low = 12
-from_y_low = 35
-to_x_low = 22
+from_x_low = 14
+from_y_low = 43
+to_x_low = 23
 to_y_low = 49
-output_path = "../maps/map.jpg"
-map_type = "SATELLITE"
-overlay_contours = false
+map_type = "LINK_PROFILE"
+overlay_contours = true
 grid_width_m = 5.0
 grid_font_size_m = 100.0
 grid_text_margin_m = 50.0
 grid_label_bg_padding_m = 10.0
 display_grid = true
 mask_opacity = 0.35
-jpeg_quality = 100
-brightness = 1.0
-contrast = 1.0
-saturation = 1.0
-helmert_dx = -50.957
-helmert_dy = -39.724
-helmert_dz = -76.877
-helmert_rx_as = 2.33295
-helmert_ry_as = 2.13987
-helmert_rz_as = -2.03005
-helmert_ds_ppm = -1.43065
-control_point_enabled = false
-control_point_x = 5415000
-control_point_y = 7440000
+
+[helmert]
+enabled = true
+dx = -50.957
+dy = -39.724
+dz = -76.877
+rx_as = 2.33295
+ry_as = 2.13987
+rz_as = -2.03005
+ds_ppm = -1.43065
+
+[control_point]
+enabled = false
+x = 5422328
+y = 7448442
+name = ""
+
+[radio_horizon]
+antenna_height_m = 10.0
+max_flight_height_m = 100.0
 uav_height_reference = "control_point"
+overlay_alpha = 0.3
+
+[radar_coverage]
+azimuth_deg = 217.0
+sector_width_deg = 90.0
+elevation_min_deg = 1.0
+elevation_max_deg = 30.0
+max_range_km = 15.0
+target_height_min_m = 30.0
+target_height_max_m = 500.0
+
+[link_profile]
+point_a_x = 5420770
+point_a_y = 7448250
+point_a_name = "Лютик"
+point_b_x = 5420487
+point_b_y = 7444495
+point_b_name = "Одуванчик"
+freq_mhz = 900.0
+antenna_a_m = 10.0
+antenna_b_m = 10.0

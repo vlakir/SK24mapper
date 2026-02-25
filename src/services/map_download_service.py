@@ -7,6 +7,7 @@ import contextlib
 import gc
 import importlib
 import logging
+import math
 import time
 from pathlib import Path
 
@@ -34,6 +35,7 @@ from imaging import (
     load_grid_font,
     rotate_keep_size,
 )
+from imaging.text import draw_text_with_outline
 from imaging.io import build_save_kwargs as _build_save_kwargs
 from imaging.io import save_jpeg as _save_jpeg
 from imaging.transforms import _CV2_DIM_LIMIT, ROTATE_ANGLE_EPS
@@ -678,9 +680,10 @@ class MapDownloadService:
         if ctx.settings.control_point_enabled:
             self._draw_control_point(ctx, result)
 
-        # Link profile: draw markers and append inset below the map
+        # Link profile: save clean base for interactive drag, then draw overlay
         if ctx.is_link_profile and ctx.link_profile_data is not None:
             crash_log('postprocess: link_profile overlay START')
+            ctx.link_profile_clean_base = result.copy()
             result = self._draw_link_profile_overlay(ctx, result)
             crash_log('postprocess: link_profile overlay DONE')
 
@@ -984,7 +987,11 @@ class MapDownloadService:
             New image with map on top and profile inset appended below.
         """
         from services.processors.link_profile import render_profile_inset
-        from shared.constants import LINK_PROFILE_POINT_A_COLOR, LINK_PROFILE_POINT_B_COLOR
+        from shared.constants import (
+            LINK_PROFILE_MAP_TICK_FACTOR,
+            LINK_PROFILE_POINT_A_COLOR,
+            LINK_PROFILE_POINT_B_COLOR,
+        )
 
         try:
             link_data = ctx.link_profile_data
@@ -1055,6 +1062,57 @@ class MapDownloadService:
                 fill=(255, 255, 0, 200),
                 width=line_w,
             )
+
+            # Distance tick marks + labels on A→B line (same step as profile X axis)
+            total_d = link_data['total_distance_m']
+            dist_km = total_d / 1000.0
+            if total_d < 500:
+                tick_step_m = 0  # no ticks
+            elif total_d < 1000:
+                tick_step_m = 500
+            elif dist_km > 1:
+                tick_step_m = max(1, int(dist_km / 6)) * 1000
+            else:
+                tick_step_m = max(100, int(total_d / 5 / 100) * 100)
+
+            if tick_step_m > 0 and total_d > 0 and mpp > 0:
+                dx_line = bx_img - ax_img
+                dy_line = by_img - ay_img
+                line_len = math.sqrt(dx_line ** 2 + dy_line ** 2)
+                if line_len > 0:
+                    ux, uy = dx_line / line_len, dy_line / line_len
+                    px_perp, py_perp = -uy, ux
+                    tick_half = line_w * LINK_PROFILE_MAP_TICK_FACTOR
+                    label_offset = tick_half + font_size_px
+
+                    d_val = tick_step_m
+                    while d_val < total_d:
+                        frac = d_val / total_d
+                        cx = ax_img + dx_line * frac
+                        cy = ay_img + dy_line * frac
+                        line_draw.line(
+                            [
+                                (int(cx - px_perp * tick_half),
+                                 int(cy - py_perp * tick_half)),
+                                (int(cx + px_perp * tick_half),
+                                 int(cy + py_perp * tick_half)),
+                            ],
+                            fill=(255, 255, 0, 200),
+                            width=line_w,
+                        )
+                        # Label
+                        lbl = f'{d_val / 1000:g}'
+                        lx = int(cx + px_perp * label_offset)
+                        ly = int(cy + py_perp * label_offset)
+                        draw_text_with_outline(
+                            line_draw, (lx, ly), lbl,
+                            font=label_font,
+                            fill=(255, 255, 0),
+                            outline=(0, 0, 0),
+                            outline_width=2,
+                            anchor='mm',
+                        )
+                        d_val += tick_step_m
 
             # Render profile inset with full map width
             inset = render_profile_inset(
@@ -1372,6 +1430,15 @@ class MapDownloadService:
                     'rotation_deg': ctx.rotation_deg,
                     'final_size': (ctx.target_w_px, ctx.target_h_px),
                     'crop_size': ctx.rh_cache_crop_size,
+                }
+            elif ctx.is_link_profile and ctx.link_profile_clean_base is not None:
+                rh_cache = {
+                    'is_link_profile': True,
+                    'clean_base': ctx.link_profile_clean_base,
+                    'link_profile_data': ctx.link_profile_data,
+                    'settings': ctx.settings,
+                    'rotation_deg': ctx.rotation_deg,
+                    'final_size': (ctx.target_w_px, ctx.target_h_px),
                 }
 
             if gui_image is not None:

@@ -171,7 +171,7 @@ def choose_safe_zoom(
         }
 
         if zoom < desired_zoom:
-            logger.warning(
+            logger.info(
                 'Zoom снижен %d → %d для экономии RAM '
                 '(peak ~%.0f MB, available ~%.0f MB)',
                 desired_zoom, zoom, mem_est['peak_mb'], available_mb,

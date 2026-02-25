@@ -14,6 +14,7 @@ import tomlkit
 from dotenv import load_dotenv
 
 from domain.models import DownloadParams
+from domain.toml_sections import flat_to_sectioned
 from domain.profiles import (
     ensure_profiles_dir,
     list_profiles,
@@ -291,7 +292,7 @@ class MilMapperController:
             except Exception:
                 logger.debug('Failed to log detailed settings before save-as')
 
-            data = s.model_dump()
+            data = flat_to_sectioned(s.model_dump(exclude={'output_path', 'brightness', 'contrast', 'saturation'}))
             text = tomlkit.dumps(data)
             final_path.write_text(text, encoding='utf-8')
 

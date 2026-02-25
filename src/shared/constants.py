@@ -640,6 +640,14 @@ LINK_PROFILE_LOS_LINE_COLOR = (0, 0, 0, 255)
 LINK_PROFILE_LINE_WIDTH_PX = 10
 LINK_PROFILE_POINT_A_COLOR = (0, 0, 255)
 LINK_PROFILE_POINT_B_COLOR = (255, 0, 0)
+# Сетка координат профиля
+LINK_PROFILE_GRID_COLOR = (160, 160, 160, 200)
+LINK_PROFILE_GRID_WIDTH_PX = 6
+LINK_PROFILE_GRID_BORDER_PX = 12
+LINK_PROFILE_ANTENNA_WIDTH_PX = 24
+LINK_PROFILE_ANTENNA_COLOR = (0, 0, 0, 255)
+# Засечки расстояния на линии A→B (множитель полудлины относительно толщины линии)
+LINK_PROFILE_MAP_TICK_FACTOR = 6
 # Размер шрифта подписей профиля (мин и макс, пиксели)
 LINK_PROFILE_FONT_MIN_PX = 36
 LINK_PROFILE_FONT_MAX_PX = 196
@@ -655,3 +663,7 @@ LOG_FSYNC_TO_FILE = True
 MEMORY_SAFETY_RATIO = 0.75
 # Минимум свободной памяти, которую нужно оставить (МБ)
 MEMORY_MIN_FREE_MB = 512
+
+# --- Loading screen (Matrix rain) ---
+LOADING_FADE_OUT_MS = 3600   # Затухание матрицы → чёрный экран
+LOADING_FADE_IN_MS = 2400   # Проявление карты из темноты

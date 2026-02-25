@@ -15,8 +15,11 @@ from imaging.text import draw_text_with_outline
 from services.processors.radio_horizon import _load_topo
 from shared.constants import (
     EARTH_RADIUS_M,
-    LINK_PROFILE_FRESNEL_BORDER_COLOR,
-    LINK_PROFILE_FRESNEL_FILL_COLOR,
+    LINK_PROFILE_ANTENNA_COLOR,
+    LINK_PROFILE_ANTENNA_WIDTH_PX,
+    LINK_PROFILE_GRID_BORDER_PX,
+    LINK_PROFILE_GRID_COLOR,
+    LINK_PROFILE_GRID_WIDTH_PX,
     LINK_PROFILE_INSET_BG_COLOR,
     LINK_PROFILE_INSET_HEIGHT_RATIO,
     LINK_PROFILE_INSET_MARGIN_H,
@@ -236,13 +239,75 @@ def render_profile_inset(
     worst_clearance = link_data.get('worst_clearance_m', 0.0)
     fresnel_pct = link_data.get('fresnel_clearance_pct', 100.0)
 
-    # Margins (symmetric)
-    margin_h = int(inset_w * LINK_PROFILE_INSET_MARGIN_H)
-    margin_v = int(inset_h * LINK_PROFILE_INSET_MARGIN_V)
-    margin_left = margin_h
-    margin_right = margin_h
-    margin_top = margin_v
-    margin_bottom = margin_v
+    # Gaps between axes and labels (proportional to font size)
+    axis_label_gap = max(4, small_font_size_px // 2)
+    tick_len = max(3, small_font_size_px // 3)
+
+    # Elevation range (include LOS + Fresnel) — needed before margins
+    effective_terrain = elevations + earth_correction
+    all_heights = np.concatenate([
+        effective_terrain,
+        los_heights + fresnel_radius,
+        los_heights - fresnel_radius,
+    ])
+    raw_min = float(np.nanmin(all_heights))
+    raw_max = float(np.nanmax(all_heights))
+    raw_range = max(raw_max - raw_min, 10.0)
+
+    # Выбираем шаг оси, кратный 10 м, чтобы было 3–6 делений
+    step = 10.0
+    for candidate in (10, 20, 50, 100, 200, 500, 1000):
+        n_lines = raw_range / candidate
+        if 2 <= n_lines <= 6:
+            step = float(candidate)
+            break
+
+    # Округляем границы до шага
+    e_min = math.floor((raw_min - raw_range * 0.05) / step) * step
+    e_max = math.ceil((raw_max + raw_range * 0.1) / step) * step
+    if e_max <= e_min:
+        e_max = e_min + step
+
+    # --- Adaptive margins: measure actual label sizes ---
+    # Left margin: widest elevation label + gap
+    max_elev_label_w = 0
+    elev_val = e_min
+    while elev_val <= e_max:
+        bbox = small_font.getbbox(f'{int(elev_val)}')
+        lw = bbox[2] - bbox[0] if bbox else 0
+        max_elev_label_w = max(max_elev_label_w, lw)
+        elev_val += step
+    margin_left = max(
+        int(inset_w * LINK_PROFILE_INSET_MARGIN_H),
+        max_elev_label_w + axis_label_gap * 2,
+    )
+
+    # Right margin: unit label width + gap
+    margin_right = max(
+        int(inset_w * LINK_PROFILE_INSET_MARGIN_H),
+        small_font_size_px * 2,
+    )
+
+    # Top margin: small padding (no title)
+    margin_top = max(
+        int(inset_h * 0.06),
+        axis_label_gap * 2,
+    )
+
+    # Bottom margin: tick + gap + distance labels + gap + point names + gap + status
+    bottom_content = (
+        tick_len + axis_label_gap          # tick marks + gap
+        + small_font_size_px               # distance labels
+        + axis_label_gap                   # gap
+        + small_font_size_px               # point name labels
+        + axis_label_gap                   # gap
+        + small_font_size_px               # status line
+        + 6                                # bottom padding
+    )
+    margin_bottom = max(
+        int(inset_h * LINK_PROFILE_INSET_MARGIN_V),
+        bottom_content,
+    )
 
     plot_x0 = margin_left
     plot_x1 = inset_w - margin_right
@@ -254,19 +319,6 @@ def render_profile_inset(
     if plot_w < 20 or plot_h < 20:
         return inset
 
-    # Elevation range (include LOS + Fresnel)
-    effective_terrain = elevations + earth_correction
-    all_heights = np.concatenate([
-        effective_terrain,
-        los_heights + fresnel_radius,
-        los_heights - fresnel_radius,
-    ])
-    e_min = float(np.nanmin(all_heights))
-    e_max = float(np.nanmax(all_heights))
-    e_range = max(e_max - e_min, 10.0)
-    e_min -= e_range * 0.05
-    e_max += e_range * 0.1
-
     def to_screen(d_m: float, elev_m: float) -> tuple[int, int]:
         """Convert (distance, elevation) to screen (x, y)."""
         if total_d > 0:
@@ -276,15 +328,22 @@ def render_profile_inset(
         y = plot_y1 - int(((elev_m - e_min) / (e_max - e_min)) * plot_h)
         return x, y
 
+    # --- Plot area border ---
+    draw.rectangle(
+        [(plot_x0, plot_y0), (plot_x1, plot_y1)],
+        outline=LINK_PROFILE_GRID_COLOR,
+        width=LINK_PROFILE_GRID_BORDER_PX,
+    )
+
     # --- Draw grid lines ---
-    num_h_lines = 4
-    for i in range(num_h_lines + 1):
-        elev_val = e_min + (e_max - e_min) * i / num_h_lines
+    # Horizontal grid (elevation)
+    elev_val = e_min
+    while elev_val <= e_max:
         _, gy = to_screen(0, elev_val)
-        draw.line([(plot_x0, gy), (plot_x1, gy)], fill=(180, 180, 180, 120), width=1)
+        draw.line([(plot_x0, gy), (plot_x1, gy)], fill=LINK_PROFILE_GRID_COLOR, width=LINK_PROFILE_GRID_WIDTH_PX)
         draw_text_with_outline(
             draw,
-            (plot_x0 - 4, gy),
+            (plot_x0 - axis_label_gap, gy),
             f'{int(elev_val)}',
             font=small_font,
             fill=(80, 80, 80),
@@ -292,6 +351,19 @@ def render_profile_inset(
             outline_width=1,
             anchor='rm',
         )
+        elev_val += step
+
+    # Vertical grid (distance) — same step as X axis labels
+    dist_km = total_d / 1000.0
+    if dist_km > 1:
+        grid_step_m = max(1, int(dist_km / 6)) * 1000
+    else:
+        grid_step_m = max(100, int(total_d / 5 / 100) * 100)
+    d_val_grid = grid_step_m
+    while d_val_grid < total_d:
+        gx, _ = to_screen(d_val_grid, e_min)
+        draw.line([(gx, plot_y0), (gx, plot_y1)], fill=LINK_PROFILE_GRID_COLOR, width=LINK_PROFILE_GRID_WIDTH_PX)
+        d_val_grid += grid_step_m
 
     # --- Draw terrain fill ---
     terrain_points = []
@@ -310,6 +382,18 @@ def render_profile_inset(
         if len(terrain_points) >= 2:
             draw.line(terrain_points, fill=(100, 80, 60, 255), width=2)
 
+    # --- Fresnel zone color based on clearance percentage ---
+    # >=60% — green (reliable link, ITU-R recommendation)
+    # 0..60% — yellow (partial obstruction, degraded but possible)
+    # <0% — red (LOS blocked by terrain)
+    fresnel_pct_display = max(0.0, fresnel_pct)
+    if fresnel_pct >= 60:
+        fresnel_color = (0, 160, 0, 255)
+    elif fresnel_pct >= 0:
+        fresnel_color = (200, 180, 0, 255)
+    else:
+        fresnel_color = (200, 0, 0, 255)
+
     # --- Draw Fresnel zone ---
     fresnel_upper = []
     fresnel_lower = []
@@ -321,8 +405,22 @@ def render_profile_inset(
 
     if fresnel_upper and fresnel_lower:
         if len(fresnel_upper) >= 2:
-            draw.line(fresnel_upper, fill=LINK_PROFILE_FRESNEL_BORDER_COLOR, width=LINK_PROFILE_LINE_WIDTH_PX)
-            draw.line(fresnel_lower, fill=LINK_PROFILE_FRESNEL_BORDER_COLOR, width=LINK_PROFILE_LINE_WIDTH_PX)
+            draw.line(fresnel_upper, fill=fresnel_color, width=LINK_PROFILE_LINE_WIDTH_PX)
+            draw.line(fresnel_lower, fill=fresnel_color, width=LINK_PROFILE_LINE_WIDTH_PX)
+
+            # Frequency + Fresnel % label near the middle of the upper Fresnel arc
+            mid_idx = len(fresnel_upper) // 2
+            fu_x, fu_y = fresnel_upper[mid_idx]
+            draw_text_with_outline(
+                draw,
+                (fu_x, fu_y - axis_label_gap),
+                f'{freq_mhz:.0f} МГц',
+                font=small_font,
+                fill=fresnel_color[:3],
+                outline=(255, 255, 255),
+                outline_width=1,
+                anchor='mb',
+            )
 
     # --- Draw LOS line ---
     los_points = []
@@ -332,60 +430,61 @@ def render_profile_inset(
         draw.line(los_points, fill=LINK_PROFILE_LOS_LINE_COLOR, width=LINK_PROFILE_LINE_WIDTH_PX)
 
     # --- Draw antenna masts (black vertical lines at terrain→antenna top) ---
-    antenna_color = (0, 0, 0, 255)
+    antenna_color = LINK_PROFILE_ANTENNA_COLOR
     # Point A: from terrain surface to antenna top
     xa_base_x, xa_base_y = to_screen(0, effective_terrain[0])
     xa_top_x, xa_top_y = to_screen(0, effective_terrain[0] + antenna_a_m)
     draw.line(
         [(xa_base_x, xa_base_y), (xa_top_x, xa_top_y)],
-        fill=antenna_color, width=LINK_PROFILE_LINE_WIDTH_PX,
+        fill=antenna_color, width=LINK_PROFILE_ANTENNA_WIDTH_PX,
     )
     # Point B: from terrain surface to antenna top
     xb_base_x, xb_base_y = to_screen(total_d, effective_terrain[-1])
     xb_top_x, xb_top_y = to_screen(total_d, effective_terrain[-1] + antenna_b_m)
     draw.line(
         [(xb_base_x, xb_base_y), (xb_top_x, xb_top_y)],
-        fill=antenna_color, width=LINK_PROFILE_LINE_WIDTH_PX,
+        fill=antenna_color, width=LINK_PROFILE_ANTENNA_WIDTH_PX,
     )
 
     # --- Point name labels below the plot (под подписями оси расстояния) ---
-    point_label_y = plot_y1 + 5 + small_font_size_px + 4
+    # Точка A — привязка к левому краю, не выходить за plot_x0
+    # Точка B — привязка к правому краю, не выходить за plot_x1
+    point_label_y = plot_y1 + tick_len + axis_label_gap + small_font_size_px + axis_label_gap
     draw_text_with_outline(
         draw,
-        (xa_base_x, point_label_y),
+        (max(xa_base_x, plot_x0), point_label_y),
         point_a_name,
         font=small_font,
         fill=LINK_PROFILE_POINT_A_COLOR,
         outline=(255, 255, 255),
         outline_width=1,
-        anchor='mt',
+        anchor='lt',
     )
     draw_text_with_outline(
         draw,
-        (xb_base_x, point_label_y),
+        (min(xb_base_x, plot_x1), point_label_y),
         point_b_name,
         font=small_font,
         fill=LINK_PROFILE_POINT_B_COLOR,
         outline=(255, 255, 255),
         outline_width=1,
-        anchor='mt',
+        anchor='rt',
     )
 
     # --- X axis labels (distance) ---
-    dist_km = total_d / 1000.0
     if dist_km > 1:
         step_km = max(1, int(dist_km / 6))
         d_val = step_km
         while d_val <= dist_km:
             gx, _ = to_screen(d_val * 1000, e_min)
             draw.line(
-                [(gx, plot_y1), (gx, plot_y1 + 4)],
+                [(gx, plot_y1), (gx, plot_y1 + tick_len)],
                 fill=(100, 100, 100, 200),
                 width=1,
             )
             draw_text_with_outline(
                 draw,
-                (gx, plot_y1 + 5),
+                (gx, plot_y1 + tick_len + axis_label_gap),
                 f'{d_val}',
                 font=small_font,
                 fill=(80, 80, 80),
@@ -400,9 +499,14 @@ def render_profile_inset(
         d_val = step_m
         while d_val <= total_d:
             gx, _ = to_screen(d_val, e_min)
+            draw.line(
+                [(gx, plot_y1), (gx, plot_y1 + tick_len)],
+                fill=(100, 100, 100, 200),
+                width=1,
+            )
             draw_text_with_outline(
                 draw,
-                (gx, plot_y1 + 5),
+                (gx, plot_y1 + tick_len + axis_label_gap),
                 f'{int(d_val)}м',
                 font=small_font,
                 fill=(80, 80, 80),
@@ -416,7 +520,7 @@ def render_profile_inset(
     unit_label = 'км' if dist_km > 1 else 'м'
     draw_text_with_outline(
         draw,
-        (plot_x1, plot_y1 + 5),
+        (plot_x1, plot_y1 + tick_len + axis_label_gap),
         unit_label,
         font=small_font,
         fill=(80, 80, 80),
@@ -425,37 +529,14 @@ def render_profile_inset(
         anchor='lt',
     )
 
-    # --- Title ---
-    dist_str = (
-        f'{dist_km:.1f} км' if dist_km >= 1 else f'{int(total_d)} м'
-    )
-    title = (
-        f'Профиль: {point_a_name} → {point_b_name}, '
-        f'{dist_str}, {freq_mhz:.0f} МГц'
-    )
-    draw_text_with_outline(
-        draw,
-        (inset_w // 2, 6 + font_size_px),
-        title,
-        font=font,
-        fill=(30, 30, 30),
-        outline=(255, 255, 255),
-        outline_width=2,
-        anchor='mt',
-    )
-
     # --- Status line ---
-    if worst_clearance < 0:
-        status = f'Затенение! Просвет: {worst_clearance:.1f} м'
-        status_color = (200, 0, 0)
-    else:
-        status = f'Просвет: {worst_clearance:.1f} м ({fresnel_pct:.0f}% Френеля)'
-        status_color = (0, 120, 0) if fresnel_pct >= 60 else (200, 140, 0)
+    status = f'{total_d / 1000:.2f} км, просвет: {worst_clearance:.1f} м (свободно {fresnel_pct_display:.0f}% зоны Френеля)'
+    status_color = fresnel_color[:3]
 
-    # Bottom status line (centered)
+    # Bottom status line (centered, anchored to bottom of inset)
     draw_text_with_outline(
         draw,
-        (inset_w // 2, inset_h - 6 - small_font_size_px),
+        (inset_w // 2, inset_h - 6),
         status,
         font=small_font,
         fill=status_color,
