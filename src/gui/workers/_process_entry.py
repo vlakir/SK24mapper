@@ -45,6 +45,11 @@ logger = logging.getLogger(__name__)
 
 _ZLIB_LEVEL = 1
 
+# SharedMemory блоки, которые нужно держать открытыми до выхода процесса.
+# На Windows mapping уничтожается при закрытии последнего хэндла,
+# поэтому writer НЕ закрывает хэндл — reader откроет свой и сделает unlink.
+_shm_keep_alive: list[SharedMemory] = []
+
 # Sentinels для rh_cache dict values
 _SHM_PIL_SENTINEL = '__shm_pil__'
 _SHM_NPY_SENTINEL = '__shm_npy__'
@@ -55,9 +60,8 @@ def _write_to_shm(data: bytes) -> str:
     """Записать bytes в новый SharedMemory блок, вернуть имя."""
     shm = SharedMemory(create=True, size=len(data))
     shm.buf[: len(data)] = data
-    name = shm.name
-    shm.close()  # close handle, but don't unlink — reader сделает unlink
-    return name
+    _shm_keep_alive.append(shm)  # НЕ закрываем — reader откроет и сделает unlink
+    return shm.name
 
 
 def _read_from_shm(name: str, size: int) -> bytes:
@@ -401,3 +405,13 @@ def worker_process_main(
     except Exception as e:
         logger.exception('Worker process failed')
         queue.put(('finished', False, str(e)))
+    finally:
+        # На Windows SharedMemory уничтожается при закрытии всех хэндлов.
+        # Ждём, чтобы reader-поток в родительском процессе успел открыть
+        # свои хэндлы на shared memory блоки, затем освобождаем.
+        if _shm_keep_alive:
+            time.sleep(2)
+            for shm in _shm_keep_alive:
+                with contextlib.suppress(Exception):
+                    shm.close()
+            _shm_keep_alive.clear()
