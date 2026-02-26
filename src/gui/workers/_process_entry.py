@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import importlib
 import io
 import logging
 import os
@@ -378,28 +377,26 @@ def worker_process_main(
         logger.debug('Failed to set up file logging', exc_info=True)
     logging.basicConfig(level=logging.INFO, format=log_fmt, handlers=handlers)
 
-    _progress = importlib.import_module('shared.progress')
-    _cancelled_error = _progress.CancelledError
-    _cancel_token_cls = _progress.EventCancelToken
+    from services import map_job
+    from shared import diagnostics
+    from shared.progress import CancelledError, EventCancelToken
 
     sink = QueueProgressSink(queue)
-    cancel = _cancel_token_cls(cancel_event)
+    cancel = EventCancelToken(cancel_event)
 
     try:
         # Глубокая проверка API до старта тяжёлой работы
         sink.on_spinner('Проверка подключения…')
-        _diag = importlib.import_module('shared.diagnostics')
         asyncio.run(
-            _diag.run_deep_verification(
+            diagnostics.run_deep_verification(
                 api_key=params.api_key,
                 settings=params.settings,
             )
         )
 
-        _map_job = importlib.import_module('services.map_job')
-        _map_job.run_map_job(params, sink, cancel)
+        map_job.run_map_job(params, sink, cancel)
         queue.put(('finished', True, ''))
-    except _cancelled_error:
+    except CancelledError:
         queue.put(('finished', False, 'Операция отменена пользователем'))
     except Exception as e:
         logger.exception('Worker process failed')

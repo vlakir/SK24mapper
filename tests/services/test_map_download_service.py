@@ -1,6 +1,5 @@
 """Tests for services.map_download_service module."""
 
-import sys
 import asyncio
 from types import SimpleNamespace
 
@@ -84,26 +83,13 @@ async def test_run_processor_branches(monkeypatch):
     async def fake_return(_ctx):
         return Image.new("RGB", (1, 1))
 
-    sys.modules["services.processors.xyz_tiles"] = SimpleNamespace(
-        process_xyz_tiles=fake_return
-    )
-    sys.modules["services.processors.elevation_color"] = SimpleNamespace(
-        process_elevation_color=fake_return
-    )
-    sys.modules["services.processors.elevation_contours"] = SimpleNamespace(
-        process_elevation_contours=fake_return
-    )
-    sys.modules["services.processors.radio_horizon"] = SimpleNamespace(
-        process_radio_horizon=fake_return
-    )
-
-    sys.modules["services.processors.radar_coverage"] = SimpleNamespace(
-        process_radar_coverage=fake_return
-    )
-
-    sys.modules["services.processors.elevation_hillshade"] = SimpleNamespace(
-        process_elevation_hillshade=fake_return
-    )
+    # Patch processor functions on the already-imported module references
+    monkeypatch.setattr(map_download_service.xyz_tiles, "process_xyz_tiles", fake_return)
+    monkeypatch.setattr(map_download_service.elevation_color, "process_elevation_color", fake_return)
+    monkeypatch.setattr(map_download_service.elevation_contours, "process_elevation_contours", fake_return)
+    monkeypatch.setattr(map_download_service.radio_horizon, "process_radio_horizon", fake_return)
+    monkeypatch.setattr(map_download_service.radar_coverage, "process_radar_coverage", fake_return)
+    monkeypatch.setattr(map_download_service.elevation_hillshade, "process_elevation_hillshade", fake_return)
 
     service = MapDownloadService("token")
     ctx = SimpleNamespace(

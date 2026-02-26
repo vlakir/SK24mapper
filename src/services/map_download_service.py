@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import gc
-import importlib
 import logging
 import math
 import time
@@ -56,6 +55,15 @@ from services.map_postprocessing import (
     draw_center_cross_on_image,
     draw_control_point_triangle,
     draw_radar_marker,
+)
+from services.processors import (
+    elevation_color,
+    elevation_contours,
+    elevation_hillshade,
+    link_profile,
+    radar_coverage,
+    radio_horizon,
+    xyz_tiles,
 )
 from services.processors.elevation_contours import (
     apply_contours_to_image,
@@ -574,36 +582,21 @@ class MapDownloadService:
             is_link_profile,
         )
 
-    async def _run_processor(self, ctx: MapDownloadContext) -> Image.Image:
+    async def _run_processor(self, ctx: MapDownloadContext) -> Image.Image:  # noqa: PLR0911
         """Run appropriate processor based on map type."""
-        mod_name: str
-        func_name: str
-
         if ctx.is_link_profile:
-            mod_name = 'services.processors.link_profile'
-            func_name = 'process_link_profile'
-        elif ctx.is_elev_color:
+            return await link_profile.process_link_profile(ctx)
+        if ctx.is_elev_color:
             if ctx.settings.map_type == MapType.ELEVATION_HILLSHADE:
-                mod_name = 'services.processors.elevation_hillshade'
-                func_name = 'process_elevation_hillshade'
-            else:
-                mod_name = 'services.processors.elevation_color'
-                func_name = 'process_elevation_color'
-        elif ctx.is_elev_contours:
-            mod_name = 'services.processors.elevation_contours'
-            func_name = 'process_elevation_contours'
-        elif ctx.is_radio_horizon:
-            mod_name = 'services.processors.radio_horizon'
-            func_name = 'process_radio_horizon'
-        elif ctx.is_radar_coverage:
-            mod_name = 'services.processors.radar_coverage'
-            func_name = 'process_radar_coverage'
-        else:
-            mod_name = 'services.processors.xyz_tiles'
-            func_name = 'process_xyz_tiles'
-
-        module = importlib.import_module(mod_name)
-        return await getattr(module, func_name)(ctx)
+                return await elevation_hillshade.process_elevation_hillshade(ctx)
+            return await elevation_color.process_elevation_color(ctx)
+        if ctx.is_elev_contours:
+            return await elevation_contours.process_elevation_contours(ctx)
+        if ctx.is_radio_horizon:
+            return await radio_horizon.process_radio_horizon(ctx)
+        if ctx.is_radar_coverage:
+            return await radar_coverage.process_radar_coverage(ctx)
+        return await xyz_tiles.process_xyz_tiles(ctx)
 
     async def _postprocess(self, ctx: MapDownloadContext) -> None:
         """Apply post-processing to the result image."""
