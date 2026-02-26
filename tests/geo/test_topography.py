@@ -8,9 +8,7 @@ from PIL import Image
 from geo.topography import (
     assemble_dem,
     build_transformers_sk42,
-    cache_dem_tile,
     choose_zoom_with_limit,
-    clear_dem_cache,
     colorize_dem_to_image,
     compute_grid,
     compute_percentiles,
@@ -19,8 +17,6 @@ from geo.topography import (
     decode_terrain_rgb_to_elevation_m,
     effective_scale_for_xyz,
     estimate_crop_size_px,
-    get_cached_dem_tile,
-    get_dem_cache_stats,
     latlng_to_final_pixel,
     latlng_to_pixel_xy,
     meters_per_pixel,
@@ -421,27 +417,6 @@ class TestTopographySk42AndDem:
         img = Image.new('RGB', (10, 10), color=(1, 2, 3))
         elev = decode_terrain_rgb_to_elevation_m(img)
         assert elev[0][0] == pytest.approx(-3394.9, rel=1e-3)
-
-def test_dem_cache():
-    clear_dem_cache()
-    # stats might be affected by other tests if they run in same process
-    # but clear_dem_cache should reset it
-    _, total_px = get_dem_cache_stats()
-    # If it's not 0, it means clear_dem_cache might have some issues or concurrent tests
-    # Let's just test that it changes
-    
-    z, x, y = 10, 100, 200
-    dem = np.zeros((10, 10), dtype=np.float32)
-    cache_dem_tile(z, x, y, dem)
-    
-    cached = get_cached_dem_tile(z, x, y)
-    assert cached is not None
-    assert np.array_equal(cached, dem)
-    
-    clear_dem_cache()
-    # Check if we can still get it
-    assert get_cached_dem_tile(z, x, y) is None
-
 
 def test_assemble_dem():
     t1 = np.ones((256, 256), dtype=np.float32)

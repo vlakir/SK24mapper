@@ -14,7 +14,6 @@ from pyproj.transformer import TransformerGroup
 from scipy.ndimage import gaussian_filter
 
 from shared.constants import (
-    _DEM_CACHE_MAX_SIZE,
     EARTH_RADIUS_M,
     EAST_VECTOR_SAMPLE_M,
     ELEV_MIN_RANGE_M,
@@ -599,35 +598,6 @@ def compute_hillshade(
         az_rad - aspect
     )
     return np.clip(hs, 0, 1).astype(np.float32)
-
-
-# Кэш для декодированных DEM-тайлов (~400 MB при 100 тайлах
-# 512x512 float32)
-_dem_tile_cache: dict[tuple[int, int, int], np.ndarray] = {}
-
-
-def get_cached_dem_tile(z: int, x: int, y: int) -> np.ndarray | None:
-    """Возвращает закэшированный DEM-тайл или None."""
-    return _dem_tile_cache.get((z, x, y))
-
-
-def cache_dem_tile(z: int, x: int, y: int, dem: np.ndarray) -> None:
-    """Кэширует DEM-тайл с ограничением размера кэша."""
-    if len(_dem_tile_cache) >= _DEM_CACHE_MAX_SIZE:
-        # Удаляем самый старый элемент (FIFO)
-        oldest_key = next(iter(_dem_tile_cache))
-        del _dem_tile_cache[oldest_key]
-    _dem_tile_cache[(z, x, y)] = dem
-
-
-def clear_dem_cache() -> None:
-    """Очищает кэш DEM-тайлов."""
-    _dem_tile_cache.clear()
-
-
-def get_dem_cache_stats() -> tuple[int, int]:
-    """Возвращает (текущий размер кэша, максимальный размер)."""
-    return len(_dem_tile_cache), _DEM_CACHE_MAX_SIZE
 
 
 def assemble_dem(

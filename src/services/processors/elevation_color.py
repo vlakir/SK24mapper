@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import logging
 import math
 import random
@@ -85,6 +86,9 @@ async def process_elevation_color(ctx: MapDownloadContext) -> Image.Image:
     lut = color_mapper.lut
     lut_indices = (t * (len(lut) - 1)).astype(np.int32)
     rgb = lut[lut_indices]  # (H, W, 3)
+
+    del dem_full, t, lut_indices
+    gc.collect()
 
     # 5. Scale back if downsampled
     target_w, target_h = ctx.crop_rect[2], ctx.crop_rect[3]

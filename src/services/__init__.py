@@ -4,6 +4,8 @@ from services.color_utils import ColorMapper, build_color_lut, color_at_lut, ler
 from services.coordinate_transformer import (
     CoordinateResult,
     CoordinateTransformer,
+    gk_to_sk42_raw,
+    is_point_within_bounds,
     validate_control_point_bounds,
 )
 from services.dem_colorizer import colorize_dem_overlap, colorize_dem_tile_numpy
@@ -56,6 +58,8 @@ __all__ = [
     'draw_control_point_marker',
     'draw_control_point_triangle',
     'fetch_xyz_tiles_batch',
+    'gk_to_sk42_raw',
+    'is_point_within_bounds',
     'lerp',
     'process_elevation_color',
     'process_elevation_contours',

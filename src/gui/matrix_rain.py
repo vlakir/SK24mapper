@@ -3,11 +3,23 @@
 from __future__ import annotations
 
 import math
-import random
+from random import Random
 
-from PySide6.QtCore import QPointF, QTimer, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QFontMetricsF, QPainter, QPaintEvent
+from PySide6.QtCore import QPointF, Qt, QTimer, Signal
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QFontMetricsF,
+    QPainter,
+    QPaintEvent,
+    QResizeEvent,
+)
 from PySide6.QtWidgets import QWidget
+
+from shared.constants import LOADING_FADE_OUT_MS
+
+# Dedicated RNG instance for visual effects (not for cryptographic purposes)
+_rng = Random()
 
 # Latin + Cyrillic + digits
 _MATRIX_CHARS = (
@@ -16,7 +28,7 @@ _MATRIX_CHARS = (
     + [chr(c) for c in range(0x0410, 0x0430)]  # А-Я
     + [chr(c) for c in range(0x0430, 0x0450)]  # а-я
     + [chr(c) for c in range(0x0030, 0x003A)]  # 0-9
-    + list(".,;:!?@#$%&*+-=<>()[]{}/\\|~^")
+    + list('.,;:!?@#$%&*+-=<>()[]{}/\\|~^')
 )
 
 # Timing
@@ -34,8 +46,9 @@ _CHAR_FLICKER_PROB = 0.08  # chance to randomise a trail character each tick
 _SPIN_PROBABILITY = 0.036  # chance per char per tick to start spinning
 _SPIN_SPEED = 0.18  # radians per tick (full flip ≈ 35 ticks ≈ 1.4 s)
 
-# Fade-out
-from shared.constants import LOADING_FADE_OUT_MS
+# Thresholds
+_INITIAL_DROP_PROB = 0.5  # probability to seed initial drops
+_EDGE_ON_THRESHOLD = 0.05  # cos(phase) below which char is invisible
 
 
 class MatrixRainWidget(QWidget):
@@ -46,9 +59,9 @@ class MatrixRainWidget(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self.setStyleSheet("background: black;")
+        self._bg_color = QColor(0, 0, 0)
 
-        self._font = QFont("Consolas", _FONT_SIZE)
+        self._font = QFont('Consolas', _FONT_SIZE)
         self._font.setStyleHint(QFont.StyleHint.Monospace)
         self._fm = QFontMetricsF(self._font)
 
@@ -56,8 +69,8 @@ class MatrixRainWidget(QWidget):
         self._row_h = int(_FONT_SIZE * 1.35)
         self._half_col_w = self._col_w / 2.0
 
-        # drop = [row, speed, chars, alive, spins]
-        #   spins: list of float|None per char — None = not spinning, else phase in [0, 2π)
+        # Drop structure: [row, speed, chars, alive, spins]
+        # where spins is list of float|None per char (None=still, float=phase)
         self._drops: list[list] = []
         self._num_cols = 0
         self._num_rows = 0
@@ -105,14 +118,14 @@ class MatrixRainWidget(QWidget):
         self._drops = [[] for _ in range(self._num_cols)]
         # Seed some initial drops so it doesn't start blank
         for col_drops in self._drops:
-            if random.random() < 0.5:
+            if _rng.random() < _INITIAL_DROP_PROB:
                 col_drops.append(self._make_drop(scatter=True))
 
     def _make_drop(self, *, scatter: bool = False) -> list:
         """Create: [row, speed, chars, alive, spins]."""
-        start_row = -random.randint(0, self._num_rows) if scatter else 0.0
-        speed = random.uniform(0.2, 0.6)
-        chars = [random.choice(_MATRIX_CHARS) for _ in range(_TRAIL_LENGTH)]
+        start_row = -_rng.randint(0, self._num_rows) if scatter else 0.0
+        speed = _rng.uniform(0.2, 0.6)
+        chars = [_rng.choice(_MATRIX_CHARS) for _ in range(_TRAIL_LENGTH)]
         spins: list[float | None] = [None] * _TRAIL_LENGTH
         return [float(start_row), speed, chars, True, spins]
 
@@ -129,7 +142,7 @@ class MatrixRainWidget(QWidget):
 
         for col_drops in self._drops:
             # Spawn new drops (stop spawning during fade-out)
-            if not self._fading_out and random.random() < _SPAWN_PROBABILITY:
+            if not self._fading_out and _rng.random() < _SPAWN_PROBABILITY:
                 col_drops.append(self._make_drop())
 
             alive = []
@@ -139,11 +152,11 @@ class MatrixRainWidget(QWidget):
                 spins = drop[4]
                 for i in range(_TRAIL_LENGTH):
                     # Flicker
-                    if random.random() < _CHAR_FLICKER_PROB:
-                        chars[i] = random.choice(_MATRIX_CHARS)
+                    if _rng.random() < _CHAR_FLICKER_PROB:
+                        chars[i] = _rng.choice(_MATRIX_CHARS)
                     # Spin logic
                     if spins[i] is None:
-                        if random.random() < _SPIN_PROBABILITY:
+                        if _rng.random() < _SPIN_PROBABILITY:
                             spins[i] = 0.0
                     else:
                         spins[i] += _SPIN_SPEED
@@ -158,9 +171,9 @@ class MatrixRainWidget(QWidget):
 
         self.update()
 
-    def paintEvent(self, event: QPaintEvent) -> None:
+    def paintEvent(self, _event: QPaintEvent) -> None:
         painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor(0, 0, 0))
+        painter.fillRect(self.rect(), self._bg_color)
         painter.setFont(self._font)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
 
@@ -203,7 +216,7 @@ class MatrixRainWidget(QWidget):
                     if spin_phase is not None:
                         # Y-axis rotation: horizontal scale = cos(phase)
                         sx = math.cos(spin_phase)
-                        if abs(sx) < 0.05:
+                        if abs(sx) < _EDGE_ON_THRESHOLD:
                             continue  # edge-on — invisible
                         char_w = fm.horizontalAdvance(ch)
                         painter.save()
@@ -219,7 +232,7 @@ class MatrixRainWidget(QWidget):
 
         painter.end()
 
-    def resizeEvent(self, event) -> None:
+    def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
         if self._timer.isActive():
             self._init_grid()

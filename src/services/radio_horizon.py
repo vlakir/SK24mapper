@@ -665,6 +665,7 @@ def compute_and_colorize_coverage(
     full_values = cv2.resize(
         grid_values, (w, h), interpolation=cv2.INTER_LINEAR
     ).astype(np.float32)
+    del grid_values
 
     # Пересчёт высот в зависимости от режима отсчёта.
     # Для РЛС (sector_enabled) всегда используется GROUND — высота над поверхностью.
@@ -741,6 +742,11 @@ def compute_and_colorize_coverage(
         beam_raised = inside_valid & ~dead_zone & (h_beam_min > fv)
         full_values[beam_raised] = h_beam_min[beam_raised]
 
+        # Free sector intermediate arrays
+        del col_grid, row_grid, dx, dy, dist_px, dist_m
+        del outside_range, outside_sector, outside, inside_valid
+        del h_beam_min, h_beam_max, fv, effective_h, dead_zone, beam_raised
+
     # Строим LUT и раскрашиваем
     lut_size = RADIO_HORIZON_LUT_SIZE
     lut = _build_color_lut(color_ramp, unreachable_color, lut_size)
@@ -771,6 +777,7 @@ def compute_and_colorize_coverage(
     indices[unreachable_mask] = unreachable_idx
 
     rgb = lut[indices]
+    del full_values, indices, unreachable_mask
     return Image.fromarray(rgb)
 
 
@@ -912,11 +919,13 @@ def recompute_coverage_fast(
         result = result.convert('RGBA')
         blend_alpha = 1.0 - overlay_alpha
         blended = Image.blend(topo_base, result, blend_alpha)
+        del topo_base  # free resized copy
 
         # 2. Rotate keeping same canvas size (same as rotate_keep_size in first build)
         step_start = time.monotonic()
         blended = rotate_keep_size(blended, rotation_deg, fill=(128, 128, 128))
         coverage_rotated = rotate_keep_size(result, rotation_deg, fill=(0, 0, 0, 0))
+        del result  # free pre-rotation copy
         step_elapsed = time.monotonic() - step_start
         _logger.info('    └─ Rotate by %.1f°: %.3f sec', rotation_deg, step_elapsed)
 

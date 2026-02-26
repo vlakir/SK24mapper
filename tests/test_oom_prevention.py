@@ -137,16 +137,11 @@ class TestEstimateMapMemory:
 
     def test_contours_no_extra_memory(self):
         """Contours via PIL ImageDraw don't add extra memory (no numpy copy)."""
-        est_no = estimate_map_memory_mb(
+        est = estimate_map_memory_mb(
             tiles_count=100, eff_tile_px=256,
-            crop_w=2000, crop_h=2000, has_contours=False,
+            crop_w=2000, crop_h=2000,
         )
-        est_yes = estimate_map_memory_mb(
-            tiles_count=100, eff_tile_px=256,
-            crop_w=2000, crop_h=2000, has_contours=True,
-        )
-        assert est_yes['peak_mb'] == est_no['peak_mb']
-        assert est_yes['contour_mb'] == 0.0
+        assert est['contour_mb'] == 0.0
 
     def test_known_values(self):
         """Verify calculation for known input."""

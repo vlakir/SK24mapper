@@ -110,6 +110,7 @@ def draw_sector_overlay(
         max_range_px,
         font,
     )
+    del draw
 
 
 def _draw_ceiling_arcs(
@@ -228,14 +229,14 @@ def _paste_rotated_label(
 
     """
     # 1. Рисуем текст горизонтально на прозрачном холсте
-    tmp = Image.new('RGBA', (1, 1), (0, 0, 0, 0))
-    tmp_draw = ImageDraw.Draw(tmp)
-    bbox = tmp_draw.textbbox((0, 0), text, font=font)
+    tmp_measure = Image.new('RGBA', (1, 1), (0, 0, 0, 0))
+    bbox = ImageDraw.Draw(tmp_measure).textbbox((0, 0), text, font=font)
+    tmp_measure.close()
+    del tmp_measure
     tw = int(bbox[2] - bbox[0] + 4)
     th = int(bbox[3] - bbox[1] + 4)
     tmp = Image.new('RGBA', (tw, th), (0, 0, 0, 0))
-    tmp_draw = ImageDraw.Draw(tmp)
-    tmp_draw.text((-bbox[0] + 2, -bbox[1] + 2), text, fill=color, font=font)
+    ImageDraw.Draw(tmp).text((-bbox[0] + 2, -bbox[1] + 2), text, fill=color, font=font)
 
     # 2. Угол поворота текста: вдоль луча.
     #    Географ. азимут 0°=север → на экране луч идёт вверх → текст надо
@@ -266,3 +267,6 @@ def _paste_rotated_label(
     paste_y = int(label_y - rotated.height / 2)
 
     img.paste(rotated, (paste_x, paste_y), rotated)
+    tmp.close()
+    rotated.close()
+    del tmp, rotated

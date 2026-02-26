@@ -249,7 +249,7 @@ async def process_elevation_contours(ctx: MapDownloadContext) -> Image.Image:
                     continue
 
                 coords = [tuple(int(v) for v in pt) for pt in pts_array.tolist()]
-                if len(coords) >= 2:
+                if len(coords) >= MIN_POINTS_FOR_SEGMENT:
                     draw.line(coords, fill=color, width=width)
 
         del draw
@@ -864,7 +864,7 @@ async def apply_contours_to_image(
                         draw.line(current_segment, fill=fill_color, width=width)
                 else:
                     coords = [tuple(int(v) for v in pt) for pt in pts_array.tolist()]
-                    if len(coords) >= 2:
+                    if len(coords) >= MIN_POINTS_FOR_SEGMENT:
                         draw.line(coords, fill=fill_color, width=width)
 
         del draw

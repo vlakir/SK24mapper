@@ -1,4 +1,5 @@
-"""Mapping layer between flat MapSettings fields and sectioned TOML format.
+"""
+Mapping layer between flat MapSettings fields and sectioned TOML format.
 
 MapSettings remains a flat Pydantic model. This module provides two functions:
 - flat_to_sectioned(): flat dict → sectioned dict (for TOML save)
@@ -7,7 +8,6 @@ MapSettings remains a flat Pydantic model. This module provides two functions:
 
 from __future__ import annotations
 
-# {section_name: {flat_field_name: short_name_in_toml}}
 SECTION_MAP: dict[str, dict[str, str]] = {
     'helmert': {
         'helmert_enabled': 'enabled',

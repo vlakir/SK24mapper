@@ -27,19 +27,19 @@ rz_as = -2.03005
 ds_ppm = -1.43065
 
 [control_point]
-enabled = false
-x = 5422328
-y = 7448442
-name = ""
+enabled = true
+x = 5422352
+y = 7448621
+name = "Тополь"
 
 [radio_horizon]
 antenna_height_m = 10.0
-max_flight_height_m = 100.0
+max_flight_height_m = 500.0
 uav_height_reference = "control_point"
-overlay_alpha = 0.3
+overlay_alpha = 0.4
 
 [radar_coverage]
-azimuth_deg = 217.0
+azimuth_deg = 223.0
 sector_width_deg = 90.0
 elevation_min_deg = 1.0
 elevation_max_deg = 30.0

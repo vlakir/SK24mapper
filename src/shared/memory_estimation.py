@@ -12,8 +12,8 @@ from shared.constants import (
 logger = logging.getLogger(__name__)
 
 # Bytes per pixel for different data types
-_BYTES_PER_PX_RGB = 3       # PIL RGB image
-_BYTES_PER_PX_F32 = 4       # numpy float32 DEM
+_BYTES_PER_PX_RGB = 3  # PIL RGB image
+_BYTES_PER_PX_F32 = 4  # numpy float32 DEM
 _MB = 1024 * 1024
 
 # Padding увеличивает линейные размеры с каждой стороны
@@ -26,8 +26,8 @@ def estimate_map_memory_mb(
     eff_tile_px: int,
     crop_w: int,
     crop_h: int,
+    *,
     is_dem: bool = False,
-    has_contours: bool = False,
 ) -> dict:
     """
     Estimate peak memory consumption for map building.
@@ -61,12 +61,10 @@ def estimate_map_memory_mb(
         dem_canvas_mb = padded_pixels * _BYTES_PER_PX_F32 / _MB
         dem_mb = dem_tiles_mb + dem_canvas_mb
 
-    # DEM for cursor elevation (loaded separately in postprocessing)
-    # Загружается как отдельный набор DEM-тайлов + resize до target размера
-    dem_cursor_mb = (
-        tiles_count * tile_pixels * _BYTES_PER_PX_F32 / _MB  # DEM tiles
-        + crop_w * crop_h * _BYTES_PER_PX_F32 / _MB          # resized grid
-    )
+    # DEM for cursor elevation (resized grid kept in GUI for mouse hover)
+    # When is_dem=True, raw DEM is already accounted for above;
+    # only the resized-to-display grid is additional memory.
+    dem_cursor_mb = crop_w * crop_h * _BYTES_PER_PX_F32 / _MB
 
     # Contours overlay: PIL ImageDraw.line() рисует in-place на PIL Image,
     # без промежуточного numpy-массива → дополнительная память не нужна.
@@ -74,8 +72,9 @@ def estimate_map_memory_mb(
 
     base_mb = tiles_mb + canvas_mb + dem_mb + dem_cursor_mb + contour_mb
 
-    # Overhead: rotation buffer, intermediate PIL operations, Python objects
-    overhead_mb = base_mb * 0.2
+    # Overhead: rotation buffer, intermediate PIL operations, Python objects,
+    # rh_cache copies for interactive alpha
+    overhead_mb = base_mb * 0.35
 
     peak_mb = base_mb + overhead_mb
 
@@ -95,6 +94,7 @@ def get_available_memory_mb() -> float:
     """Return available system memory in MB. Returns 0 if psutil unavailable."""
     try:
         import psutil
+
         return psutil.virtual_memory().available / _MB
     except Exception:
         return 0.0
@@ -107,8 +107,8 @@ def choose_safe_zoom(
     desired_zoom: int,
     eff_scale: int,
     max_pixels: int,
+    *,
     is_dem: bool = False,
-    has_contours: bool = False,
     safety_ratio: float = MEMORY_SAFETY_RATIO,
     min_free_mb: float = MEMORY_MIN_FREE_MB,
 ) -> tuple[int, dict]:
@@ -124,7 +124,11 @@ def choose_safe_zoom(
     zoom = desired_zoom
     while zoom >= 0:
         crop_w, crop_h, total_pixels = estimate_crop_size_px(
-            center_lat, width_m, height_m, zoom, eff_scale,
+            center_lat,
+            width_m,
+            height_m,
+            zoom,
+            eff_scale,
         )
 
         # Check pixel limit
@@ -145,14 +149,15 @@ def choose_safe_zoom(
             crop_w=crop_w,
             crop_h=crop_h,
             is_dem=is_dem,
-            has_contours=has_contours,
         )
 
         # If psutil unavailable (available_mb == 0), skip memory check
         if available_mb > 0 and mem_est['peak_mb'] > memory_budget_mb:
             logger.info(
                 'Zoom %d: peak ~%.0f MB > budget ~%.0f MB, снижаем',
-                zoom, mem_est['peak_mb'], memory_budget_mb,
+                zoom,
+                mem_est['peak_mb'],
+                memory_budget_mb,
             )
             zoom -= 1
             continue
@@ -174,7 +179,10 @@ def choose_safe_zoom(
             logger.info(
                 'Zoom снижен %d → %d для экономии RAM '
                 '(peak ~%.0f MB, available ~%.0f MB)',
-                desired_zoom, zoom, mem_est['peak_mb'], available_mb,
+                desired_zoom,
+                zoom,
+                mem_est['peak_mb'],
+                available_mb,
             )
 
         return zoom, info

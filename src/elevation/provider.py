@@ -51,7 +51,7 @@ class ElevationTileProvider:
         *,
         use_retina: bool,
         cache_root: Path | None = None,
-        max_mem_tiles: int = 512,
+        max_mem_tiles: int = 128,
     ) -> None:
         self.client = client
         self.api_key = api_key

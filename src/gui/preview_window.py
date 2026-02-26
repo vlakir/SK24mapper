@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import math
 import time
 
-from PySide6.QtCore import QEventLoop, QRectF, QTimer, Qt, Signal
+from PIL import Image
+from PySide6.QtCore import QEventLoop, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QBrush,
     QColor,
@@ -22,6 +24,7 @@ from PySide6.QtGui import (
     QWheelEvent,
 )
 from PySide6.QtWidgets import (
+    QGraphicsEllipseItem,
     QGraphicsLineItem,
     QGraphicsPixmapItem,
     QGraphicsRectItem,
@@ -32,7 +35,6 @@ from PySide6.QtWidgets import (
 )
 
 from gui.matrix_rain import MatrixRainWidget
-
 from shared.constants import (
     CONTROL_POINT_SIZE_M,
     LOADING_FADE_IN_MS,
@@ -40,10 +42,6 @@ from shared.constants import (
     PREVIEW_ROTATION_ANGLE,
     PREVIEW_UPRIGHT_TEXT_ANGLE_LIMIT,
 )
-
-from PIL import Image
-
-import math
 
 logger = logging.getLogger(__name__)
 
@@ -125,8 +123,12 @@ class OptimizedImageView(QGraphicsView):
         # Sector boundary lines (dashed, shown during rotation)
         self._sector_line_items: list[QGraphicsLineItem] = []
 
-        # Draggable points for link profile A/B markers
+        # Draggable points (link profile A/B, control point CP, etc.)
         self._draggable_points: dict[str, tuple[float, float]] = {}  # id → (x, y) scene
+        self._drag_colors: dict[str, QColor] = {}  # id → crosshair colour
+        self._drag_anchors: dict[
+            str, tuple[float, float]
+        ] = {}  # id → rubber band anchor
         self._dragging_point_id: str | None = None
         self._drag_hit_radius = 20  # pixels on screen
 
@@ -134,9 +136,14 @@ class OptimizedImageView(QGraphicsView):
         self._drag_marker_items: list[QGraphicsLineItem] = []
         self._drag_line_item: QGraphicsLineItem | None = None
         self._drag_other_point: tuple[float, float] | None = None
+        # Hover highlight (ring around hovered draggable point)
+        self._hover_highlight_item: QGraphicsEllipseItem | None = None
+        self._hover_point_id: str | None = None
 
         # Semi-transparent mask over stale inset during recompute
         self._inset_mask_item: QGraphicsRectItem | None = None
+        # Upper Y limit for draggable area (inset/chart boundary); None = no limit
+        self._drag_y_limit: float | None = None
 
         # Pre-rendered QPixmap of clean base (no overlay) for instant swap on drag
         self._clean_base_pixmap: QPixmap | None = None
@@ -144,6 +151,7 @@ class OptimizedImageView(QGraphicsView):
         # Loading overlay (Matrix rain, parented to viewport)
         self._loading_overlay = MatrixRainWidget(self.viewport())
         self._loading_overlay.hide()
+        self._fade_out_in_progress = False  # guard against stop_loading during fade
         # Fade-in: black QGraphicsRectItem in the scene with decreasing opacity
         self._fade_rect: QGraphicsRectItem | None = None
         self._fade_in_opacity = 0.0
@@ -184,7 +192,9 @@ class OptimizedImageView(QGraphicsView):
 
             # Convert PIL image to QPixmap (callers guarantee RGB)
             if pil_image.mode != 'RGB':
-                logger.warning('set_image: unexpected mode %s, converting to RGB', pil_image.mode)
+                logger.warning(
+                    'set_image: unexpected mode %s, converting to RGB', pil_image.mode
+                )
                 pil_image = pil_image.convert('RGB')
 
             width, height = pil_image.size
@@ -204,6 +214,11 @@ class OptimizedImageView(QGraphicsView):
             qpixmap = QPixmap.fromImage(qimage)
             t4 = time.monotonic()
 
+            # Release backing memory — QPixmap owns a deep copy of pixel data
+            del qimage
+            self._qimage_bytes = None
+            self._original_image = None
+
             # Clear scene and add image (invalidates all scene item references)
             self._fade_in_timer.stop()
             self._scene.clear()
@@ -219,6 +234,9 @@ class OptimizedImageView(QGraphicsView):
             self._drag_other_point = None
             self._inset_mask_item = None
             self._image_item = self._scene.addPixmap(qpixmap)
+            self._image_item.setFlag(
+                QGraphicsPixmapItem.GraphicsItemFlag.ItemClipsChildrenToShape
+            )
             t5 = time.monotonic()
 
             # Apply fixed rotation to improve thin line visibility
@@ -249,9 +267,14 @@ class OptimizedImageView(QGraphicsView):
             logger.info(
                 'set_image %dx%d: fade_out=%.3fs  tobytes=%.3fs  '
                 'QImage=%.3fs  QPixmap=%.3fs  scene=%.3fs  TOTAL=%.3fs',
-                width, height,
-                t_fade_out - t0, t2 - t1, t3 - t2, t4 - t3,
-                t5 - t4, time.monotonic() - t0,
+                width,
+                height,
+                t_fade_out - t0,
+                t2 - t1,
+                t3 - t2,
+                t4 - t3,
+                t5 - t4,
+                time.monotonic() - t0,
             )
 
         finally:
@@ -271,11 +294,14 @@ class OptimizedImageView(QGraphicsView):
         self._cp_label_item = None
         self._meters_per_px = 0.0
         self._draggable_points = {}
+        self._drag_colors = {}
+        self._drag_anchors = {}
         self._dragging_point_id = None
         self._drag_marker_items = []
         self._drag_line_item = None
         self._drag_other_point = None
         self._inset_mask_item = None
+        self._drag_y_limit = None
         self._clean_base_pixmap = None
         # Allow GC of previous image bytes when clearing
         if hasattr(self, '_qimage_bytes'):
@@ -483,7 +509,11 @@ class OptimizedImageView(QGraphicsView):
         ex = cx + length_px * math.sin(az_rad)
         ey = cy - length_px * math.cos(az_rad)
 
-        self._azimuth_line_item = self._scene.addLine(cx, cy, ex, ey, pen)
+        # Parent lines to _image_item so they are clipped to the map boundary
+        parent = self._image_item
+
+        self._azimuth_line_item = QGraphicsLineItem(cx, cy, ex, ey, parent)
+        self._azimuth_line_item.setPen(pen)
         self._azimuth_line_item.setZValue(20)
 
         # Label with geographic azimuth angle (not compensated) — placed at
@@ -493,7 +523,7 @@ class OptimizedImageView(QGraphicsView):
         label_y = cy - length_px * label_frac * math.cos(az_rad)
 
         label_text = f'{azimuth_deg:.0f}°'
-        self._azimuth_label_item = QGraphicsTextItem(label_text)
+        self._azimuth_label_item = QGraphicsTextItem(label_text, parent)
         self._azimuth_label_item.setDefaultTextColor(QColor(0, 255, 255))
         font = self._azimuth_label_item.font()
         font.setPointSize(14)
@@ -504,7 +534,6 @@ class OptimizedImageView(QGraphicsView):
         )
         self._azimuth_label_item.setPos(label_x, label_y)
         self._azimuth_label_item.setZValue(20)
-        self._scene.addItem(self._azimuth_label_item)
 
         # Sector boundary lines (semi-transparent cyan, dashed)
         if sector_width_deg > 0:
@@ -518,7 +547,8 @@ class OptimizedImageView(QGraphicsView):
                 edge_rad = math.radians(eff_az + offset_deg)
                 sx = cx + length_px * math.sin(edge_rad)
                 sy = cy - length_px * math.cos(edge_rad)
-                item = self._scene.addLine(cx, cy, sx, sy, sector_pen)
+                item = QGraphicsLineItem(cx, cy, sx, sy, parent)
+                item.setPen(sector_pen)
                 item.setZValue(19)
                 self._sector_line_items.append(item)
 
@@ -540,12 +570,91 @@ class OptimizedImageView(QGraphicsView):
         self._sector_line_items.clear()
 
     # ------------------------------------------------------------------
-    # Draggable points (link profile A/B markers)
+    # Draggable points (link profile A/B, control point CP, etc.)
     # ------------------------------------------------------------------
 
-    def set_draggable_points(self, points: dict[str, tuple[float, float]]) -> None:
-        """Set draggable point positions (scene/image coordinates)."""
+    def set_draggable_points(
+        self,
+        points: dict[str, tuple[float, float]],
+        *,
+        colors: dict[str, tuple[int, int, int]] | None = None,
+        anchors: dict[str, tuple[float, float]] | None = None,
+    ) -> None:
+        """
+        Replace all draggable points with optional per-point config.
+
+        Args:
+            points: id → (x, y) scene coordinates.
+            colors: id → (r, g, b) crosshair colour during drag.
+            anchors: id → (x, y) endpoint for rubber band line.
+
+        """
         self._draggable_points = dict(points)
+        self._drag_colors = {k: QColor(*v) for k, v in colors.items()} if colors else {}
+        self._drag_anchors = dict(anchors) if anchors else {}
+        if points:
+            logger.info(
+                'DRAG-DEBUG set_draggable_points: %s',
+                {k: (f'{v[0]:.1f}', f'{v[1]:.1f}') for k, v in points.items()},
+            )
+        else:
+            logger.info('DRAG-DEBUG set_draggable_points: {} (cleared)')
+
+    def merge_draggable_points(
+        self,
+        points: dict[str, tuple[float, float]],
+        *,
+        colors: dict[str, tuple[int, int, int]] | None = None,
+        anchors: dict[str, tuple[float, float]] | None = None,
+    ) -> None:
+        """
+        Add/update draggable points without removing existing ones.
+
+        Args:
+            points: id → (x, y) scene coordinates to add/update.
+            colors: id → (r, g, b) crosshair colour during drag.
+            anchors: id → (x, y) endpoint for rubber band line.
+
+        """
+        self._draggable_points.update(points)
+        if colors:
+            self._drag_colors.update({k: QColor(*v) for k, v in colors.items()})
+        if anchors:
+            self._drag_anchors.update(anchors)
+        if points:
+            logger.info(
+                'DRAG-DEBUG merge_draggable_points: added %s, total: %s',
+                list(points.keys()),
+                list(self._draggable_points.keys()),
+            )
+
+    def remove_draggable_point(self, point_id: str) -> None:
+        """Remove a single draggable point by id (no-op if absent)."""
+        removed = self._draggable_points.pop(point_id, None)
+        self._drag_colors.pop(point_id, None)
+        self._drag_anchors.pop(point_id, None)
+        if removed is not None:
+            logger.info(
+                'DRAG-DEBUG remove_draggable_point: %s, remaining: %s',
+                point_id,
+                list(self._draggable_points.keys()),
+            )
+
+    def _clamp_to_scene(self, sx: float, sy: float) -> tuple[float, float]:
+        """
+        Clamp scene coordinates to the draggable area bounds.
+
+        Respects both the scene rect and the optional inset boundary
+        (``_drag_y_limit``) so that points cannot be dragged into the
+        profile chart area.
+        """
+        rect = self._scene.sceneRect()
+        y_bottom = (
+            self._drag_y_limit if self._drag_y_limit is not None else rect.bottom()
+        )
+        cx = max(rect.left(), min(sx, rect.right()))
+        cy = max(rect.top(), min(sy, y_bottom))
+        return cx, cy
 
     def _hit_test_draggable(self, event: QMouseEvent) -> str | None:
         """Return point_id if cursor is near a draggable point, else None."""
@@ -557,7 +666,20 @@ class OptimizedImageView(QGraphicsView):
             view_pt = self.mapFromScene(sx, sy)
             dx = view_pos.x() - view_pt.x()
             dy = view_pos.y() - view_pt.y()
-            if dx * dx + dy * dy <= self._drag_hit_radius ** 2:
+            dist_sq = dx * dx + dy * dy
+            if dist_sq <= self._drag_hit_radius**2:
+                logger.info(
+                    'DRAG-DEBUG hit_test HIT %s: dist=%.1f px '
+                    '(view=%d,%d  point_view=%d,%d  scene=%.1f,%.1f)',
+                    pid,
+                    dist_sq**0.5,
+                    view_pos.x(),
+                    view_pos.y(),
+                    view_pt.x(),
+                    view_pt.y(),
+                    sx,
+                    sy,
+                )
                 return pid
         return None
 
@@ -570,11 +692,13 @@ class OptimizedImageView(QGraphicsView):
         pil_image: Image.Image,
         full_image: Image.Image | None = None,
     ) -> None:
-        """Pre-render and cache QPixmap of the clean base map for instant swap on drag.
+        """
+        Pre-render and cache QPixmap of the clean base map for instant swap on drag.
 
         Args:
             pil_image: Clean base (map only, no overlay).
             full_image: Full composite (map + inset). Inset area is blended with grey.
+
         """
         if pil_image.mode != 'RGB':
             pil_image = pil_image.convert('RGB')
@@ -594,24 +718,24 @@ class OptimizedImageView(QGraphicsView):
         self._clean_base_pixmap = QPixmap.fromImage(qimg)
 
     def _start_drag_feedback(self, point_id: str) -> None:
-        """Swap to clean base pixmap and remember the other point for rubber band."""
-        # Instantly remove yellow line + inset by swapping to clean base
+        """Prepare visual state for dragging: swap pixmap or clear markers."""
         if self._clean_base_pixmap is not None and self._image_item is not None:
+            # Link profile: swap to clean base (removes overlay/inset)
             self._image_item.setPixmap(self._clean_base_pixmap)
+        else:
+            # Generic point (e.g. CP): just clear scene markers
+            self.clear_control_point_markers()
 
-        other_id = 'B' if point_id == 'A' else 'A'
-        other = self._draggable_points.get(other_id)
-        self._drag_other_point = other
+        # Anchor for rubber band line — from per-point config
+        anchor = self._drag_anchors.get(point_id)
+        self._drag_other_point = anchor
 
     def _update_drag_feedback(self, sx: float, sy: float) -> None:
-        """Draw crosshair at (sx, sy) and a yellow dashed line to the other point."""
-        self._clear_drag_feedback()
+        """Draw crosshair at (sx, sy) and a dashed line to the anchor point."""
+        self.clear_drag_feedback()
 
-        # Crosshair color: blue for A, red for B
-        if self._dragging_point_id == 'A':
-            color = QColor(0, 0, 255)
-        else:
-            color = QColor(255, 0, 0)
+        # Crosshair colour from per-point config; default red
+        color = self._drag_colors.get(self._dragging_point_id or '', QColor(255, 0, 0))
 
         pen = QPen(color)
         pen.setWidth(2)
@@ -627,19 +751,27 @@ class OptimizedImageView(QGraphicsView):
         line2.setZValue(30)
         self._drag_marker_items = [line1, line2]
 
-        # Rubber band yellow dashed line to the other point
+        # Rubber band dashed line to anchor (yellow for A/B)
         if self._drag_other_point is not None:
             ox, oy = self._drag_other_point
-            line_pen = QPen(QColor(255, 255, 0))
+            # A/B link profile → yellow; other points → crosshair colour
+            pid = self._dragging_point_id or ''
+            line_color = QColor(255, 255, 0) if pid in ('A', 'B') else color
+            line_pen = QPen(line_color)
             line_pen.setWidth(2)
             line_pen.setStyle(Qt.PenStyle.DashLine)
             line_pen.setCosmetic(True)
             self._drag_line_item = self._scene.addLine(sx, sy, ox, oy, line_pen)
             self._drag_line_item.setZValue(29)
 
+    def set_drag_y_limit(self, y_limit: float | None) -> None:
+        """Set the maximum Y coordinate for dragging (inset boundary)."""
+        self._drag_y_limit = y_limit
+
     def show_inset_mask(self, y_top: float) -> None:
         """Show a semi-transparent grey rectangle over the inset area (below y_top)."""
         self._hide_inset_mask()
+        self._drag_y_limit = y_top
         if self._image_item is None:
             return
         img_rect = self._image_item.pixmap().rect()
@@ -647,7 +779,9 @@ class OptimizedImageView(QGraphicsView):
             return
         rect = QRectF(0, y_top, img_rect.width(), img_rect.height() - y_top)
         brush = QBrush(QColor(128, 128, 128, 140))
-        self._inset_mask_item = self._scene.addRect(rect, QPen(Qt.PenStyle.NoPen), brush)
+        self._inset_mask_item = self._scene.addRect(
+            rect, QPen(Qt.PenStyle.NoPen), brush
+        )
         self._inset_mask_item.setZValue(20)
 
     def _hide_inset_mask(self) -> None:
@@ -656,9 +790,10 @@ class OptimizedImageView(QGraphicsView):
             with contextlib.suppress(Exception):
                 self._scene.removeItem(self._inset_mask_item)
             self._inset_mask_item = None
+            self._drag_y_limit = None
 
-    def _clear_drag_feedback(self) -> None:
-        """Remove drag feedback items from the scene."""
+    def clear_drag_feedback(self) -> None:
+        """Remove drag feedback items (crosshair + rubber band) from the scene."""
         for item in self._drag_marker_items:
             with contextlib.suppress(Exception):
                 self._scene.removeItem(item)
@@ -668,6 +803,49 @@ class OptimizedImageView(QGraphicsView):
             with contextlib.suppress(Exception):
                 self._scene.removeItem(self._drag_line_item)
             self._drag_line_item = None
+
+    # ------------------------------------------------------------------
+    # Hover highlight for draggable points
+    # ------------------------------------------------------------------
+
+    def _show_hover_highlight(self, point_id: str) -> None:
+        """Draw a pulsing ring around the hovered draggable point."""
+        if point_id == self._hover_point_id:
+            return  # already showing
+        self._hide_hover_highlight()
+        pos = self._draggable_points.get(point_id)
+        if pos is None:
+            return
+        sx, sy = pos
+        color = self._drag_colors.get(point_id, QColor(255, 0, 0))
+
+        # Ring radius in screen pixels, converted to scene coords
+        radius_px = 16
+        scale = self.transform().m11()
+        r = radius_px / scale if scale > 0 else radius_px
+
+        ring_color = QColor(color)
+        ring_color.setAlpha(160)
+        pen = QPen(ring_color)
+        pen.setWidthF(2.5 / scale if scale > 0 else 2.5)
+
+        fill = QColor(color)
+        fill.setAlpha(40)
+
+        ellipse = self._scene.addEllipse(
+            sx - r, sy - r, 2 * r, 2 * r, pen, QBrush(fill)
+        )
+        ellipse.setZValue(25)
+        self._hover_highlight_item = ellipse
+        self._hover_point_id = point_id
+
+    def _hide_hover_highlight(self) -> None:
+        """Remove the hover highlight ring from the scene."""
+        if self._hover_highlight_item is not None:
+            with contextlib.suppress(Exception):
+                self._scene.removeItem(self._hover_highlight_item)
+            self._hover_highlight_item = None
+            self._hover_point_id = None
 
     # ------------------------------------------------------------------
     # Loading overlay & fade transitions
@@ -683,18 +861,27 @@ class OptimizedImageView(QGraphicsView):
 
     def stop_loading(self) -> None:
         """Hide the loading overlay."""
+        if self._fade_out_in_progress:
+            return  # _fade_out_loading_sync handles cleanup
         self._loading_overlay.stop()
         self._loading_overlay.hide()
 
     def _fade_out_loading_sync(self) -> None:
-        """Fade-out the Matrix rain and block until fully black.
+        """
+        Fade-out the Matrix rain and block until fully black.
 
         Runs a local event loop so the animation keeps playing while we wait.
+        Uses _fade_out_in_progress guard to prevent stop_loading() from
+        killing the animation during the nested event loop.
         """
-        loop = QEventLoop()
-        self._loading_overlay.faded_out.connect(loop.quit)
-        self._loading_overlay.fade_out()
-        loop.exec()
+        self._fade_out_in_progress = True
+        try:
+            loop = QEventLoop()
+            self._loading_overlay.faded_out.connect(loop.quit)
+            self._loading_overlay.fade_out()
+            loop.exec()
+        finally:
+            self._fade_out_in_progress = False
         self._loading_overlay.stop()
         self._loading_overlay.hide()
 
@@ -703,7 +890,9 @@ class OptimizedImageView(QGraphicsView):
         self._remove_fade_rect()
         scene_rect = self._scene.sceneRect()
         self._fade_rect = self._scene.addRect(
-            scene_rect, QPen(Qt.PenStyle.NoPen), QBrush(QColor(0, 0, 0)),
+            scene_rect,
+            QPen(Qt.PenStyle.NoPen),
+            QBrush(QColor(0, 0, 0)),
         )
         self._fade_rect.setZValue(10000)
         self._fade_rect.setOpacity(1.0)
@@ -828,6 +1017,7 @@ class OptimizedImageView(QGraphicsView):
             # Check if we hit a draggable point first
             hit = self._hit_test_draggable(event)
             if hit is not None:
+                logger.info('DRAG-DEBUG LMB press → start drag %s', hit)
                 self._dragging_point_id = hit
                 self.point_drag_started.emit()
                 self._start_drag_feedback(hit)
@@ -848,11 +1038,15 @@ class OptimizedImageView(QGraphicsView):
         """Handle mouse release — finish drag or end panning."""
         if event.button() == Qt.MouseButton.LeftButton:
             if self._dragging_point_id is not None:
-                # Keep drag feedback visible until recompute finishes and set_image() clears the scene
                 scene_pos = self.mapToScene(event.position().toPoint())
-                self.point_drag_finished.emit(
-                    self._dragging_point_id, scene_pos.x(), scene_pos.y()
+                sx, sy = self._clamp_to_scene(scene_pos.x(), scene_pos.y())
+                logger.info(
+                    'DRAG-DEBUG LMB release → finish drag %s at scene(%.1f, %.1f)',
+                    self._dragging_point_id,
+                    sx,
+                    sy,
                 )
+                self.point_drag_finished.emit(self._dragging_point_id, sx, sy)
                 self._dragging_point_id = None
                 self._drag_other_point = None
                 self.viewport().unsetCursor()
@@ -865,10 +1059,12 @@ class OptimizedImageView(QGraphicsView):
         """Track mouse movement over the map, update cursor for draggable points."""
         if self._dragging_point_id is not None:
             # During drag — keep closed hand cursor, draw feedback, emit coordinates
+            self._hide_hover_highlight()
             self.viewport().setCursor(QCursor(Qt.CursorShape.ClosedHandCursor))
             scene_pos = self.mapToScene(event.position().toPoint())
-            self._update_drag_feedback(scene_pos.x(), scene_pos.y())
-            self.mouse_moved_on_map.emit(scene_pos.x(), scene_pos.y())
+            sx, sy = self._clamp_to_scene(scene_pos.x(), scene_pos.y())
+            self._update_drag_feedback(sx, sy)
+            self.mouse_moved_on_map.emit(sx, sy)
             event.accept()
             return
 
@@ -881,14 +1077,18 @@ class OptimizedImageView(QGraphicsView):
         scene_pos = self.mapToScene(event.position().toPoint())
         if self._image_item.contains(scene_pos):
             self.mouse_moved_on_map.emit(scene_pos.x(), scene_pos.y())
-            # Show open hand cursor when hovering over a draggable point
-            if self._hit_test_draggable(event) is not None:
+            # Show open hand cursor + highlight ring over a draggable point
+            hit = self._hit_test_draggable(event)
+            if hit is not None:
                 self.viewport().setCursor(QCursor(Qt.CursorShape.OpenHandCursor))
+                self._show_hover_highlight(hit)
             else:
                 self.viewport().unsetCursor()
+                self._hide_hover_highlight()
         else:
             self.mouse_moved_on_map.emit(None, None)
             self.viewport().unsetCursor()
+            self._hide_hover_highlight()
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         """Handle widget resize to update fit-to-window scale and overlay."""

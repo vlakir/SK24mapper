@@ -1,0 +1,230 @@
+/* SK24mapper Documentation — Darcula Dark Theme */
+
+:root {
+    --bg-darkest: #1e1f22;
+    --bg-base: #2b2d30;
+    --bg-surface: #313335;
+    --text-primary: #bcbec4;
+    --text-secondary: #6f737a;
+    --text-accent: #6897bb;
+    --border: #43454a;
+    --border-focus: #4882d4;
+    --selection-bg: #2d5f9a;
+    --blue: #4882d4;
+    --code-bg: #1e1f22;
+    --link: #6897bb;
+    --link-hover: #5c9be0;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html, body {
+    margin: 0;
+    padding: 0;
+    background-color: var(--bg-base);
+    color: var(--text-primary);
+    font-family: -apple-system, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+    font-size: 14px;
+    line-height: 1.65;
+}
+
+/* Content container */
+.content {
+    padding: 20px 32px 60px 32px;
+}
+
+/* Headings */
+h1 {
+    font-size: 26px;
+    font-weight: 600;
+    color: #dfe1e5;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 8px;
+    margin: 24px 0 16px 0;
+}
+
+h2 {
+    font-size: 20px;
+    font-weight: 600;
+    color: #dfe1e5;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 6px;
+    margin: 28px 0 12px 0;
+}
+
+h3 {
+    font-size: 16px;
+    font-weight: 600;
+    color: #dfe1e5;
+    margin: 20px 0 8px 0;
+}
+
+h4 {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 16px 0 6px 0;
+}
+
+/* Paragraphs */
+p {
+    margin: 8px 0;
+}
+
+/* Links */
+a {
+    color: var(--link);
+    text-decoration: none;
+}
+
+a:hover {
+    color: var(--link-hover);
+    text-decoration: underline;
+}
+
+/* Lists */
+ul, ol {
+    padding-left: 24px;
+    margin: 8px 0;
+}
+
+li {
+    margin: 4px 0;
+}
+
+/* Code */
+code {
+    font-family: "JetBrains Mono", "Consolas", "Courier New", monospace;
+    font-size: 13px;
+    background-color: var(--code-bg);
+    color: var(--text-accent);
+    padding: 2px 6px;
+    border-radius: 3px;
+    border: 1px solid var(--border);
+}
+
+pre {
+    background-color: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 14px 16px;
+    overflow-x: auto;
+    margin: 12px 0;
+}
+
+pre code {
+    background: none;
+    border: none;
+    padding: 0;
+    color: var(--text-primary);
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+/* Tables */
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 12px 0;
+}
+
+th, td {
+    border: 1px solid var(--border);
+    padding: 8px 12px;
+    text-align: left;
+}
+
+th {
+    background-color: var(--bg-surface);
+    color: #dfe1e5;
+    font-weight: 600;
+}
+
+tr:nth-child(even) {
+    background-color: rgba(49, 51, 53, 0.5);
+}
+
+/* Blockquote */
+blockquote {
+    border-left: 3px solid var(--blue);
+    margin: 12px 0;
+    padding: 8px 16px;
+    background-color: rgba(72, 130, 212, 0.07);
+    color: var(--text-primary);
+}
+
+blockquote p {
+    margin: 4px 0;
+}
+
+/* Horizontal rule */
+hr {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 24px 0;
+}
+
+/* Images */
+img {
+    max-width: 100%;
+    border-radius: 4px;
+}
+
+/* Strong / Em */
+strong {
+    color: #dfe1e5;
+    font-weight: 600;
+}
+
+em {
+    font-style: italic;
+}
+
+/* KaTeX overrides for dark theme */
+.katex {
+    color: var(--text-primary) !important;
+    font-size: 1.05em !important;
+}
+
+.katex-display {
+    margin: 16px 0 !important;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 8px 0;
+}
+
+.katex-display > .katex {
+    color: #dfe1e5 !important;
+}
+
+/* Search highlight */
+::selection {
+    background-color: var(--selection-bg);
+    color: var(--text-primary);
+}
+
+/* Keyboard shortcuts */
+kbd {
+    font-family: "JetBrains Mono", "Consolas", "Courier New", monospace;
+    font-size: 12px;
+    background-color: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 2px 6px;
+    color: var(--text-primary);
+    box-shadow: inset 0 -1px 0 var(--border);
+}
+
+/* Definition lists (used in docs) */
+dt {
+    font-weight: 600;
+    color: #dfe1e5;
+    margin-top: 8px;
+}
+
+dd {
+    margin-left: 20px;
+    margin-bottom: 4px;
+}

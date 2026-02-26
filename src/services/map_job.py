@@ -18,6 +18,7 @@ from shared.progress import (
     set_preview_image_callback,
     set_progress_callback,
     set_spinner_callbacks,
+    set_warning_callback,
 )
 
 if TYPE_CHECKING:
@@ -44,6 +45,7 @@ def run_map_job(
     set_progress_callback(sink.on_progress)
     set_spinner_callbacks(sink.on_spinner, lambda _: None)
     set_preview_image_callback(sink.on_preview)
+    set_warning_callback(getattr(sink, 'on_warning', None))
 
     try:
         asyncio.run(

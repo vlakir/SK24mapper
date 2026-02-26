@@ -6,6 +6,8 @@ import pytest
 
 from services.coordinate_transformer import (
     CoordinateTransformer,
+    gk_to_sk42_raw,
+    is_point_within_bounds,
     validate_control_point_bounds,
 )
 
@@ -270,3 +272,65 @@ class TestValidateControlPointBounds:
                 height_m=10_000,
             )
         assert "6180000" in str(exc_info.value)
+
+
+class TestIsPointWithinBounds:
+    """Tests for is_point_within_bounds function."""
+
+    def test_center_point_inside(self):
+        assert is_point_within_bounds(
+            7_500_000, 6_180_000, 7_500_000, 6_180_000, 10_000, 10_000
+        )
+
+    def test_boundary_point_inside(self):
+        assert is_point_within_bounds(
+            7_505_000, 6_185_000, 7_500_000, 6_180_000, 10_000, 10_000
+        )
+
+    def test_point_outside_east(self):
+        assert not is_point_within_bounds(
+            7_510_000, 6_180_000, 7_500_000, 6_180_000, 10_000, 10_000
+        )
+
+    def test_point_outside_north(self):
+        assert not is_point_within_bounds(
+            7_500_000, 6_190_000, 7_500_000, 6_180_000, 10_000, 10_000
+        )
+
+    def test_point_outside_west(self):
+        assert not is_point_within_bounds(
+            7_490_000, 6_180_000, 7_500_000, 6_180_000, 10_000, 10_000
+        )
+
+    def test_point_outside_south(self):
+        assert not is_point_within_bounds(
+            7_500_000, 6_170_000, 7_500_000, 6_180_000, 10_000, 10_000
+        )
+
+
+class TestGkToSk42Raw:
+    """Tests for gk_to_sk42_raw — inverse of MapSettings.*_sk42_gk properties."""
+
+    def test_roundtrip_default_control_point(self):
+        """Default control_point_x=5415000, control_point_y=7440000."""
+        # Forward: control_point_y=7440000 → x_gk = 1e3*40 + 1e5*74 = 7440000
+        # Forward: control_point_x=5415000 → y_gk = 1e3*15 + 1e5*54 = 5415000
+        raw_x, raw_y = gk_to_sk42_raw(7_440_000.0, 5_415_000.0)
+        assert raw_x == 5415000
+        assert raw_y == 7440000
+
+    def test_roundtrip_offset_point(self):
+        """Verify round-trip for a different GK coordinate pair."""
+        # raw_x=6015000 → y_gk = 1e3*15 + 1e5*60 = 6015000
+        # raw_y=7500000 → x_gk = 1e3*0 + 1e5*75 = 7500000
+        raw_x, raw_y = gk_to_sk42_raw(7_500_000.0, 6_015_000.0)
+        assert raw_x == 6015000
+        assert raw_y == 7500000
+
+    def test_fractional_meters_rounded(self):
+        """GK coordinates with fractional meters are rounded to nearest int."""
+        raw_x, raw_y = gk_to_sk42_raw(7_440_500.7, 5_415_250.3)
+        # x_gk=7440500.7 → y_high=74, y_low_km=40.5007 → raw_y = 74*1e5 + round(40500.7) = 7440501
+        assert raw_y == 7440501
+        # y_gk=5415250.3 → x_high=54, x_low_km=15.2503 → raw_x = 54*1e5 + round(15250.3) = 5415250
+        assert raw_x == 5415250

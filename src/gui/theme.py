@@ -420,6 +420,9 @@ QMenu::item:selected {{
     background-color: {p.selection_bg};
     color: {p.text_primary};
 }}
+QMenu::item:disabled {{
+    color: {p.text_disabled};
+}}
 QMenu::separator {{
     height: 1px;
     background: {p.border_default};
@@ -475,7 +478,7 @@ QToolTip {{
 
 /* ===== QGraphicsView ===== */
 QGraphicsView {{
-    background-color: {p.bg_darkest};
+    background-color: #000000;
     border: 1px solid {p.border_default};
 }}
 

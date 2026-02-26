@@ -230,6 +230,68 @@ class CoordinateTransformer:
         )
 
 
+def is_point_within_bounds(
+    point_x_gk: float,
+    point_y_gk: float,
+    center_x_gk: float,
+    center_y_gk: float,
+    width_m: float,
+    height_m: float,
+) -> bool:
+    """
+    Check whether a point lies within the map rectangle.
+
+    Args:
+        point_x_gk: Point X in GK (easting)
+        point_y_gk: Point Y in GK (northing)
+        center_x_gk: Map center X in GK (easting)
+        center_y_gk: Map center Y in GK (northing)
+        width_m: Map width in meters
+        height_m: Map height in meters
+
+    Returns:
+        True if the point is inside (or on the boundary of) the map rectangle.
+
+    """
+    half_width = width_m / 2
+    half_height = height_m / 2
+    return (
+        center_x_gk - half_width <= point_x_gk <= center_x_gk + half_width
+        and center_y_gk - half_height <= point_y_gk <= center_y_gk + half_height
+    )
+
+
+def gk_to_sk42_raw(x_gk_easting: float, y_gk_northing: float) -> tuple[int, int]:
+    """
+    Convert GK easting/northing back to raw SK-42 integer format.
+
+    The raw format uses 7-digit integers like ``5415000`` / ``7440000``
+    where the first two digits encode the high part (zone prefix or latitude
+    prefix) and the remaining five digits encode km offset * 1000.
+
+    This is the inverse of the ``control_point_x_sk42_gk`` /
+    ``control_point_y_sk42_gk`` properties in ``MapSettings``.
+
+    Args:
+        x_gk_easting: GK X coordinate (easting, e.g. 7_440_000)
+        y_gk_northing: GK Y coordinate (northing, e.g. 6_015_000)
+
+    Returns:
+        (raw_x_north, raw_y_east) — integers in SK-42 raw format,
+        e.g. ``(5415000, 7440000)``.
+
+    """
+    y_high = int(x_gk_easting // 1e5)
+    y_low_km = (x_gk_easting % 1e5) / 1e3
+    raw_y = y_high * 100_000 + round(y_low_km * 1000)
+
+    x_high = int(y_gk_northing // 1e5)
+    x_low_km = (y_gk_northing % 1e5) / 1e3
+    raw_x = x_high * 100_000 + round(x_low_km * 1000)
+
+    return (raw_x, raw_y)
+
+
 def validate_control_point_bounds(
     control_x_gk: float,
     control_y_gk: float,
@@ -241,28 +303,23 @@ def validate_control_point_bounds(
     """
     Validate that control point is within map bounds.
 
-    Args:
-        control_x_gk: Control point X in GK (easting)
-        control_y_gk: Control point Y in GK (northing)
-        center_x_gk: Map center X in GK (easting)
-        center_y_gk: Map center Y in GK (northing)
-        width_m: Map width in meters
-        height_m: Map height in meters
+    .. deprecated::
+        Use :func:`is_point_within_bounds` instead; this function raises
+        ``ValueError`` on failure.
 
     Raises:
         ValueError: If control point is outside map bounds
 
     """
-    half_width = width_m / 2
-    half_height = height_m / 2
-    map_left = center_x_gk - half_width
-    map_right = center_x_gk + half_width
-    map_bottom = center_y_gk - half_height
-    map_top = center_y_gk + half_height
-
-    if not (
-        map_left <= control_x_gk <= map_right and map_bottom <= control_y_gk <= map_top
+    if not is_point_within_bounds(
+        control_x_gk, control_y_gk, center_x_gk, center_y_gk, width_m, height_m
     ):
+        half_width = width_m / 2
+        half_height = height_m / 2
+        map_left = center_x_gk - half_width
+        map_right = center_x_gk + half_width
+        map_bottom = center_y_gk - half_height
+        map_top = center_y_gk + half_height
         msg = (
             f'Контрольная точка X(север)={control_y_gk:.0f}, '
             f'Y(восток)={control_x_gk:.0f} '

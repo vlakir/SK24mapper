@@ -175,7 +175,10 @@ async def _load_topo(
     topo_images = [img for _, img in topo_results]
 
     eff_tile_px_topo = topo_tile_size * (2 if topo_use_retina else 1)
-    crash_log(f'_load_topo: assembling mosaic ({ctx.tiles_x}x{ctx.tiles_y} tiles, eff={eff_tile_px_topo}px)')
+    crash_log(
+        f'_load_topo: assembling mosaic '
+        f'({ctx.tiles_x}x{ctx.tiles_y} tiles, eff={eff_tile_px_topo}px)'
+    )
     topo_base = assemble_and_crop(
         images=topo_images,
         tiles_x=ctx.tiles_x,
@@ -271,7 +274,7 @@ async def _load_dem_and_topo(
 
     # Save DEM for cache
     ctx.rh_cache_dem_full = ctx.raw_dem_for_cursor  # полноразмерный DEM для курсора
-    ctx.rh_cache_dem = dem_full.copy()
+    ctx.rh_cache_dem = dem_full  # same object; caller does `del dem_full` after use
     ctx.rh_cache_antenna_row = antenna_row
     ctx.rh_cache_antenna_col = antenna_col
     ctx.rh_cache_pixel_size_m = pixel_size_m

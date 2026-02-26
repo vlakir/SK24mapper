@@ -517,9 +517,6 @@ LEGEND_VERTICAL_OFFSET_RATIO = 0.15
 # Дополнительный отступ заголовка легенды вверх (доля от высоты легенды)
 LEGEND_TITLE_OFFSET_RATIO = 0.10
 
-# --- Кэш DEM тайлов
-_DEM_CACHE_MAX_SIZE = 100
-
 # --- Радиогоризонт (Radio Horizon)
 # Использовать ретина-тайлы для радиогоризонта (False = 256px, экономит память в 4 раза)
 RADIO_HORIZON_USE_RETINA = False
@@ -630,8 +627,8 @@ SPEED_OF_LIGHT_MPS = 299_792_458.0
 # Врезка профиля
 LINK_PROFILE_INSET_HEIGHT_RATIO = 0.25
 LINK_PROFILE_INSET_BG_COLOR = (255, 255, 255, 255)
-LINK_PROFILE_INSET_MARGIN_H = 0.03   # горизонтальные поля (лево = право), доля ширины
-LINK_PROFILE_INSET_MARGIN_V = 0.18   # вертикальные поля (верх = низ), доля высоты
+LINK_PROFILE_INSET_MARGIN_H = 0.03  # горизонтальные поля (лево = право), доля ширины
+LINK_PROFILE_INSET_MARGIN_V = 0.18  # вертикальные поля (верх = низ), доля высоты
 LINK_PROFILE_TERRAIN_FILL_COLOR = (139, 119, 101, 200)
 LINK_PROFILE_LOS_COLOR = (255, 0, 0)
 LINK_PROFILE_FRESNEL_FILL_COLOR = (255, 165, 0, 60)
@@ -648,6 +645,9 @@ LINK_PROFILE_ANTENNA_WIDTH_PX = 24
 LINK_PROFILE_ANTENNA_COLOR = (0, 0, 0, 255)
 # Засечки расстояния на линии A→B (множитель полудлины относительно толщины линии)
 LINK_PROFILE_MAP_TICK_FACTOR = 6
+# Порог дистанции для отображения засечек (м)
+LINK_PROFILE_MIN_TICK_DISTANCE_M = 500
+LINK_PROFILE_SHORT_TICK_DISTANCE_M = 1000
 # Размер шрифта подписей профиля (мин и макс, пиксели)
 LINK_PROFILE_FONT_MIN_PX = 36
 LINK_PROFILE_FONT_MAX_PX = 196
@@ -656,14 +656,16 @@ LINK_PROFILE_USE_RETINA = False
 
 # --- Логирование ---
 # Дублировать лог в файл с fsync (переживает OOM/crash)
-LOG_FSYNC_TO_FILE = True
+LOG_FSYNC_TO_FILE = False
 
 # --- OOM Prevention ---
+# Минимальный общий объём RAM для запуска приложения (МБ)
+MEMORY_MIN_TOTAL_MB = 6044
 # Доля доступной RAM, которую можно использовать
 MEMORY_SAFETY_RATIO = 0.75
 # Минимум свободной памяти, которую нужно оставить (МБ)
-MEMORY_MIN_FREE_MB = 512
+MEMORY_MIN_FREE_MB = 1024
 
 # --- Loading screen (Matrix rain) ---
-LOADING_FADE_OUT_MS = 3600   # Затухание матрицы → чёрный экран
-LOADING_FADE_IN_MS = 2400   # Проявление карты из темноты
+LOADING_FADE_OUT_MS = 2400  # Затухание матрицы → чёрный экран
+LOADING_FADE_IN_MS = 3600  # Проявление карты из темноты

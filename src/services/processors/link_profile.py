@@ -1,4 +1,7 @@
-"""Link Profile processor — terrain profile between two points with LOS and Fresnel zones."""
+"""
+Link Profile processor — terrain profile between two points
+with LOS and Fresnel zones.
+"""
 
 from __future__ import annotations
 
@@ -17,6 +20,8 @@ from shared.constants import (
     EARTH_RADIUS_M,
     LINK_PROFILE_ANTENNA_COLOR,
     LINK_PROFILE_ANTENNA_WIDTH_PX,
+    LINK_PROFILE_FONT_MAX_PX,
+    LINK_PROFILE_FONT_MIN_PX,
     LINK_PROFILE_GRID_BORDER_PX,
     LINK_PROFILE_GRID_COLOR,
     LINK_PROFILE_GRID_WIDTH_PX,
@@ -30,8 +35,6 @@ from shared.constants import (
     LINK_PROFILE_POINT_A_COLOR,
     LINK_PROFILE_POINT_B_COLOR,
     LINK_PROFILE_REFRACTION_K,
-    LINK_PROFILE_FONT_MAX_PX,
-    LINK_PROFILE_FONT_MIN_PX,
     LINK_PROFILE_TERRAIN_FILL_COLOR,
     SPEED_OF_LIGHT_MPS,
     MapType,
@@ -41,6 +44,17 @@ if TYPE_CHECKING:
     from services.map_context import MapDownloadContext
 
 logger = logging.getLogger(__name__)
+
+# Minimum points for meaningful analysis/drawing
+_MIN_POINTS_FOR_LINE = 2
+_MIN_PLOT_DIMENSION_PX = 20
+
+# Fresnel zone thresholds (ITU-R recommendation)
+_FRESNEL_GOOD_PCT = 60
+
+# Grid line count range for auto-step selection
+_MIN_GRID_LINES = 2
+_MAX_GRID_LINES = 6
 
 
 def extract_terrain_profile(
@@ -136,8 +150,7 @@ def compute_link_analysis(
     else:
         los_heights = np.full(n, h_a)
 
-    # Earth curvature correction
-    # correction = d1 * d2 / (2 * K * R_earth)
+    # Earth curvature correction: d1*d2 / (2*K*R_earth)
     d1 = distances
     d2 = total_d - distances
     earth_correction = (d1 * d2) / (2.0 * k * EARTH_RADIUS_M)
@@ -148,15 +161,14 @@ def compute_link_analysis(
     # Clearance = LOS height - effective terrain
     clearance = los_heights - effective_terrain
 
-    # Fresnel zone radius
-    # r = sqrt(λ * d1 * d2 / D)
+    # Fresnel zone radius: r = sqrt(wavelength * d1 * d2 / D)
     wavelength_m = SPEED_OF_LIGHT_MPS / (freq_mhz * 1e6)
     with np.errstate(invalid='ignore'):
         fresnel_radius = np.sqrt(wavelength_m * d1 * d2 / max(total_d, 1e-6))
     fresnel_radius = np.nan_to_num(fresnel_radius, nan=0.0)
 
     # Worst clearance (minimum clearance along the path, excluding endpoints)
-    if n > 2:
+    if n > _MIN_POINTS_FOR_LINE:
         inner_clearance = clearance[1:-1]
         worst_idx = np.argmin(inner_clearance)
         worst_clearance = float(inner_clearance[worst_idx])
@@ -214,13 +226,16 @@ def render_profile_inset(
 
     # Font — размер пропорционален высоте inset, ограничен константами
     font_size_px = int(inset_h * 0.07)
-    font_size_px = max(LINK_PROFILE_FONT_MIN_PX, min(font_size_px, LINK_PROFILE_FONT_MAX_PX))
+    font_size_px = max(
+        LINK_PROFILE_FONT_MIN_PX, min(font_size_px, LINK_PROFILE_FONT_MAX_PX)
+    )
     small_font_size_px = max(LINK_PROFILE_FONT_MIN_PX, font_size_px * 2 // 3)
     try:
         font = load_grid_font(font_size_px)
         small_font = load_grid_font(small_font_size_px)
     except Exception:
         from PIL import ImageFont
+
         font = ImageFont.load_default()
         small_font = font
 
@@ -245,11 +260,13 @@ def render_profile_inset(
 
     # Elevation range (include LOS + Fresnel) — needed before margins
     effective_terrain = elevations + earth_correction
-    all_heights = np.concatenate([
-        effective_terrain,
-        los_heights + fresnel_radius,
-        los_heights - fresnel_radius,
-    ])
+    all_heights = np.concatenate(
+        [
+            effective_terrain,
+            los_heights + fresnel_radius,
+            los_heights - fresnel_radius,
+        ]
+    )
     raw_min = float(np.nanmin(all_heights))
     raw_max = float(np.nanmax(all_heights))
     raw_range = max(raw_max - raw_min, 10.0)
@@ -258,7 +275,7 @@ def render_profile_inset(
     step = 10.0
     for candidate in (10, 20, 50, 100, 200, 500, 1000):
         n_lines = raw_range / candidate
-        if 2 <= n_lines <= 6:
+        if _MIN_GRID_LINES <= n_lines <= _MAX_GRID_LINES:
             step = float(candidate)
             break
 
@@ -296,13 +313,14 @@ def render_profile_inset(
 
     # Bottom margin: tick + gap + distance labels + gap + point names + gap + status
     bottom_content = (
-        tick_len + axis_label_gap          # tick marks + gap
-        + small_font_size_px               # distance labels
-        + axis_label_gap                   # gap
-        + small_font_size_px               # point name labels
-        + axis_label_gap                   # gap
-        + small_font_size_px               # status line
-        + 6                                # bottom padding
+        tick_len
+        + axis_label_gap  # tick marks + gap
+        + small_font_size_px  # distance labels
+        + axis_label_gap  # gap
+        + small_font_size_px  # point name labels
+        + axis_label_gap  # gap
+        + small_font_size_px  # status line
+        + 6  # bottom padding
     )
     margin_bottom = max(
         int(inset_h * LINK_PROFILE_INSET_MARGIN_V),
@@ -316,15 +334,12 @@ def render_profile_inset(
     plot_w = plot_x1 - plot_x0
     plot_h = plot_y1 - plot_y0
 
-    if plot_w < 20 or plot_h < 20:
+    if plot_w < _MIN_PLOT_DIMENSION_PX or plot_h < _MIN_PLOT_DIMENSION_PX:
         return inset
 
     def to_screen(d_m: float, elev_m: float) -> tuple[int, int]:
         """Convert (distance, elevation) to screen (x, y)."""
-        if total_d > 0:
-            x = plot_x0 + int((d_m / total_d) * plot_w)
-        else:
-            x = plot_x0
+        x = plot_x0 + int(d_m / total_d * plot_w) if total_d > 0 else plot_x0
         y = plot_y1 - int(((elev_m - e_min) / (e_max - e_min)) * plot_h)
         return x, y
 
@@ -340,7 +355,11 @@ def render_profile_inset(
     elev_val = e_min
     while elev_val <= e_max:
         _, gy = to_screen(0, elev_val)
-        draw.line([(plot_x0, gy), (plot_x1, gy)], fill=LINK_PROFILE_GRID_COLOR, width=LINK_PROFILE_GRID_WIDTH_PX)
+        draw.line(
+            [(plot_x0, gy), (plot_x1, gy)],
+            fill=LINK_PROFILE_GRID_COLOR,
+            width=LINK_PROFILE_GRID_WIDTH_PX,
+        )
         draw_text_with_outline(
             draw,
             (plot_x0 - axis_label_gap, gy),
@@ -362,7 +381,11 @@ def render_profile_inset(
     d_val_grid = grid_step_m
     while d_val_grid < total_d:
         gx, _ = to_screen(d_val_grid, e_min)
-        draw.line([(gx, plot_y0), (gx, plot_y1)], fill=LINK_PROFILE_GRID_COLOR, width=LINK_PROFILE_GRID_WIDTH_PX)
+        draw.line(
+            [(gx, plot_y0), (gx, plot_y1)],
+            fill=LINK_PROFILE_GRID_COLOR,
+            width=LINK_PROFILE_GRID_WIDTH_PX,
+        )
         d_val_grid += grid_step_m
 
     # --- Draw terrain fill ---
@@ -375,11 +398,11 @@ def render_profile_inset(
     if terrain_points:
         bottom_right = (terrain_points[-1][0], plot_y1)
         bottom_left = (terrain_points[0][0], plot_y1)
-        terrain_polygon = terrain_points + [bottom_right, bottom_left]
+        terrain_polygon = [*terrain_points, bottom_right, bottom_left]
         draw.polygon(terrain_polygon, fill=LINK_PROFILE_TERRAIN_FILL_COLOR)
 
         # Terrain outline
-        if len(terrain_points) >= 2:
+        if len(terrain_points) >= _MIN_POINTS_FOR_LINE:
             draw.line(terrain_points, fill=(100, 80, 60, 255), width=2)
 
     # --- Fresnel zone color based on clearance percentage ---
@@ -387,7 +410,7 @@ def render_profile_inset(
     # 0..60% — yellow (partial obstruction, degraded but possible)
     # <0% — red (LOS blocked by terrain)
     fresnel_pct_display = max(0.0, fresnel_pct)
-    if fresnel_pct >= 60:
+    if fresnel_pct >= _FRESNEL_GOOD_PCT:
         fresnel_color = (0, 160, 0, 255)
     elif fresnel_pct >= 0:
         fresnel_color = (200, 180, 0, 255)
@@ -403,31 +426,34 @@ def render_profile_inset(
         fresnel_upper.append((x_los, y_los - r_px))
         fresnel_lower.append((x_los, y_los + r_px))
 
-    if fresnel_upper and fresnel_lower:
-        if len(fresnel_upper) >= 2:
-            draw.line(fresnel_upper, fill=fresnel_color, width=LINK_PROFILE_LINE_WIDTH_PX)
-            draw.line(fresnel_lower, fill=fresnel_color, width=LINK_PROFILE_LINE_WIDTH_PX)
+    if fresnel_upper and fresnel_lower and len(fresnel_upper) >= _MIN_POINTS_FOR_LINE:
+        draw.line(fresnel_upper, fill=fresnel_color, width=LINK_PROFILE_LINE_WIDTH_PX)
+        draw.line(fresnel_lower, fill=fresnel_color, width=LINK_PROFILE_LINE_WIDTH_PX)
 
-            # Frequency + Fresnel % label near the middle of the upper Fresnel arc
-            mid_idx = len(fresnel_upper) // 2
-            fu_x, fu_y = fresnel_upper[mid_idx]
-            draw_text_with_outline(
-                draw,
-                (fu_x, fu_y - axis_label_gap),
-                f'{freq_mhz:.0f} МГц',
-                font=small_font,
-                fill=fresnel_color[:3],
-                outline=(255, 255, 255),
-                outline_width=1,
-                anchor='mb',
-            )
+        # Frequency + Fresnel % label near the middle of the upper Fresnel arc
+        mid_idx = len(fresnel_upper) // 2
+        fu_x, fu_y = fresnel_upper[mid_idx]
+        draw_text_with_outline(
+            draw,
+            (fu_x, fu_y - axis_label_gap),
+            f'{freq_mhz:.0f} МГц',
+            font=small_font,
+            fill=fresnel_color[:3],
+            outline=(255, 255, 255),
+            outline_width=1,
+            anchor='mb',
+        )
 
     # --- Draw LOS line ---
-    los_points = []
-    for i in range(len(distances)):
-        los_points.append(to_screen(distances[i], los_heights[i]))
-    if len(los_points) >= 2:
-        draw.line(los_points, fill=LINK_PROFILE_LOS_LINE_COLOR, width=LINK_PROFILE_LINE_WIDTH_PX)
+    los_points = [
+        to_screen(distances[i], los_heights[i]) for i in range(len(distances))
+    ]
+    if len(los_points) >= _MIN_POINTS_FOR_LINE:
+        draw.line(
+            los_points,
+            fill=LINK_PROFILE_LOS_LINE_COLOR,
+            width=LINK_PROFILE_LINE_WIDTH_PX,
+        )
 
     # --- Draw antenna masts (black vertical lines at terrain→antenna top) ---
     antenna_color = LINK_PROFILE_ANTENNA_COLOR
@@ -436,20 +462,24 @@ def render_profile_inset(
     xa_top_x, xa_top_y = to_screen(0, effective_terrain[0] + antenna_a_m)
     draw.line(
         [(xa_base_x, xa_base_y), (xa_top_x, xa_top_y)],
-        fill=antenna_color, width=LINK_PROFILE_ANTENNA_WIDTH_PX,
+        fill=antenna_color,
+        width=LINK_PROFILE_ANTENNA_WIDTH_PX,
     )
     # Point B: from terrain surface to antenna top
     xb_base_x, xb_base_y = to_screen(total_d, effective_terrain[-1])
     xb_top_x, xb_top_y = to_screen(total_d, effective_terrain[-1] + antenna_b_m)
     draw.line(
         [(xb_base_x, xb_base_y), (xb_top_x, xb_top_y)],
-        fill=antenna_color, width=LINK_PROFILE_ANTENNA_WIDTH_PX,
+        fill=antenna_color,
+        width=LINK_PROFILE_ANTENNA_WIDTH_PX,
     )
 
     # --- Point name labels below the plot (под подписями оси расстояния) ---
     # Точка A — привязка к левому краю, не выходить за plot_x0
     # Точка B — привязка к правому краю, не выходить за plot_x1
-    point_label_y = plot_y1 + tick_len + axis_label_gap + small_font_size_px + axis_label_gap
+    point_label_y = (
+        plot_y1 + tick_len + axis_label_gap + small_font_size_px + axis_label_gap
+    )
     draw_text_with_outline(
         draw,
         (max(xa_base_x, plot_x0), point_label_y),
@@ -530,7 +560,10 @@ def render_profile_inset(
     )
 
     # --- Status line ---
-    status = f'{total_d / 1000:.2f} км, просвет: {worst_clearance:.1f} м (свободно {fresnel_pct_display:.0f}% зоны Френеля)'
+    status = (
+        f'{total_d / 1000:.2f} км, просвет: {worst_clearance:.1f} м '
+        f'(свободно {fresnel_pct_display:.0f}% зоны Френеля)'
+    )
     status_color = fresnel_color[:3]
 
     # Bottom status line (centered, anchored to bottom of inset)
@@ -560,7 +593,10 @@ def _wgs84_coords_from_gk(
 
 
 def _haversine_distance(
-    lat1: float, lng1: float, lat2: float, lng2: float,
+    lat1: float,
+    lng1: float,
+    lat2: float,
+    lng2: float,
 ) -> float:
     """Great-circle distance in metres between two WGS84 points."""
     dlat = math.radians(lat2 - lat1)
@@ -664,7 +700,10 @@ async def _extract_profile_from_tiles(
 
 
 async def process_link_profile(ctx: MapDownloadContext) -> Image.Image:
-    """Process link profile map — hybrid base + terrain profile + LOS/Fresnel analysis."""
+    """
+    Process link profile map — hybrid base + terrain profile
+    with LOS/Fresnel analysis.
+    """
     from shared.diagnostics import crash_log
 
     logger.info('Профиль радиолинии: старт')
@@ -706,7 +745,11 @@ async def process_link_profile(ctx: MapDownloadContext) -> Image.Image:
     # 3. Extract terrain profile — loads only DEM tiles along A→B (not full map!)
     crash_log('process_link_profile: _extract_profile START')
     profile = await _extract_profile_from_tiles(
-        ctx, lat_a_wgs, lng_a_wgs, lat_b_wgs, lng_b_wgs,
+        ctx,
+        lat_a_wgs,
+        lng_a_wgs,
+        lat_b_wgs,
+        lng_b_wgs,
     )
     crash_log(
         f'process_link_profile: _extract_profile DONE, '

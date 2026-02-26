@@ -21,6 +21,7 @@ from PIL import Image
 from PySide6.QtCore import QObject, QTimer, Signal
 
 from gui.workers._process_entry import (
+    deserialize_dem_grid,
     deserialize_pil,
     deserialize_rh_cache,
     worker_process_main,
@@ -47,6 +48,7 @@ class DownloadWorker(QObject):
 
     finished = Signal(bool, str)  # success, error_message
     progress_update = Signal(int, int, str)  # done, total, label
+    warning_received = Signal(str, object)  # warning text, field_updates dict|None
     preview_ready = Signal(
         Image.Image,
         object,
@@ -91,7 +93,9 @@ class DownloadWorker(QObject):
         # Фоновый поток: читает mp.Queue, десериализует тяжёлые данные,
         # кладёт готовые python-объекты в _gui_queue
         self._reader_thread = threading.Thread(
-            target=self._reader_loop, daemon=True, name='download-reader',
+            target=self._reader_loop,
+            daemon=True,
+            name='download-reader',
         )
         self._reader_thread.start()
 
@@ -156,20 +160,23 @@ class DownloadWorker(QObject):
 
             kind = msg[0]
 
-            if kind in ('progress', 'spinner'):
+            if kind in ('progress', 'spinner', 'warning'):
                 # Лёгкие сообщения — пробрасываем как есть
                 self._gui_queue.put(msg)
 
             elif kind == 'preview':
                 # Тяжёлая десериализация — в этом потоке, НЕ в GUI
                 try:
-                    _, img_data, metadata, dem_grid, rh_data = msg
-                    pil_bytes, mode, size = img_data
-                    image = deserialize_pil(pil_bytes, mode, size)
+                    _, img_data, metadata, dem_data, rh_data = msg
+                    shm_name, data_len, mode, size = img_data
+                    image = deserialize_pil(shm_name, data_len, mode, size)
+                    dem_grid = deserialize_dem_grid(dem_data)
                     rh_cache = deserialize_rh_cache(rh_data)
                     logger.info(
                         'Reader: preview deserialized (%dx%d %s)',
-                        size[0], size[1], mode,
+                        size[0],
+                        size[1],
+                        mode,
                     )
                     self._gui_queue.put(
                         ('preview_ready', image, metadata, dem_grid, rh_cache)
@@ -202,6 +209,10 @@ class DownloadWorker(QObject):
             elif kind == 'spinner':
                 _, label = msg
                 self.progress_update.emit(0, 0, label)
+
+            elif kind == 'warning':
+                _, text, field_updates = msg
+                self.warning_received.emit(text, field_updates)
 
             elif kind == 'preview_ready':
                 _, image, metadata, dem_grid, rh_cache = msg

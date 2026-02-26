@@ -7,11 +7,12 @@ import shutil
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QLocale
+from PySide6.QtCore import QLocale, QtMsgType, qInstallMessageHandler
 from PySide6.QtGui import QIcon
 
 from gui.theme import apply_dark_title_bar
 from gui.view import create_application
+from shared.constants import LOG_FSYNC_TO_FILE, MEMORY_MIN_TOTAL_MB
 from shared.diagnostics import log_memory_usage
 from shared.portable import get_portable_path, is_portable_mode
 
@@ -27,7 +28,7 @@ class _FsyncFileHandler(logging.FileHandler):
             self.stream.flush()
             os.fsync(self.stream.fileno())
         except Exception:
-            pass
+            logger.debug('fsync failed for log file', exc_info=True)
 
 
 def setup_logging() -> tuple[Path, Path]:
@@ -47,20 +48,35 @@ def setup_logging() -> tuple[Path, Path]:
         local_base = get_portable_path('data')
         log_dir = get_portable_path('logs')
     else:
-        # Обычный режим: стандартные пути Windows
-        appdata_base = (
-            Path(os.getenv('APPDATA') or Path.home() / 'AppData' / 'Roaming') / 'SK42'
-        )
-        local_base = (
-            Path(os.getenv('LOCALAPPDATA') or Path.home() / 'AppData' / 'Local')
-            / 'SK42'
-        )
-        log_dir = local_base / 'log'
+        appdata_env = os.getenv('APPDATA')
+        local_env = os.getenv('LOCALAPPDATA')
+        if appdata_env and local_env:
+            # Windows
+            appdata_base = Path(appdata_env) / 'SK42'
+            local_base = Path(local_env) / 'SK42'
+            log_dir = local_base / 'log'
+        else:
+            # Linux/macOS — XDG-совместимые пути
+            xdg_data = os.getenv('XDG_DATA_HOME', '')
+            xdg_state = os.getenv('XDG_STATE_HOME', '')
+            appdata_base = (
+                Path(xdg_data) / 'sk42mapper'
+                if xdg_data
+                else Path.home() / '.local' / 'share' / 'sk42mapper'
+            )
+            local_base = (
+                Path(xdg_data) / 'sk42mapper'
+                if xdg_data
+                else Path.home() / '.local' / 'share' / 'sk42mapper'
+            )
+            log_dir = (
+                Path(xdg_state) / 'sk42mapper' / 'log'
+                if xdg_state
+                else Path.home() / '.local' / 'state' / 'sk42mapper' / 'log'
+            )
 
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / 'mil_mapper.log'
-
-    from shared.constants import LOG_FSYNC_TO_FILE
 
     handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
     if LOG_FSYNC_TO_FILE:
@@ -129,10 +145,50 @@ def _migrate_from_old_name(appdata_base: Path, local_base: Path) -> None:
     logger.info('Миграция из SK42mapper завершена')
 
 
+def _check_system_memory() -> bool:
+    """
+    Check that total system RAM meets minimum requirements.
+
+    Returns True if OK, False if insufficient.
+    """
+    try:
+        import psutil
+
+        total_mb = psutil.virtual_memory().total / (1024 * 1024)
+    except Exception:
+        # psutil unavailable — skip the check
+        return True
+
+    if total_mb < MEMORY_MIN_TOTAL_MB:
+        logger.error(
+            'Недостаточно оперативной памяти: %.0f МБ (требуется минимум %d МБ)',
+            total_mb,
+            MEMORY_MIN_TOTAL_MB,
+        )
+        try:
+            from PySide6.QtWidgets import QApplication, QMessageBox
+
+            QApplication.instance() or QApplication(sys.argv)
+            QMessageBox.critical(
+                None,
+                'Недостаточно памяти',
+                f'Для работы приложения требуется минимум '
+                f'{MEMORY_MIN_TOTAL_MB} МБ оперативной памяти.\n'
+                f'Обнаружено: {total_mb:.0f} МБ.',
+            )
+        except Exception:
+            logger.debug('Could not show low-memory dialog', exc_info=True)
+        return False
+    return True
+
+
 def main() -> int:
     """Main application entry point."""
     appdata_base, local_base = setup_logging()
     logger.info('Starting Mil Mapper 2.0')
+
+    if not _check_system_memory():
+        return 1
 
     # Миграция из SK42mapper → SK42 (при первом запуске новой версии)
     if not is_portable_mode():
@@ -168,7 +224,9 @@ def main() -> int:
                         _pf.unlink()
                         logger.info('Удалён устаревший профиль: %s', _pf.name)
                 except Exception:
-                    pass
+                    logger.debug(
+                        'Не удалось удалить профиль %s', _pf.name, exc_info=True
+                    )
 
         # Copy default configs if not present
         install_dir = Path(sys.argv[0]).resolve().parent
@@ -219,6 +277,18 @@ def main() -> int:
     )
 
     parser.parse_args()
+
+    # Suppress harmless "qt.svg: Duplicate unique style id" warnings
+    # originating from broken SVGs in system icon themes (e.g. elementary).
+    _orig_handler = None
+
+    def _qt_msg_filter(msg_type, context, message) -> None:  # noqa: ANN001
+        if msg_type == QtMsgType.QtWarningMsg and message.startswith('qt.svg:'):
+            return  # swallow
+        if _orig_handler is not None:
+            _orig_handler(msg_type, context, message)
+
+    _orig_handler = qInstallMessageHandler(_qt_msg_filter)
 
     try:
         # Create PySide6 application

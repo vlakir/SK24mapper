@@ -166,6 +166,12 @@ class MilMapperModel(Observable):
             self._state.last_error = error_msg
             self.notify_observers(ModelEvent.ERROR_OCCURRED, {'error': error_msg})
 
+    def patch_settings_silent(self, **kwargs: object) -> None:
+        """Update settings fields without notifying observers."""
+        current_data = self._settings.model_dump()
+        current_data.update(kwargs)
+        self._settings = MapSettings(**current_data)
+
     def load_profile(self, profile_name: str, settings: MapSettings) -> None:
         """Load profile settings and notify observers."""
         try:

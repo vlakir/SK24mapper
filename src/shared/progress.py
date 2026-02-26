@@ -48,6 +48,7 @@ class _CbStore:
     preview_image: ClassVar[Callable[[object, object, object, object], None] | None] = (
         None
     )
+    warning: ClassVar[Callable[[str, dict | None], None] | None] = None
     cancel_event: ClassVar[threading.Event | CancelToken | None] = None
 
 
@@ -168,6 +169,31 @@ def set_preview_image_callback(
     _CbStore.preview_image = cb
 
 
+def set_warning_callback(cb: Callable[[str, dict | None], None] | None) -> None:
+    """Устанавливает глобальный колбэк предупреждений: (text, field_updates)."""
+    _CbStore.warning = cb
+
+
+def get_warning_callback() -> Callable[[str, dict | None], None] | None:
+    return _CbStore.warning
+
+
+def emit_warning(text: str, field_updates: dict | None = None) -> None:
+    """
+    Отправляет предупреждение через глобальный колбэк (если установлен).
+
+    Args:
+        text: Текст предупреждения для отображения пользователю.
+        field_updates: Словарь ``{field_name: new_value}`` для обновления
+            полей ввода в GUI (например ``{'control_point_x': 5415000}``).
+
+    """
+    cb = _CbStore.warning
+    if cb is not None:
+        with contextlib.suppress(Exception):
+            cb(text, field_updates)
+
+
 def set_cancel_event(event: threading.Event | CancelToken | None) -> None:
     """Устанавливает глобальный Event для отмены текущей операции."""
     _CbStore.cancel_event = event
@@ -229,6 +255,7 @@ def cleanup_all_progress_resources() -> None:
     set_progress_callback(None)
     set_spinner_callbacks(None, None)
     set_preview_image_callback(None)
+    set_warning_callback(None)
     clear_cancel_event()
 
 

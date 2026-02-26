@@ -105,10 +105,10 @@ def draw_axis_aligned_km_grid(
 
     cx, cy = w / 2.0, h / 2.0
 
-    # Предвычисляем sin/cos для поворота (изображение было повёрнуто на rotation_deg)
-    # PIL rotate() работает в системе координат с Y вниз, поэтому
-    # используем отрицательный угол
-    rotation_rad = math.radians(-rotation_deg)
+    # Предвычисляем sin/cos для обратного поворота: изображение (растр) было
+    # повёрнуто на rotation_deg, поэтому координаты сетки нужно пересчитать
+    # из «мировой» системы в систему повёрнутого изображения (обратный поворот).
+    rotation_rad = math.radians(rotation_deg)
     cos_rot = math.cos(rotation_rad)
     sin_rot = math.sin(rotation_rad)
 

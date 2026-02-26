@@ -15,12 +15,14 @@ from shared.progress import (
     check_cancelled,
     cleanup_all_progress_resources,
     clear_cancel_event,
+    emit_warning,
     force_stop_all_spinners,
     publish_preview_image,
     set_cancel_event,
     set_preview_image_callback,
     set_progress_callback,
     set_spinner_callbacks,
+    set_warning_callback,
 )
 
 
@@ -384,3 +386,51 @@ class TestLiveSpinnerCancellation:
         # The thread should have exited (or be about to exit)
         spinner.stop()
         assert spinner._stop.is_set()
+
+
+class TestWarningCallback:
+    """Tests for warning callback functions."""
+
+    def setup_method(self):
+        set_warning_callback(None)
+
+    def teardown_method(self):
+        set_warning_callback(None)
+
+    def test_set_and_get_warning_callback(self):
+        """set_warning_callback should store the callback."""
+        cb = MagicMock()
+        set_warning_callback(cb)
+        assert _CbStore.warning is cb
+
+    def test_emit_warning_calls_callback(self):
+        """emit_warning should call the stored callback with text."""
+        cb = MagicMock()
+        set_warning_callback(cb)
+        emit_warning('test warning')
+        cb.assert_called_once_with('test warning', None)
+
+    def test_emit_warning_with_field_updates(self):
+        """emit_warning should pass field_updates dict to callback."""
+        cb = MagicMock()
+        set_warning_callback(cb)
+        updates = {'control_point_x': 5415000}
+        emit_warning('moved', updates)
+        cb.assert_called_once_with('moved', updates)
+
+    def test_emit_warning_no_callback(self):
+        """emit_warning should not raise when no callback is set."""
+        set_warning_callback(None)
+        emit_warning('no crash')  # should not raise
+
+    def test_emit_warning_callback_exception_suppressed(self):
+        """emit_warning should suppress exceptions from the callback."""
+        cb = MagicMock(side_effect=RuntimeError('boom'))
+        set_warning_callback(cb)
+        emit_warning('test')  # should not raise
+
+    def test_cleanup_clears_warning_callback(self):
+        """cleanup_all_progress_resources should clear warning callback."""
+        set_warning_callback(MagicMock())
+        cleanup_all_progress_resources()
+        assert _CbStore.warning is None

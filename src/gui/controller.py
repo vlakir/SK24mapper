@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import ctypes
 import logging
 import os
@@ -14,13 +13,13 @@ import tomlkit
 from dotenv import load_dotenv
 
 from domain.models import DownloadParams
-from domain.toml_sections import flat_to_sectioned
 from domain.profiles import (
     ensure_profiles_dir,
     list_profiles,
     load_profile,
     save_profile,
 )
+from domain.toml_sections import flat_to_sectioned
 from gui.model import MilMapperModel, ModelEvent
 from shared.constants import (
     API_KEY_VISIBLE_PREFIX_LEN,
@@ -29,7 +28,7 @@ from shared.constants import (
     MapType,
 )
 from shared.diagnostics import log_memory_usage
-from shared.memory_estimation import choose_safe_zoom, get_available_memory_mb
+from shared.memory_estimation import choose_safe_zoom
 from shared.portable import get_app_dir, is_portable_mode
 
 logger = logging.getLogger(__name__)
@@ -292,7 +291,11 @@ class MilMapperController:
             except Exception:
                 logger.debug('Failed to log detailed settings before save-as')
 
-            data = flat_to_sectioned(s.model_dump(exclude={'output_path', 'brightness', 'contrast', 'saturation'}))
+            data = flat_to_sectioned(
+                s.model_dump(
+                    exclude={'output_path', 'brightness', 'contrast', 'saturation'}
+                )
+            )
             text = tomlkit.dumps(data)
             final_path.write_text(text, encoding='utf-8')
 
@@ -419,15 +422,17 @@ class MilMapperController:
         try:
             mt_enum = MapType(settings.map_type)
             is_dem = mt_enum in (
-                MapType.ELEVATION_COLOR, MapType.ELEVATION_HILLSHADE,
-                MapType.RADIO_HORIZON, MapType.RADAR_COVERAGE,
+                MapType.ELEVATION_COLOR,
+                MapType.ELEVATION_HILLSHADE,
+                MapType.RADIO_HORIZON,
+                MapType.RADAR_COVERAGE,
                 MapType.LINK_PROFILE,
             )
-            has_contours = mt_enum == MapType.ELEVATION_CONTOURS
             # Rough latitude from GK northing (approximate)
             approx_lat = center_y / 111_320.0
             max_zoom = getattr(settings, 'max_zoom', 18)
             from geo.topography import effective_scale_for_xyz
+
             eff_scale = effective_scale_for_xyz(256, use_retina=False)
             _, memory_estimate = choose_safe_zoom(
                 center_lat=approx_lat,
@@ -437,7 +442,6 @@ class MilMapperController:
                 eff_scale=eff_scale,
                 max_pixels=MAX_OUTPUT_PIXELS,
                 is_dem=is_dem,
-                has_contours=has_contours,
             )
         except Exception:
             logger.debug('Memory pre-estimation failed', exc_info=True)

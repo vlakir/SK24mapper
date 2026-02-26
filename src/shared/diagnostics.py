@@ -34,9 +34,9 @@ from geo.topography import (
     colorize_dem_to_image,
     decode_terrain_rgb_to_elevation_m,
 )
+from infrastructure.http import resolve_cache_dir
 from shared.constants import (
     ELEVATION_USE_RETINA,
-    HTTP_CACHE_DIR,
     HTTP_CACHE_ENABLED,
     HTTP_CACHE_EXPIRE_HOURS,
     HTTP_CACHE_RESPECT_HEADERS,
@@ -51,7 +51,6 @@ from shared.constants import (
     map_type_to_style_id,
 )
 from shared.constants import PSUTIL_AVAILABLE as _PSUTIL_AVAILABLE
-from shared.portable import get_portable_path, is_portable_mode
 
 logger = logging.getLogger(__name__)
 
@@ -80,26 +79,28 @@ def crash_log(msg: str) -> None:
         rss = f'{proc.memory_info().rss / 1024 / 1024:.0f}'
         avail = f'{psutil.virtual_memory().available / 1024 / 1024:.0f}'
     except Exception:
-        pass
+        logger.debug('crash_log: failed to read memory stats', exc_info=True)
     line = f'[{ts}] RSS={rss}MB Avail={avail}MB | {msg}\n'
     try:
-        with open(_CRASH_LOG_PATH, 'a', encoding='utf-8') as f:
+        with _CRASH_LOG_PATH.open('a', encoding='utf-8') as f:
             f.write(line)
             f.flush()
             os.fsync(f.fileno())
     except Exception:
-        pass
+        logger.debug('crash_log: failed to write log', exc_info=True)
 
 
 def crash_log_reset() -> None:
     """Clear the crash log at the start of a new map build."""
     try:
-        with open(_CRASH_LOG_PATH, 'w', encoding='utf-8') as f:
-            f.write(f'=== SK42mapper crash log — {time.strftime("%Y-%m-%d %H:%M:%S")} ===\n')
+        with _CRASH_LOG_PATH.open('w', encoding='utf-8') as f:
+            f.write(
+                f'=== SK42mapper crash log — {time.strftime("%Y-%m-%d %H:%M:%S")} ===\n'
+            )
             f.flush()
             os.fsync(f.fileno())
     except Exception:
-        pass
+        logger.debug('crash_log_reset: failed to reset log', exc_info=True)
 
 
 def get_memory_info() -> dict[str, Any]:
@@ -369,18 +370,7 @@ async def run_deep_verification(*, api_key: str, settings: object) -> None:
         mt_enum = default_map_type()
 
     # 3) Cache directory writability
-    if is_portable_mode():
-        cache_dir = get_portable_path('cache/tiles')
-    else:
-        cache_dir = Path(HTTP_CACHE_DIR)
-        if not cache_dir.is_absolute():
-            # Mirror logic similar to service._resolve_cache_dir()
-            local = os.getenv('LOCALAPPDATA')
-            cache_dir = (
-                (Path(local) / 'SK42' / '.cache' / 'tiles').resolve()
-                if local
-                else (Path.home() / '.sk42mapper_cache' / 'tiles').resolve()
-            )
+    cache_dir = resolve_cache_dir()
     _ensure_writable_dir(cache_dir)
 
     # 4) Output path directory writability
@@ -564,20 +554,7 @@ async def _make_cached_session_for_diag() -> aiohttp.ClientSession:
     if not HTTP_CACHE_ENABLED or not _AIOHTTP_CACHE_AVAILABLE:
         return aiohttp.ClientSession(connector=connector)
 
-    # Разрешаем каталог кэша аналогично service._resolve_cache_dir
-    if is_portable_mode():
-        cache_dir = get_portable_path('cache/tiles')
-    else:
-        raw_dir = Path(HTTP_CACHE_DIR)
-        if raw_dir.is_absolute():
-            cache_dir = raw_dir
-        else:
-            local = os.getenv('LOCALAPPDATA')
-            cache_dir = (
-                (Path(local) / 'SK42' / '.cache' / 'tiles').resolve()
-                if local
-                else (Path.home() / '.sk42mapper_cache' / 'tiles').resolve()
-            )
+    cache_dir = resolve_cache_dir()
     cache_dir.mkdir(parents=True, exist_ok=True)
     cache_path = cache_dir / 'http_cache.sqlite'
     # Инициализация WAL

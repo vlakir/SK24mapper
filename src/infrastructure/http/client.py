@@ -32,16 +32,21 @@ def resolve_cache_dir() -> Path | None:
     if is_portable_mode():
         return get_portable_path('cache/tiles')
 
-    # Обычный режим
+    # Явный абсолютный путь в константе — использовать как есть
     raw_dir = Path(HTTP_CACHE_DIR)
     if raw_dir.is_absolute():
         return raw_dir
 
+    # Windows: %LOCALAPPDATA%/SK42/.cache/tiles
     local = os.getenv('LOCALAPPDATA')
     if local:
         return (Path(local) / 'SK42' / '.cache' / 'tiles').resolve()
-    # Fallback: user's home directory
-    return (Path.home() / '.sk42mapper_cache' / 'tiles').resolve()
+
+    # Linux/macOS: ~/.cache/sk42mapper/tiles (XDG-совместимо)
+    xdg_cache = os.getenv('XDG_CACHE_HOME', '')
+    if xdg_cache:
+        return (Path(xdg_cache) / 'sk42mapper' / 'tiles').resolve()
+    return (Path.home() / '.cache' / 'sk42mapper' / 'tiles').resolve()
 
 
 def cleanup_sqlite_cache(cache_dir: Path) -> None:

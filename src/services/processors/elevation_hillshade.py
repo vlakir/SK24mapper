@@ -175,7 +175,7 @@ async def process_elevation_hillshade(ctx: MapDownloadContext) -> Image.Image:
     # 3. Convert float32[0..1] → uint8 grayscale → RGB
     hs_uint8 = (hs * 255).astype(np.uint8)
     del hs
-    result = Image.fromarray(hs_uint8, 'L').convert('RGB')
+    result = Image.fromarray(hs_uint8).convert('RGB')
     del hs_uint8
 
     # 4. Resize to display resolution (smooth BILINEAR upscale)
