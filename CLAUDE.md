@@ -12,6 +12,30 @@ cd /c/programming/SK24mapper && python -m pytest tests/ -x -q  # тесты
 - Карты: `%APPDATA%\SK42mapper\maps\`
 - Кэш тайлов: `%LOCALAPPDATA%\SK42mapper\.cache\`
 
+## ЖЕЛЕЗНОЕ ПРАВИЛО: DRY и переиспользование кода
+
+**ПЕРЕД написанием ЛЮБОГО нового кода — ОБЯЗАТЕЛЬНО изучи существующую кодовую базу на предмет аналогичной функциональности.**
+
+### Чек-лист перед реализацией новой фичи:
+1. **Найди аналог.** Если добавляешь новый MapType/процессор/GUI-панель — найди ближайший существующий (radio_horizon, radar_coverage, link_profile) и используй как эталон.
+2. **Переиспользуй, не дублируй.** Numba-ядра, worker-ы, отрисовка маркеров, загрузка DEM/topo, координатные преобразования — всё это уже написано. Вызывай существующие функции, не пиши новые.
+3. **Общая инфраструктура GUI:** `_rh_worker` — единый слот для всех coverage-воркеров. `merge_draggable_points()` — для интерактивных точек. `draw_control_point_triangle()` — для маркеров. `_recompute_coverage_at_click()` — эталон координатного преобразования.
+4. **Если кажется, что нужен новый класс/функция** — сначала поищи Grep/Glob по кодовой базе. В 90% случаев нужная функциональность уже есть.
+
+### Конкретные запреты:
+- **НЕ писать новые Numba `@njit` функции**, если задачу можно решить вызовом существующих (`_compute_grid_values_parallel`, `_trace_line_of_sight_numba` и т.д.)
+- **НЕ создавать отдельные worker-слоты** (`_xxx_worker`) — использовать `_rh_worker`
+- **НЕ рисовать маркеры вручную** через ImageDraw — использовать `draw_control_point_triangle()`
+- **НЕ писать свою загрузку DEM/topo** — использовать `_load_dem()` / `_load_topo()` из `processors/radio_horizon.py`
+- **НЕ писать свои координатные преобразования** — смотреть как это сделано в существующих процессорах
+
+### Паттерн добавления нового типа карты:
+1. Изучи `radar_coverage.py` (процессор) + соответствующую GUI-секцию — это самый чистый пример
+2. Скопируй структуру, замени только бизнес-логику
+3. Для интерактивного пересчёта — следуй паттерну `CoverageRecomputeWorker` + `_rh_worker` + `_pending_recompute`
+
+---
+
 ## Архитектура
 
 ### Слои
@@ -31,6 +55,7 @@ src/
 │   │   ├── elevation_hillshade.py   # Теневая отмывка рельефа (IN PROGRESS)
 │   │   ├── elevation_contours.py    # Изолинии (overlay поверх других режимов)
 │   │   ├── radar_coverage.py        # Зона обнаружения РЛС
+│   │   ├── nsu_optimizer.py         # Оптимальное размещение НСУ
 │   │   └── xyz_tiles.py             # Кастомные XYZ тайлы
 │   ├── tile_coverage.py             # Расчёт покрытия тайлами
 │   └── tile_fetcher.py              # Загрузка тайлов
@@ -44,10 +69,15 @@ src/
 ```
 
 ### Ключевые паттерны
-- **Процессоры** подключаются через `importlib.import_module()` в `map_download_service.py:_run_processor()`
+- **Процессоры** подключаются в `map_download_service.py:_run_processor()` через `_determine_map_type()` + dispatch
 - **Интерактивный alpha-слайдер**: процессоры сохраняют `ctx.rh_cache_topo_base` и `ctx.rh_cache_coverage` для blend
 - **DEM для курсора/изолиний**: `ctx.raw_dem_for_cursor` — ОБЯЗАТЕЛЬНО должен совпадать по размеру с `ctx.crop_rect`
 - **MapType enum** в `shared/constants.py` определяет все типы карт
+- **Общие функции**: `_load_dem()`, `_load_topo()` в `processors/radio_horizon.py` — единая загрузка DEM и топоосновы для всех процессоров
+- **Worker-ы**: `_rh_worker` в view.py — единый слот для всех фоновых coverage-вычислений (RH, radar, NSU)
+- **Маркеры**: `draw_control_point_triangle()` в `map_postprocessing.py` — единая отрисовка маркеров с параметром `color`
+- **Координаты**: `_recompute_coverage_at_click()` — эталон 3-шагового обратного преобразования (crop → rotation → scale)
+- **Numba-ядра**: `_compute_grid_values_parallel()` в `radio_horizon.py` — основное вычислительное ядро для LOS, переиспользуется всеми процессорами
 
 ## Зависимости
 Python 3.13, PySide6, aiohttp, Pillow, pyproj, scipy, opencv-python (cv2), numpy

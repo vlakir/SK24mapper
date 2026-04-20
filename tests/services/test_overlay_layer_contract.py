@@ -65,14 +65,16 @@ def test_elev_color_contours_on_separate_layer():
         lines = src.split('\n')
         for i, line in enumerate(lines):
             if 'rh_contour_layer' in line and 'contour_layer' in line:
-                # Look backwards for the if-condition
-                for j in range(i, max(i - 5, 0), -1):
+                # Look backwards for the if-condition (up to 20 lines for multi-line ifs)
+                for j in range(i, max(i - 20, 0), -1):
                     if 'if ' in lines[j] and 'is_elev_color' in lines[j]:
                         return  # OK, found
-        # Last resort: find 'if' line that contains both is_radio_horizon and is_elev_color
-        # before contour_layer assignment
+                    if 'is_elev_color' in lines[j]:
+                        return  # Part of multi-line if condition
+        # Last resort: find block containing both is_radio_horizon and is_elev_color
+        # (possibly on different lines in a multi-line if)
         contour_block = re.search(
-            r'if\s+.*is_radio_horizon.*is_elev_color.*:',
+            r'if\s*\([\s\S]*?is_elev_color[\s\S]*?\):',
             src,
         )
         assert contour_block is not None, (
@@ -89,16 +91,30 @@ def test_elev_color_overlay_layer_created():
     ELEVATION_COLOR (condition includes is_elev_color)."""
     src = _get_postprocess_source()
     # Find the condition that guards _create_rh_overlay_layer call
+    # Support both single-line and multi-line if conditions
     match = re.search(
         r'if\s+(.*?):\s*\n\s+self\._create_rh_overlay_layer',
         src,
     )
-    assert match is not None, '_create_rh_overlay_layer call not found in _postprocess'
-    condition = match.group(1)
-    assert 'is_elev_color' in condition, (
-        f'_create_rh_overlay_layer condition must include is_elev_color, '
-        f'got: {condition}'
-    )
+    if match is not None:
+        condition = match.group(1)
+        assert 'is_elev_color' in condition, (
+            f'_create_rh_overlay_layer condition must include is_elev_color, '
+            f'got: {condition}'
+        )
+        return
+    # Multi-line if: find _create_rh_overlay_layer and look back for if + is_elev_color
+    lines = src.split('\n')
+    for i, line in enumerate(lines):
+        if '_create_rh_overlay_layer' in line and 'self.' in line:
+            # Look backwards for the if-block containing is_elev_color
+            block = '\n'.join(lines[max(0, i - 10):i + 1])
+            assert 'is_elev_color' in block, (
+                f'_create_rh_overlay_layer condition must include is_elev_color, '
+                f'surrounding block: {block}'
+            )
+            return
+    pytest.fail('_create_rh_overlay_layer call not found in _postprocess')
 
 
 # ---------------------------------------------------------------------------

@@ -12,7 +12,7 @@ from PySide6.QtGui import QIcon
 
 from gui.theme import apply_dark_title_bar
 from gui.view import create_application
-from shared.constants import LOG_FSYNC_TO_FILE, MEMORY_MIN_TOTAL_MB
+from shared.constants import LOG_FSYNC_TO_FILE, MEMORY_MIN_TOTAL_MB, MEMORY_RLIMIT_RATIO
 from shared.diagnostics import log_memory_usage
 from shared.portable import get_portable_path, is_portable_mode
 
@@ -182,10 +182,55 @@ def _check_system_memory() -> bool:
     return True
 
 
+def _set_memory_limit() -> None:
+    """
+    Set process memory limit via RLIMIT_AS (Linux only).
+
+    При превышении лимита malloc/mmap возвращают ENOMEM →
+    Python бросает MemoryError вместо того чтобы OOM killer
+    убивал процесс (или вешал всю систему).
+
+    RLIMIT_AS ограничивает virtual address space, а не physical RAM.
+    Virtual AS включает mmap'd файлы, shared libraries, thread stacks —
+    они не расходуют физическую RAM. Поэтому лимит считается от
+    (RAM + swap) * ratio, а не от RAM * ratio.
+    """
+    try:
+        import resource
+
+        import psutil
+    except ImportError:
+        return  # Windows или нет psutil — пропускаем
+
+    mem = psutil.virtual_memory()
+    swap = psutil.swap_memory()
+    # Virtual address space лимит: RAM + swap (не только RAM)
+    total_bytes = mem.total + swap.total
+    limit_bytes = int(total_bytes * MEMORY_RLIMIT_RATIO)
+
+    try:
+        _soft, hard = resource.getrlimit(resource.RLIMIT_AS)
+        # Не повышаем выше текущего hard limit (если он уже установлен)
+        if hard != resource.RLIM_INFINITY:
+            limit_bytes = min(limit_bytes, hard)
+        resource.setrlimit(resource.RLIMIT_AS, (limit_bytes, limit_bytes))
+        logger.info(
+            'RLIMIT_AS set to %.0f MB (RAM=%.0f MB + swap=%.0f MB, ratio=%.0f%%)',
+            limit_bytes / (1024 * 1024),
+            mem.total / (1024 * 1024),
+            swap.total / (1024 * 1024),
+            MEMORY_RLIMIT_RATIO * 100,
+        )
+    except (ValueError, OSError) as e:
+        logger.warning('Failed to set RLIMIT_AS: %s', e)
+
+
 def main() -> int:
     """Main application entry point."""
     appdata_base, local_base = setup_logging()
     logger.info('Starting Mil Mapper 2.0')
+
+    _set_memory_limit()
 
     if not _check_system_memory():
         return 1

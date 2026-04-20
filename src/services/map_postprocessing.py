@@ -45,6 +45,25 @@ def draw_center_cross_on_image(
     draw.line([(cx - half, cy), (cx + half, cy)], fill=color, width=line_w)
 
 
+def _sample_background_luminance(
+    img: Image.Image, cx: float, cy: float, radius: int = 10
+) -> float:
+    """Sample average luminance around (cx, cy). Returns 0..255."""
+    w, h = img.size
+    x0 = max(0, int(cx) - radius)
+    y0 = max(0, int(cy) - radius)
+    x1 = min(w, int(cx) + radius)
+    y1 = min(h, int(cy) + radius)
+    if x1 <= x0 or y1 <= y0:
+        return 128.0
+    crop = img.crop((x0, y0, x1, y1)).convert('RGB')
+    import numpy as np
+
+    arr = np.asarray(crop, dtype=np.float32)
+    lum = 0.299 * arr[:, :, 0] + 0.587 * arr[:, :, 1] + 0.114 * arr[:, :, 2]
+    return float(lum.mean())
+
+
 def draw_control_point_triangle(
     img: Image.Image,
     cx_img: float,
@@ -53,6 +72,8 @@ def draw_control_point_triangle(
     rotation_deg: float = 0.0,
     size_m: float | None = None,
     color: tuple[int, int, int] = CONTROL_POINT_COLOR,
+    *,
+    adaptive_outline: bool = False,
 ) -> None:
     """
     Draw a triangular control point marker at specified position.
@@ -65,6 +86,7 @@ def draw_control_point_triangle(
         rotation_deg: Image rotation in degrees (for marker orientation)
         size_m: Marker size in meters (defaults to CONTROL_POINT_SIZE_M)
         color: Marker color as (R, G, B) tuple
+        adaptive_outline: If True, draw contrasting outline based on background
 
     """
     if meters_per_px <= 0:
@@ -96,7 +118,21 @@ def draw_control_point_triangle(
 
     draw = ImageDraw.Draw(img)
     c = tuple(color)
-    draw.polygon(pts_rotated, fill=c, outline=c)
+
+    if adaptive_outline:
+        # Контрастная обводка: чёрная на све��лом фоне, белая на тёмном
+        lum = _sample_background_luminance(img, cx_img, cy_img)
+        lum_threshold = 128
+        outline_color = (0, 0, 0) if lum > lum_threshold else (255, 255, 255)
+        # Рисуем обводку чуть толще (outline= в polygon слишком тонкая)
+        draw.polygon(pts_rotated, fill=c, outline=outline_color)
+        # Дополнительная линия обводки для толщины
+        outline_width = max(2, round(size_px * 0.08))
+        draw.line(
+            [*pts_rotated, pts_rotated[0]], fill=outline_color, width=outline_width
+        )
+    else:
+        draw.polygon(pts_rotated, fill=c, outline=c)
 
 
 def compute_control_point_image_coords(

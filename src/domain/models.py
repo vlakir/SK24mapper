@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 
 from pydantic import BaseModel, field_validator
@@ -134,8 +135,24 @@ class MapSettings(BaseModel):
     link_antenna_a_m: float = 10.0  # Высота антенны A (м)
     link_antenna_b_m: float = 10.0  # Высота антенны B (м)
 
+    # Параметры НСУ Optimizer
+    nsu_target_points_json: str = '[]'  # JSON: [[x1,y1], [x2,y2], ...] (СК-42)
+    nsu_antenna_height_m: float = 10.0  # Высота антенны НСУ (м)
+    nsu_max_flight_height_m: float = 500.0  # Макс. высота полёта БпЛА (м)
+    nsu_overlay_alpha: float = 0.3  # Прозрачность наложения
+
+    @property
+    def nsu_target_points(self) -> list[tuple[int, int]]:
+        """Список целевых точек [(x_sk42, y_sk42), ...]."""
+        try:
+            data = json.loads(self.nsu_target_points_json)
+            min_coords = 2
+            return [(int(p[0]), int(p[1])) for p in data if len(p) >= min_coords]
+        except Exception:
+            return []
+
     # Валидации через Pydantic validators
-    @field_validator('mask_opacity', 'radio_horizon_overlay_alpha')
+    @field_validator('mask_opacity', 'radio_horizon_overlay_alpha', 'nsu_overlay_alpha')
     @classmethod
     def validate_opacity_fields(cls, v: float | str) -> float:
         v = float(v)

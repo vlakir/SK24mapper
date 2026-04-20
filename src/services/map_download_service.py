@@ -61,6 +61,7 @@ from services.processors import (
     elevation_contours,
     elevation_hillshade,
     link_profile,
+    nsu_optimizer,
     radar_coverage,
     radio_horizon,
     xyz_tiles,
@@ -80,6 +81,7 @@ from shared.constants import (
     ELEVATION_USE_RETINA,
     MAX_OUTPUT_PIXELS,
     MAX_ZOOM,
+    NSU_OPTIMIZER_USE_RETINA,
     PIL_DISABLE_LIMIT,
     RADAR_COVERAGE_USE_RETINA,
     RADIO_HORIZON_COLOR_RAMP,
@@ -221,6 +223,9 @@ class MapDownloadService:
         ctx.rh_cache_overlay = None
         ctx.rh_cache_overlay_base = None
         ctx.rh_contour_layer = None
+        ctx.nsu_cache_dem = None
+        ctx.nsu_cache_topo_base = None
+        ctx.nsu_cache_coverage = None
         ctx.link_profile_clean_base = None
         ctx.link_profile_data = None
         gc.collect()
@@ -278,6 +283,7 @@ class MapDownloadService:
             is_radio_horizon,
             is_radar_coverage,
             is_link_profile,
+            is_nsu_optimizer,
         ) = await self._determine_map_type(mt_enum, settings)
 
         # Determine scale
@@ -298,6 +304,10 @@ class MapDownloadService:
         elif is_radar_coverage:
             eff_scale = effective_scale_for_xyz(
                 256, use_retina=RADAR_COVERAGE_USE_RETINA
+            )
+        elif is_nsu_optimizer:
+            eff_scale = effective_scale_for_xyz(
+                256, use_retina=NSU_OPTIMIZER_USE_RETINA
             )
         else:
             eff_scale = effective_scale_for_xyz(
@@ -464,6 +474,7 @@ class MapDownloadService:
             is_radio_horizon=is_radio_horizon,
             is_radar_coverage=is_radar_coverage,
             is_link_profile=is_link_profile,
+            is_nsu_optimizer=is_nsu_optimizer,
             overlay_contours=bool(getattr(settings, 'overlay_contours', False)),
             full_eff_tile_px=full_eff_tile_px,
             memory_estimate=memory_estimate,
@@ -477,7 +488,7 @@ class MapDownloadService:
 
     async def _determine_map_type(
         self, mt_enum: MapType, settings: MapSettings
-    ) -> tuple[str | None, bool, bool, bool, bool, bool]:
+    ) -> tuple[str | None, bool, bool, bool, bool, bool, bool]:
         """Determine map type and validate API access."""
         style_id = None
         is_elev_color = False
@@ -485,6 +496,7 @@ class MapDownloadService:
         is_radio_horizon = False
         is_radar_coverage = False
         is_link_profile = False
+        is_nsu_optimizer = False
 
         if mt_enum in (
             MapType.SATELLITE,
@@ -557,6 +569,14 @@ class MapDownloadService:
             await _validate_api_and_connectivity(
                 self.api_key, map_type_to_style_id(MapType.HYBRID)
             )
+        elif mt_enum == MapType.NSU_OPTIMIZER:
+            logger.info(
+                'Тип карты: %s (оптимальное размещение НСУ); retina=%s',
+                mt_enum,
+                NSU_OPTIMIZER_USE_RETINA,
+            )
+            is_nsu_optimizer = True
+            await _validate_terrain_api(self.api_key)
         elif mt_enum == MapType.ELEVATION_HILLSHADE:
             logger.info(
                 'Тип карты: %s (Terrain-RGB, теневая отмывка); retina=%s',
@@ -580,12 +600,15 @@ class MapDownloadService:
             is_radio_horizon,
             is_radar_coverage,
             is_link_profile,
+            is_nsu_optimizer,
         )
 
     async def _run_processor(self, ctx: MapDownloadContext) -> Image.Image:  # noqa: PLR0911
         """Run appropriate processor based on map type."""
         if ctx.is_link_profile:
             return await link_profile.process_link_profile(ctx)
+        if ctx.is_nsu_optimizer:
+            return await nsu_optimizer.process_nsu_optimizer(ctx)
         if ctx.is_elev_color:
             if ctx.settings.map_type == MapType.ELEVATION_HILLSHADE:
                 return await elevation_hillshade.process_elevation_hillshade(ctx)
@@ -610,9 +633,14 @@ class MapDownloadService:
         # чтобы не держать dem_grid и raw_dem одновременно с numpy-буферами)
         if ctx.overlay_contours and not ctx.is_elev_contours:
             crash_log('postprocess: overlay contours START')
-            if ctx.is_radio_horizon or ctx.is_radar_coverage or ctx.is_elev_color:
-                # For RH/Radar/ElevColor: draw contours on a separate transparent layer
-                # for inclusion in the cached overlay (interactive alpha slider)
+            if (
+                ctx.is_radio_horizon
+                or ctx.is_radar_coverage
+                or ctx.is_elev_color
+                or ctx.is_nsu_optimizer
+            ):
+                # RH/Radar/ElevColor/NsuOpt: contours on separate transparent layer
+                # for the cached overlay (interactive alpha slider)
                 contour_layer = Image.new('RGBA', result.size, (0, 0, 0, 0))
                 contour_layer = await self._apply_overlay_contours(ctx, contour_layer)
                 # Composite onto result
@@ -712,12 +740,20 @@ class MapDownloadService:
 
         # Legend (not drawn for hillshade — grayscale, no elevation scale)
         if (
-            ctx.is_elev_color or ctx.is_radio_horizon or ctx.is_radar_coverage
+            ctx.is_elev_color
+            or ctx.is_radio_horizon
+            or ctx.is_radar_coverage
+            or ctx.is_nsu_optimizer
         ) and ctx.settings.map_type != MapType.ELEVATION_HILLSHADE:
             self._draw_legend(ctx, result)
 
-        # For RH / radar / elev_color: create and cache overlay
-        if ctx.is_radio_horizon or ctx.is_radar_coverage or ctx.is_elev_color:
+        # For RH / radar / elev_color / nsu_optimizer: create and cache overlay
+        if (
+            ctx.is_radio_horizon
+            or ctx.is_radar_coverage
+            or ctx.is_elev_color
+            or ctx.is_nsu_optimizer
+        ):
             self._create_rh_overlay_layer(ctx, result)
 
         # For radar coverage: draw sector overlay after grid/legend
@@ -727,8 +763,12 @@ class MapDownloadService:
         # Center cross
         self._draw_center_cross(ctx, result)
 
-        # Control point (не рисуем для Link Profile)
-        if ctx.settings.control_point_enabled and not ctx.is_link_profile:
+        # Control point (не рисуем для Link Profile и NSU Optimizer)
+        if (
+            ctx.settings.control_point_enabled
+            and not ctx.is_link_profile
+            and not ctx.is_nsu_optimizer
+        ):
             self._draw_control_point(ctx, result)
 
         # Link profile: save clean base for interactive drag, then draw overlay
@@ -939,6 +979,11 @@ class MapDownloadService:
                 min_elev = ctx.settings.radar_target_height_min_m
                 max_elev = ctx.settings.radar_target_height_max_m
                 title = 'Мин. высота обнаружения РЛС, м'
+            elif ctx.is_nsu_optimizer:
+                color_ramp = RADIO_HORIZON_COLOR_RAMP
+                min_elev = 0.0
+                max_elev = ctx.settings.nsu_max_flight_height_m
+                title = 'Минимальная высота полета для всех точек, м'
             else:  # radio horizon
                 color_ramp = RADIO_HORIZON_COLOR_RAMP
                 min_elev = 0.0
@@ -1240,7 +1285,10 @@ class MapDownloadService:
 
             # Draw legend on overlay (not for hillshade — grayscale, no elevation scale)
             if (
-                ctx.is_radio_horizon or ctx.is_radar_coverage or ctx.is_elev_color
+                ctx.is_radio_horizon
+                or ctx.is_radar_coverage
+                or ctx.is_elev_color
+                or ctx.is_nsu_optimizer
             ) and ctx.settings.map_type != MapType.ELEVATION_HILLSHADE:
                 self._draw_legend(ctx, overlay)
 
@@ -1504,6 +1552,23 @@ class MapDownloadService:
                     'rotation_deg': ctx.rotation_deg,
                     'final_size': (ctx.target_w_px, ctx.target_h_px),
                     'crop_size': ctx.rh_cache_crop_size,
+                }
+            elif ctx.is_nsu_optimizer and ctx.nsu_cache_dem is not None:
+                rh_cache = {
+                    'is_nsu_optimizer': True,
+                    'dem': ctx.nsu_cache_dem,
+                    'topo_base': ctx.nsu_cache_topo_base,
+                    'pixel_size_m': ctx.nsu_cache_pixel_size_m,
+                    'antenna_height_m': ctx.settings.nsu_antenna_height_m,
+                    'overlay_alpha': ctx.settings.nsu_overlay_alpha,
+                    'max_height_m': ctx.settings.nsu_max_flight_height_m,
+                    'coverage_layer': ctx.nsu_cache_coverage,
+                    'overlay_layer': ctx.rh_cache_overlay,
+                    'overlay_base': ctx.rh_cache_overlay_base,
+                    'settings': ctx.settings,
+                    'rotation_deg': ctx.rotation_deg,
+                    'final_size': (ctx.target_w_px, ctx.target_h_px),
+                    'crop_size': ctx.nsu_cache_crop_size,
                 }
             elif ctx.is_link_profile and ctx.link_profile_clean_base is not None:
                 rh_cache = {

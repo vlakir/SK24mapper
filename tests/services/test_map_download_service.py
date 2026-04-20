@@ -30,12 +30,12 @@ async def test_determine_map_type_xyz(monkeypatch):
     service = MapDownloadService("token")
     settings = SimpleNamespace(control_point_enabled=True, antenna_height_m=10)
 
-    style_id, is_color, is_contours, is_radio, is_radar, is_link = await service._determine_map_type(
+    style_id, is_color, is_contours, is_radio, is_radar, is_link, is_nsu = await service._determine_map_type(
         MapType.STREETS, settings
     )
 
     assert style_id is not None
-    assert (is_color, is_contours, is_radio, is_radar, is_link) == (False, False, False, False, False)
+    assert (is_color, is_contours, is_radio, is_radar, is_link, is_nsu) == (False, False, False, False, False, False)
     assert calls["style"][0] == "token"
     assert "terrain" not in calls
 
@@ -58,12 +58,12 @@ async def test_determine_map_type_elevation(monkeypatch):
     service = MapDownloadService("token")
     settings = SimpleNamespace(control_point_enabled=True, antenna_height_m=10)
 
-    style_id, is_color, is_contours, is_radio, is_radar, is_link = await service._determine_map_type(
+    style_id, is_color, is_contours, is_radio, is_radar, is_link, is_nsu = await service._determine_map_type(
         MapType.ELEVATION_COLOR, settings
     )
 
     assert style_id is None
-    assert (is_color, is_contours, is_radio, is_radar, is_link) == (True, False, False, False, False)
+    assert (is_color, is_contours, is_radio, is_radar, is_link, is_nsu) == (True, False, False, False, False, False)
     assert calls == ["terrain"]
 
 
@@ -98,6 +98,7 @@ async def test_run_processor_branches(monkeypatch):
         is_radio_horizon=False,
         is_radar_coverage=False,
         is_link_profile=False,
+        is_nsu_optimizer=False,
         settings=SimpleNamespace(map_type=MapType.SATELLITE),
     )
 
@@ -281,12 +282,12 @@ async def test_determine_map_type_radar_coverage(monkeypatch):
         control_point_enabled=True, antenna_height_m=10,
         radar_max_range_km=15.0, radar_sector_width_deg=90.0,
     )
-    style_id, is_color, is_contours, is_radio, is_radar, is_link = await service._determine_map_type(
+    style_id, is_color, is_contours, is_radio, is_radar, is_link, is_nsu = await service._determine_map_type(
         MapType.RADAR_COVERAGE, settings_cp
     )
 
     assert style_id is None
-    assert (is_color, is_contours, is_radio, is_radar, is_link) == (False, False, False, True, False)
+    assert (is_color, is_contours, is_radio, is_radar, is_link, is_nsu) == (False, False, False, True, False, False)
     assert "terrain" in calls
 
 

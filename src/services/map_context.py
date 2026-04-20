@@ -120,7 +120,15 @@ class MapDownloadContext:
     is_radio_horizon: bool = False
     is_radar_coverage: bool = False
     is_link_profile: bool = False
+    is_nsu_optimizer: bool = False
     overlay_contours: bool = False
+
+    # NSU optimizer cache data (for interactive rebuilding)
+    nsu_cache_dem: Any | None = None
+    nsu_cache_topo_base: Image.Image | None = None
+    nsu_cache_pixel_size_m: float | None = None
+    nsu_cache_crop_size: tuple[int, int] | None = None
+    nsu_cache_coverage: Image.Image | None = None
 
     # Link profile data (filled by processor for postprocessing)
     link_profile_data: dict | None = None
