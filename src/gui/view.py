@@ -2478,6 +2478,8 @@ class MainWindow(QMainWindow):
             self._clear_preview_ui()
             # Use the same collection logic as forced sync
             self._sync_ui_to_model_now()
+            # Re-check NSU point bounds (map area may have changed)
+            self._nsu_recolorize_all()
         finally:
             self._ui_sync_in_progress = False
 
@@ -3064,6 +3066,61 @@ class MainWindow(QMainWindow):
         self._nsu_add_point(x_val, y_val)
         self._status_proxy.show_message(f'Добавлена точка: X={x_val}, Y={y_val}', 2000)
 
+    def _final_pos_to_dem_coords(self, px: float, py: float) -> tuple[int, int] | None:
+        """
+        Convert final image pixel (px, py) to DEM array indices (row, col).
+
+        3-step inverse: undo center crop -> inverse rotation -> scale to DEM.
+        Returns None if DEM is not available in cache.
+        """
+        dem = self._rh_cache.get('dem')
+        if dem is None:
+            return None
+
+        dem_h, dem_w = dem.shape
+        final_size = self._rh_cache.get('final_size')
+
+        if final_size:
+            final_w, final_h = final_size
+            rotation_deg = self._rh_cache.get('rotation_deg', 0.0)
+
+            dem_full = self._rh_cache.get('dem_full')
+            crop_size = self._rh_cache.get('crop_size')
+            if dem_full is not None:
+                crop_h, crop_w = dem_full.shape
+            elif crop_size:
+                crop_w, crop_h = crop_size
+            else:
+                crop_h, crop_w = dem_h, dem_w
+
+            # 1. Undo center crop: final image -> crop_rect (rotated)
+            left_crop = (crop_w - final_w) / 2.0
+            top_crop = (crop_h - final_h) / 2.0
+            px_rot = px + left_crop
+            py_rot = py + top_crop
+
+            # 2. Inverse rotation around crop_rect center
+            if abs(rotation_deg) > ROTATION_INVERSE_THRESHOLD_DEG:
+                cx, cy = crop_w / 2.0, crop_h / 2.0
+                rad = math.radians(rotation_deg)
+                cos_a, sin_a = math.cos(rad), math.sin(rad)
+                dx, dy = px_rot - cx, py_rot - cy
+                ux = dx * cos_a - dy * sin_a + cx
+                uy = dx * sin_a + dy * cos_a + cy
+            else:
+                ux, uy = px_rot, py_rot
+
+            # 3. Scale: crop_rect -> downsampled DEM
+            col = int(ux * dem_w / crop_w)
+            row = int(uy * dem_h / crop_h)
+        else:
+            col = int(px)
+            row = int(py)
+
+        row = max(0, min(row, dem_h - 1))
+        col = max(0, min(col, dem_w - 1))
+        return (row, col)
+
     def _recompute_coverage_at_click(
         self,
         px: float,
@@ -3093,7 +3150,6 @@ class MainWindow(QMainWindow):
         self._pending_recompute_pos = None
 
         dem = self._rh_cache.get('dem')
-        final_size = self._rh_cache.get('final_size')
         if dem is None:
             logger.warning('No DEM in cache, cannot recompute')
             return
@@ -3101,51 +3157,13 @@ class MainWindow(QMainWindow):
         dem_h, dem_w = dem.shape
 
         if dem_row is not None and dem_col is not None:
-            # Direct DEM coords — no round-trip conversion needed
             new_antenna_row = dem_row
             new_antenna_col = dem_col
-        elif final_size:
-            final_w, final_h = final_size
-            rotation_deg = self._rh_cache.get('rotation_deg', 0.0)
-
-            # Размеры полноразмерного DEM (= crop_rect pixel size)
-            dem_full = self._rh_cache.get('dem_full')
-            if dem_full is not None:
-                crop_h, crop_w = dem_full.shape
-            else:
-                crop_h, crop_w = dem_h, dem_w
-
-            # 1. Undo center crop: final image → crop_rect (повёрнутый)
-            left_crop = (crop_w - final_w) / 2.0
-            top_crop = (crop_h - final_h) / 2.0
-            px_rot = px + left_crop
-            py_rot = py + top_crop
-
-            # 2. Обратный поворот вокруг центра crop_rect
-            # cv2 forward rotation: [[cos(a), sin(a)], [-sin(a), cos(a)]]
-            # Inverse = transpose:  [[cos(a), -sin(a)], [sin(a), cos(a)]]
-            # With positive angle, (dx*cos - dy*sin, dx*sin + dy*cos) is the inverse.
-            if abs(rotation_deg) > ROTATION_INVERSE_THRESHOLD_DEG:
-                cx, cy = crop_w / 2.0, crop_h / 2.0
-                rad = math.radians(rotation_deg)
-                cos_a, sin_a = math.cos(rad), math.sin(rad)
-                dx, dy = px_rot - cx, py_rot - cy
-                ux = dx * cos_a - dy * sin_a + cx
-                uy = dx * sin_a + dy * cos_a + cy
-            else:
-                ux, uy = px_rot, py_rot
-
-            # 3. Масштабирование: crop_rect → downsampled DEM
-            scale_x = dem_w / crop_w
-            scale_y = dem_h / crop_h
-            new_antenna_col = int(ux * scale_x)
-            new_antenna_row = int(uy * scale_y)
         else:
-            new_antenna_col = int(px)
-            new_antenna_row = int(py)
-
-        new_antenna_row = max(0, min(new_antenna_row, dem_h - 1))
-        new_antenna_col = max(0, min(new_antenna_col, dem_w - 1))
+            result = self._final_pos_to_dem_coords(px, py)
+            if result is None:
+                return
+            new_antenna_row, new_antenna_col = result
 
         logger.info(
             'Coverage recompute: scene (%.1f, %.1f) -> DEM (%d, %d)',
@@ -3979,9 +3997,18 @@ class MainWindow(QMainWindow):
                     size_m=self._model.settings.grid_font_size_m,
                 )
                 self._draw_rh_control_point_label(blended, px, py, mpp)
+        # Finalize to RGB (same as _on_nsu_recompute_finished)
+        if blended.mode != 'RGB':
+            blended = blended.convert('RGB')
+        # Draw NSU markers on image before displaying
+        is_nsu = self._rh_cache.get('is_nsu_optimizer')
+        if is_nsu:
+            self._nsu_draw_markers_on_image(blended)
         self._preview_area.set_image(blended)
         # Restore QGraphics overlay markers cleared by set_image → scene.clear()
         self._update_cp_marker_from_settings(self._model.settings)
+        if is_nsu:
+            self._nsu_register_draggable_points()
 
     @Slot(int)
     def _on_alpha_slider_changed(self, value: int) -> None:
@@ -4649,6 +4676,26 @@ class MainWindow(QMainWindow):
             self._download_warnings.append(text)
         if not field_updates:
             return
+
+        # Handle NSU target points update (table, not widgets)
+        nsu_json = field_updates.pop('nsu_target_points_json', None)
+        if nsu_json is not None:
+            import json as _json
+
+            try:
+                pts = [
+                    (int(p[0]), int(p[1]))
+                    for p in _json.loads(nsu_json)
+                    if len(p) >= 2  # noqa: PLR2004
+                ]
+            except Exception:
+                pts = []
+            self._nsu_populate_table(pts)
+            self._model.patch_settings_silent(nsu_target_points_json=nsu_json)
+
+        if not field_updates:
+            return
+
         # Map field names to coordinate input widgets
         _field_widget_map = {
             'control_point_x': self.control_point_x_widget,
@@ -5119,21 +5166,70 @@ class MainWindow(QMainWindow):
         self._sync_ui_to_model_now()
         self._trigger_nsu_recompute()
 
+    def _is_nsu_point_in_bounds(self, x_sk42: int, y_sk42: int) -> bool:
+        """
+        Check if NSU point is within current map bounds.
+
+        Returns True when settings are unavailable (no map context).
+        """
+        settings = getattr(self._model, 'settings', None)
+        if settings is None:
+            return True
+        try:
+            from services.coordinate_transformer import (
+                is_point_within_bounds,
+                sk42_raw_to_gk,
+            )
+
+            gk_e, gk_n = sk42_raw_to_gk(x_sk42, y_sk42)
+            bl_x = settings.bottom_left_x_sk42_gk
+            bl_y = settings.bottom_left_y_sk42_gk
+            tr_x = settings.top_right_x_sk42_gk
+            tr_y = settings.top_right_y_sk42_gk
+            center_x = (bl_x + tr_x) / 2
+            center_y = (bl_y + tr_y) / 2
+            width_m = tr_x - bl_x
+            height_m = tr_y - bl_y
+            return is_point_within_bounds(
+                gk_e, gk_n, center_x, center_y, width_m, height_m
+            )
+        except Exception:
+            return True
+
     def _nsu_colorize_row(self, row: int) -> None:
-        """Set background color for all cells in row based on point color."""
+        """Set background color for all cells in row based on point color and bounds."""
         from PySide6.QtGui import QBrush as _QBrush
         from PySide6.QtGui import QColor as _QColor
 
         from shared.constants import NSU_OPTIMIZER_POINT_COLORS
 
-        color = NSU_OPTIMIZER_POINT_COLORS[row % len(NSU_OPTIMIZER_POINT_COLORS)]
-        # Светлый фон (30% насыщенности) для читаемости текста
-        bg = _QColor(color[0], color[1], color[2], 80)
+        # Check if point is out of bounds
+        oob = False
+        try:
+            x_item = self._nsu_table.item(row, 1)
+            y_item = self._nsu_table.item(row, 2)
+            if x_item and y_item:
+                x_val = int(x_item.text())
+                y_val = int(y_item.text())
+                oob = not self._is_nsu_point_in_bounds(x_val, y_val)
+        except (ValueError, TypeError):
+            pass
+
+        if oob:
+            bg = _QColor(255, 80, 80, 100)
+        else:
+            color = NSU_OPTIMIZER_POINT_COLORS[row % len(NSU_OPTIMIZER_POINT_COLORS)]
+            bg = _QColor(color[0], color[1], color[2], 80)
         brush = _QBrush(bg)
         for col in range(self._nsu_table.columnCount()):
             item = self._nsu_table.item(row, col)
             if item is not None:
                 item.setBackground(brush)
+
+    def _nsu_recolorize_all(self) -> None:
+        """Re-check bounds and update colors for every table row."""
+        for row in range(self._nsu_table.rowCount()):
+            self._nsu_colorize_row(row)
 
     def _nsu_renumber_table(self) -> None:
         """Renumber the first column after deletion."""
@@ -5196,6 +5292,7 @@ class MainWindow(QMainWindow):
         """Handle manual coordinate edit in table."""
         if col in (1, 2):  # X or Y column
             self._sync_ui_to_model_now()
+            self._nsu_recolorize_all()
             self._trigger_nsu_recompute()
 
     def _has_nsu_cache(self) -> bool:
@@ -5205,6 +5302,38 @@ class MainWindow(QMainWindow):
             and self._rh_cache.get('is_nsu_optimizer')
             and 'dem' in self._rh_cache
         )
+
+    def _nsu_reset_overlay(self) -> None:
+        """Clear NSU heatmap overlay and markers when all points deleted."""
+        import contextlib
+
+        # 1. Remove coverage layer from cache
+        old_cov = self._rh_cache.pop('coverage_layer', None)
+        if old_cov is not None and hasattr(old_cov, 'close'):
+            with contextlib.suppress(Exception):
+                old_cov.close()
+
+        # 2. Remove all T* draggable points
+        for i in range(10):
+            self._preview_area.remove_draggable_point(f'T{i}')
+
+        # 3. Clear NSU markers (crosses on map)
+        self._preview_area.clear_nsu_markers()
+
+        # 4. Restore clean topo base with overlay
+        topo = self._rh_cache.get('topo_base')
+        if topo is not None:
+            display = topo.copy()
+            final_size = self._rh_cache.get('final_size')
+            if final_size and display.size != final_size:
+                display = display.resize(final_size, Image.Resampling.BILINEAR)
+            overlay_layer = self._rh_cache.get('overlay_layer')
+            if overlay_layer:
+                if display.mode != 'RGBA':
+                    display = display.convert('RGBA')
+                display = Image.alpha_composite(display, overlay_layer)
+                display = display.convert('RGB')
+            self._preview_area.set_image(display)
 
     def _trigger_nsu_recompute(self) -> None:
         """
@@ -5237,61 +5366,38 @@ class MainWindow(QMainWindow):
         except Exception:
             points = []
         if not points:
+            self._nsu_reset_overlay()
             return
 
-        cache = self._rh_cache
-        dem = cache.get('dem')
         metadata = self._model.state.last_map_metadata
-        if dem is None or metadata is None:
+        if self._rh_cache.get('dem') is None or metadata is None:
             return
-
-        dem_h, dem_w = dem.shape
-        final_size = cache.get('final_size')
-        crop_size = cache.get('crop_size')
-        rotation_deg = cache.get('rotation_deg', 0.0)
-
-        if crop_size:
-            crop_w, crop_h = crop_size
-        else:
-            crop_w, crop_h = dem_w, dem_h
 
         target_rows = []
         target_cols = []
-        for p in points:
-            pos = self._nsu_point_to_image_pos(int(p[0]), int(p[1]), metadata)
+        skipped_nums: list[int] = []
+        for i, p in enumerate(points):
+            x_sk42, y_sk42 = int(p[0]), int(p[1])
+            if not self._is_nsu_point_in_bounds(x_sk42, y_sk42):
+                skipped_nums.append(i + 1)
+                continue
+            pos = self._nsu_point_to_image_pos(x_sk42, y_sk42, metadata)
             if pos is None:
                 continue
             px, py = pos
-
-            if final_size:
-                final_w, final_h = final_size
-                left_crop = (crop_w - final_w) / 2.0
-                top_crop = (crop_h - final_h) / 2.0
-                px_rot = px + left_crop
-                py_rot = py + top_crop
-
-                if abs(rotation_deg) > ROTATION_INVERSE_THRESHOLD_DEG:
-                    cx_c, cy_c = crop_w / 2.0, crop_h / 2.0
-                    rad = math.radians(rotation_deg)
-                    cos_a, sin_a = math.cos(rad), math.sin(rad)
-                    dx, dy = px_rot - cx_c, py_rot - cy_c
-                    ux = dx * cos_a - dy * sin_a + cx_c
-                    uy = dx * sin_a + dy * cos_a + cy_c
-                else:
-                    ux, uy = px_rot, py_rot
-
-                dem_col = int(ux * dem_w / crop_w)
-                dem_row = int(uy * dem_h / crop_h)
-            else:
-                dem_col = int(px * dem_w / crop_w)
-                dem_row = int(py * dem_h / crop_h)
-
-            dem_row = max(0, min(dem_row, dem_h - 1))
-            dem_col = max(0, min(dem_col, dem_w - 1))
+            result = self._final_pos_to_dem_coords(px, py)
+            if result is None:
+                continue
+            dem_row, dem_col = result
             target_rows.append(dem_row)
             target_cols.append(dem_col)
 
+        if skipped_nums:
+            labels = ', '.join(f'#{n}' for n in skipped_nums)
+            self._status_proxy.show_message(f'Точки {labels} за пределами карты', 4000)
+
         if not target_rows:
+            self._nsu_reset_overlay()
             return
 
         target_rows_arr = np.array(target_rows, dtype=np.int32)
@@ -5318,7 +5424,7 @@ class MainWindow(QMainWindow):
 
         self._nsu_pending_recompute = False
         worker = NsuOptimizerRecomputeWorker(
-            rh_cache=cache,
+            rh_cache=self._rh_cache,
             target_rows=target_rows_arr,
             target_cols=target_cols_arr,
         )
@@ -5332,13 +5438,9 @@ class MainWindow(QMainWindow):
     ) -> tuple[float, float] | None:
         """Convert SK-42 point to image pixel coordinates."""
         try:
-            # SK-42 raw → GK
-            y_high = y_sk42 // 100000
-            y_low_km = (y_sk42 % 100000) / 1000.0
-            x_high = x_sk42 // 100000
-            x_low_km = (x_sk42 % 100000) / 1000.0
-            gk_x = 1e3 * y_low_km + 1e5 * y_high  # easting
-            gk_y = 1e3 * x_low_km + 1e5 * x_high  # northing
+            from services.coordinate_transformer import sk42_raw_to_gk
+
+            gk_x, gk_y = sk42_raw_to_gk(x_sk42, y_sk42)
 
             transformer = CoordinateTransformer(
                 gk_x,
@@ -6181,6 +6283,9 @@ class MainWindow(QMainWindow):
             self._set_sliders_enabled(enabled=False)
             # Aggressively clear global QPixmap cache between runs
             QPixmapCache.clear()
+            # Force GC to free large objects (PIL images, numpy arrays, QPixmap)
+            # before the child process starts and competes for RAM
+            gc.collect()
         except Exception as e:
             logger.debug(f'Failed to clear preview UI: {e}')
 

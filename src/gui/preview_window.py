@@ -205,6 +205,26 @@ class OptimizedImageView(QGraphicsView):
                 pil_image = pil_image.convert('RGB')
 
             width, height = pil_image.size
+
+            # Free old scene resources BEFORE allocating new QPixmap to avoid
+            # holding two full-size pixmaps simultaneously (~1GB each for 16k images)
+            self._fade_in_timer.stop()
+            self._scene.clear()
+            self._fade_rect = None
+            self._cp_cross_items = []
+            self._cp_line_item = None
+            self._cp_label_item = None
+            self._azimuth_line_item = None
+            self._azimuth_label_item = None
+            self._sector_line_items = []
+            self._nsu_marker_items = []
+            self._nsu_hide_items = []
+            self._drag_marker_items = []
+            self._drag_line_item = None
+            self._drag_other_point = None
+            self._inset_mask_item = None
+            self._image_item = None
+
             t1 = time.monotonic()
             image_data = pil_image.tobytes()
             t2 = time.monotonic()
@@ -226,22 +246,7 @@ class OptimizedImageView(QGraphicsView):
             self._qimage_bytes = None
             self._original_image = None
 
-            # Clear scene and add image (invalidates all scene item references)
-            self._fade_in_timer.stop()
-            self._scene.clear()
-            self._fade_rect = None
-            self._cp_cross_items = []
-            self._cp_line_item = None
-            self._cp_label_item = None
-            self._azimuth_line_item = None
-            self._azimuth_label_item = None
-            self._sector_line_items = []
-            self._nsu_marker_items = []
-            self._nsu_hide_items = []
-            self._drag_marker_items = []
-            self._drag_line_item = None
-            self._drag_other_point = None
-            self._inset_mask_item = None
+            # Add image to scene
             self._image_item = self._scene.addPixmap(qpixmap)
             self._image_item.setFlag(
                 QGraphicsPixmapItem.GraphicsItemFlag.ItemClipsChildrenToShape

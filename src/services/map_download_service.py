@@ -48,6 +48,7 @@ from services.coordinate_transformer import (
     CoordinateTransformer,
     gk_to_sk42_raw,
     is_point_within_bounds,
+    sk42_raw_to_gk,
 )
 from services.map_context import MapDownloadContext
 from services.map_postprocessing import (
@@ -344,7 +345,7 @@ class MapDownloadService:
             settings.control_point_x = raw_x
             settings.control_point_y = raw_y
             emit_warning(
-                '',
+                'Контрольная точка за пределами карты — перемещена в центр.',
                 {
                     'control_point_x': raw_x,
                     'control_point_y': raw_y,
@@ -382,7 +383,7 @@ class MapDownloadService:
                 settings.link_point_b_x = b_raw_x
                 settings.link_point_b_y = b_raw_y
                 emit_warning(
-                    '',
+                    'Точки профиля за пределами карты — перемещены к центру.',
                     {
                         'link_point_a_x': a_raw_x,
                         'link_point_a_y': a_raw_y,
@@ -391,11 +392,45 @@ class MapDownloadService:
                     },
                 )
 
+        # Filter out-of-bounds NSU target points
+        if is_nsu_optimizer:
+            import json as _json
+
+            original_points = settings.nsu_target_points
+            valid_pts: list[list[int]] = []
+            removed_labels: list[str] = []
+            for i, (x_sk42, y_sk42) in enumerate(original_points):
+                gk_e, gk_n = sk42_raw_to_gk(x_sk42, y_sk42)
+                if is_point_within_bounds(
+                    gk_e,
+                    gk_n,
+                    center_x_sk42_gk,
+                    center_y_sk42_gk,
+                    width_m,
+                    height_m,
+                ):
+                    valid_pts.append([x_sk42, y_sk42])
+                else:
+                    removed_labels.append(f'#{i + 1}: X={x_sk42}, Y={y_sk42}')
+            if removed_labels:
+                new_json = _json.dumps(valid_pts)
+                settings.nsu_target_points_json = new_json
+                emit_warning(
+                    'Точки НСУ за пределами карты удалены:\n'
+                    + '\n'.join(removed_labels),
+                    {'nsu_target_points_json': new_json},
+                )
+
         # Choose zoom (with memory-aware limit)
         sp = LiveSpinner('Подготовка: подбор zoom')
         sp.start()
         is_dem_mode = (
-            is_elev_color or is_radio_horizon or is_radar_coverage or is_link_profile
+            is_elev_color
+            or is_elev_contours
+            or is_radio_horizon
+            or is_radar_coverage
+            or is_link_profile
+            or is_nsu_optimizer
         )
         zoom, memory_estimate = choose_safe_zoom(
             center_lat=coord_result.center_lat_wgs,
@@ -643,12 +678,14 @@ class MapDownloadService:
                 # for the cached overlay (interactive alpha slider)
                 contour_layer = Image.new('RGBA', result.size, (0, 0, 0, 0))
                 contour_layer = await self._apply_overlay_contours(ctx, contour_layer)
-                # Composite onto result
+                # Composite onto result — free intermediates eagerly
+                # to avoid holding two full-size RGBA copies during convert
                 result_rgba = result.convert('RGBA')
+                del result  # free original RGB before alpha_composite
                 result = Image.alpha_composite(result_rgba, contour_layer)
+                result_rgba.close()
+                del result_rgba  # free ~1.4 GB BEFORE convert('RGB')
                 result = result.convert('RGB')
-                with contextlib.suppress(Exception):
-                    result_rgba.close()
                 ctx.rh_contour_layer = contour_layer
                 logger.info('Contour layer created for RH overlay cache')
             else:
@@ -695,11 +732,14 @@ class MapDownloadService:
                 ctx.rh_contour_layer is not None
                 and abs(ctx.rotation_deg) > ROTATE_ANGLE_EPS
             ):
+                old_contour = ctx.rh_contour_layer
                 ctx.rh_contour_layer = rotate_keep_size(
-                    ctx.rh_contour_layer,
+                    old_contour,
                     ctx.rotation_deg,
                     fill=(0, 0, 0, 0),
                 )
+                with contextlib.suppress(Exception):
+                    old_contour.close()
         finally:
             sp.stop('Поворот карты завершён')
         rotation_elapsed = time.monotonic() - rotation_start_time
@@ -720,9 +760,12 @@ class MapDownloadService:
             prev_result.close()
         # Also crop contour layer for RH overlay cache
         if ctx.rh_contour_layer is not None:
+            old_contour = ctx.rh_contour_layer
             ctx.rh_contour_layer = center_crop(
-                ctx.rh_contour_layer, ctx.target_w_px, ctx.target_h_px
+                old_contour, ctx.target_w_px, ctx.target_h_px
             )
+            with contextlib.suppress(Exception):
+                old_contour.close()
         crop_elapsed = time.monotonic() - crop_start_time
         logger.info('Обрезка к целевому размеру — завершена (%.2fs)', crop_elapsed)
         log_memory_usage('after cropping')
@@ -1272,9 +1315,13 @@ class MapDownloadService:
             # Include contours if available (rotated/cropped contour layer)
             has_contours = False
             if ctx.rh_contour_layer is not None:
+                old_overlay = overlay
                 overlay = Image.alpha_composite(overlay, ctx.rh_contour_layer)
+                old_overlay.close()
+                del old_overlay
                 has_contours = True
                 # Free memory - no longer needed after inclusion in overlay
+                ctx.rh_contour_layer.close()
                 ctx.rh_contour_layer = None
 
             # Draw grid on overlay
@@ -1367,11 +1414,14 @@ class MapDownloadService:
                 rotation_deg=ctx.rotation_deg,
             )
 
-            # Copy back to result if it was converted
-            if result.mode != 'RGBA':
-                result.paste(result_rgba.convert('RGB'))
-            else:
-                result.paste(result_rgba)
+            # Copy back to result if it was converted — free intermediate
+            if result_rgba is not result:
+                rgb_copy = result_rgba.convert('RGB')
+                result_rgba.close()
+                del result_rgba
+                result.paste(rgb_copy)
+                rgb_copy.close()
+                del rgb_copy
 
         except Exception as e:
             logger.warning('Не удалось нарисовать сектор РЛС: %s', e)

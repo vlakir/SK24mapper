@@ -15,6 +15,7 @@ import numpy as np
 from PIL import Image
 
 from geo.topography import latlng_to_pixel_xy, meters_per_pixel
+from services.coordinate_transformer import sk42_raw_to_gk
 from services.map_postprocessing import draw_control_point_triangle
 from services.processors.radio_horizon import _load_dem, _load_topo
 from services.radio_horizon import (
@@ -40,13 +41,7 @@ def _sk42_to_dem_pixels(
     ds_factor: int,
 ) -> tuple[int, int]:
     """Конвертация координаты СК-42 в пиксели DEM (row, col)."""
-    # СК-42 raw → geodetic SK-42
-    y_high = y_sk42 // 100000
-    y_low_km = (y_sk42 % 100000) / 1000.0
-    x_high = x_sk42 // 100000
-    x_low_km = (x_sk42 % 100000) / 1000.0
-    gk_x = 1e3 * y_low_km + 1e5 * y_high  # easting
-    gk_y = 1e3 * x_low_km + 1e5 * x_high  # northing
+    gk_x, gk_y = sk42_raw_to_gk(x_sk42, y_sk42)  # easting, northing
 
     # GK → geodetic SK-42
     lng_sk42, lat_sk42 = ctx.t_sk42_from_gk.transform(gk_x, gk_y)

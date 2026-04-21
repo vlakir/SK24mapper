@@ -251,11 +251,19 @@ def draw_elevation_legend(
             [bg_x1, bg_y1, bg_x2, bg_y2],
             fill=LEGEND_BACKGROUND_COLOR,
         )
-        # Накладываем фон
-        temp_rgba = Image.alpha_composite(temp_rgba, bg_overlay)
+        # Накладываем фон — free intermediates eagerly
+        composited = Image.alpha_composite(temp_rgba, bg_overlay)
+        temp_rgba.close()
+        del temp_rgba
+        bg_overlay.close()
+        del bg_overlay
         # Конвертируем обратно в RGB и обновляем исходное изображение
-        img_rgb = temp_rgba.convert('RGB')
+        img_rgb = composited.convert('RGB')
+        composited.close()
+        del composited
         img.paste(img_rgb)
+        img_rgb.close()
+        del img_rgb
         # Обновляем draw object для дальнейшего рисования
         draw = ImageDraw.Draw(img)
     else:
@@ -268,7 +276,11 @@ def draw_elevation_legend(
         )
         # Накладываем фон на исходное RGBA изображение
         composited = Image.alpha_composite(img, bg_overlay)
+        bg_overlay.close()
+        del bg_overlay
         img.paste(composited)
+        composited.close()
+        del composited
         # Обновляем draw object для дальнейшего рисования
         draw = ImageDraw.Draw(img)
 

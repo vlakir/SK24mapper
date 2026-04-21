@@ -52,6 +52,7 @@ def rotate_keep_size(
         borderMode=cv2.BORDER_CONSTANT,
         borderValue=fill,
     )
+    del arr  # free input array before allocating output PIL image
 
     return Image.fromarray(rotated)
 
