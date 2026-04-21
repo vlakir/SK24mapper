@@ -423,10 +423,12 @@ class MilMapperController:
             mt_enum = MapType(settings.map_type)
             is_dem = mt_enum in (
                 MapType.ELEVATION_COLOR,
+                MapType.ELEVATION_CONTOURS,
                 MapType.ELEVATION_HILLSHADE,
                 MapType.RADIO_HORIZON,
                 MapType.RADAR_COVERAGE,
                 MapType.LINK_PROFILE,
+                MapType.NSU_OPTIMIZER,
             )
             # Rough latitude from GK northing (approximate)
             approx_lat = center_y / 111_320.0

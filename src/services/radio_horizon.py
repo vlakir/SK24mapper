@@ -896,52 +896,51 @@ def recompute_coverage_fast(
 
     use_rotation = use_crop and abs(rotation_deg) > ROTATION_EPSILON
 
+    # Все операции — на DEM-размере. GUI масштабирует при отображении.
+    blend_alpha = 1.0 - overlay_alpha
+
     if use_rotation and crop_size is not None and final_size is not None:
-        # Replicate first-build pipeline: resize to crop_size → rotate → center crop.
-        # This keeps the result in the same rotated coordinate system as the first
-        # build, so overlay_layer, _rh_click_pos, and _dem_grid all remain aligned.
         step_start = time.monotonic()
         crop_w, crop_h = crop_size
         fw, fh = final_size
 
-        # 1. Resize to crop_size (= original DEM before downsampling = crop_rect px)
-        if result.size != (crop_w, crop_h):
-            result = result.resize((crop_w, crop_h), Image.Resampling.BILINEAR)
-        if topo_base.size != (crop_w, crop_h):
-            topo_base = topo_base.resize((crop_w, crop_h), Image.Resampling.BILINEAR)
-
-        step_elapsed = time.monotonic() - step_start
-        _logger.info(
-            '    └─ Resize to crop_size (%d×%d): %.3f sec', crop_w, crop_h, step_elapsed
-        )
-
-        # Blend and rotate+crop are done below (after converting to RGBA)
+        if result.size != (w, h):
+            result = result.resize((w, h), Image.Resampling.BILINEAR)
         result = result.convert('RGBA')
-        blend_alpha = 1.0 - overlay_alpha
-        blended = Image.blend(topo_base, result, blend_alpha)
-        del topo_base  # free resized copy
 
-        # 2. Rotate keeping same canvas size (same as rotate_keep_size in first build)
-        step_start = time.monotonic()
-        blended = rotate_keep_size(blended, rotation_deg, fill=(128, 128, 128))
         coverage_rotated = rotate_keep_size(result, rotation_deg, fill=(0, 0, 0, 0))
-        del result  # free pre-rotation copy
-        step_elapsed = time.monotonic() - step_start
-        _logger.info('    └─ Rotate by %.1f°: %.3f sec', rotation_deg, step_elapsed)
-
-        # 3. Center crop to final_size
-        step_start = time.monotonic()
-        blended = center_crop(blended, fw, fh)
-        coverage_rotated = center_crop(coverage_rotated, fw, fh)
+        del result
         step_elapsed = time.monotonic() - step_start
         _logger.info(
-            '    └─ Center crop to final (%d×%d): %.3f sec', fw, fh, step_elapsed
+            '    └─ Rotate coverage by %.1f°: %.3f sec', rotation_deg, step_elapsed
         )
 
-        return blended, coverage_rotated
+        step_start = time.monotonic()
+        fw_dem = round(fw * w / crop_w)
+        fh_dem = round(fh * h / crop_h)
+        coverage_small = center_crop(coverage_rotated, fw_dem, fh_dem)
+        del coverage_rotated
+
+        # topo — тоже вращаем на DEM-размере
+        topo_small = topo_base.copy()
+        topo_small = rotate_keep_size(topo_small, rotation_deg, fill=(128, 128, 128))
+        topo_small = center_crop(topo_small, fw_dem, fh_dem)
+        if topo_small.mode != 'RGBA':
+            topo_small = topo_small.convert('RGBA')
+        blended = Image.blend(topo_small, coverage_small, blend_alpha)
+        del topo_small
+
+        step_elapsed = time.monotonic() - step_start
+        _logger.info(
+            '    └─ Crop + blend (%d×%d): %.3f sec',
+            fw_dem,
+            fh_dem,
+            step_elapsed,
+        )
+
+        return blended, coverage_small
 
     if use_crop and crop_size is not None and final_size is not None:
-        # No rotation but crop_size available: crop center + uniform resize.
         step_start = time.monotonic()
         crop_w, crop_h = crop_size
         fw, fh = final_size
@@ -954,43 +953,269 @@ def recompute_coverage_fast(
         right = min(w, left + vis_w)
         bottom = min(h, top + vis_h)
 
-        result = result.crop((left, top, right, bottom))
-        if result.size != final_size:
-            result = result.resize(final_size, Image.Resampling.BILINEAR)
-
-        if topo_base.size == (w, h):
-            topo_base = topo_base.crop((left, top, right, bottom))
-            if topo_base.size != final_size:
-                topo_base = topo_base.resize(final_size, Image.Resampling.BILINEAR)
-        elif topo_base.size != final_size:
-            topo_base = topo_base.resize(final_size, Image.Resampling.BILINEAR)
-
-        step_elapsed = time.monotonic() - step_start
-        _logger.info('    └─ Crop center + resize to final: %.3f sec', step_elapsed)
-    else:
-        if final_size and result.size != final_size:
-            step_start = time.monotonic()
-            result = result.resize(final_size, Image.Resampling.BILINEAR)
-            step_elapsed = time.monotonic() - step_start
-            _logger.info('    └─ Resize result to final size: %.3f sec', step_elapsed)
-
-        if final_size and topo_base.size != final_size:
-            step_start = time.monotonic()
-            topo_base = topo_base.resize(final_size, Image.Resampling.BILINEAR)
-            step_elapsed = time.monotonic() - step_start
-            _logger.info(
-                '    └─ Resize topo_base to final size: %.3f sec', step_elapsed
+        coverage_small = result.crop((left, top, right, bottom)).convert('RGBA')
+        topo_for_blend = topo_base
+        if topo_for_blend.size == (w, h):
+            topo_for_blend = topo_for_blend.crop((left, top, right, bottom))
+        if topo_for_blend.mode != 'RGBA':
+            topo_for_blend = topo_for_blend.convert('RGBA')
+        if topo_for_blend.size != coverage_small.size:
+            topo_for_blend = topo_for_blend.resize(
+                coverage_small.size, Image.Resampling.BILINEAR
             )
 
-    result = result.convert('RGBA')
+        step_elapsed = time.monotonic() - step_start
+        _logger.info('    └─ Crop center: %.3f sec', step_elapsed)
+    else:
+        coverage_small = result.convert('RGBA')
+        topo_for_blend = topo_base
+        if topo_for_blend.mode != 'RGBA':
+            topo_for_blend = topo_for_blend.convert('RGBA')
+        if topo_for_blend.size != coverage_small.size:
+            topo_for_blend = topo_for_blend.resize(
+                coverage_small.size, Image.Resampling.BILINEAR
+            )
 
     step_start = time.monotonic()
-    blend_alpha = 1.0 - overlay_alpha
-    blended = Image.blend(topo_base, result, blend_alpha)
+    blended = Image.blend(topo_for_blend, coverage_small, blend_alpha)
+    del topo_for_blend
     step_elapsed = time.monotonic() - step_start
     _logger.info('    └─ Blend with topo base: %.3f sec', step_elapsed)
 
-    return blended, result
+    return blended, coverage_small
+
+
+# === NSU Optimizer: Multi-target coverage ===
+# Переиспользует _compute_grid_values_parallel (уже Numba-скомпилированную)
+# для каждой целевой точки, комбинирует через np.maximum.
+
+
+def compute_and_colorize_nsu_optimizer(
+    dem: np.ndarray,
+    target_rows: np.ndarray,
+    target_cols: np.ndarray,
+    antenna_height_m: float,
+    pixel_size_m: float,
+    max_height_m: float = RADIO_HORIZON_MAX_HEIGHT_M,
+    color_ramp: list[tuple[float, tuple[int, int, int]]] | None = None,
+    unreachable_color: tuple[int, int, int] = RADIO_HORIZON_UNREACHABLE_COLOR,
+    earth_radius_m: float = EARTH_RADIUS_M,
+    refraction_k: float = RADIO_HORIZON_REFRACTION_K,
+    grid_step: int = RADIO_HORIZON_GRID_STEP,
+) -> Image.Image:
+    """
+    Вычисляет и раскрашивает тепловую карту оптимальности размещения НСУ.
+
+    Для каждой целевой точки запускает стандартный compute_and_colorize_coverage
+    (через _compute_grid_values_parallel), затем комбинирует результаты:
+    max(h_target_1, ..., h_target_N) — наихудшая высота полёта.
+
+    Зелёный = низко (хорошо), красный = высоко (плохо), серый = невозможно.
+    """
+    _logger = logging.getLogger(__name__)
+
+    if color_ramp is None:
+        color_ramp = RADIO_HORIZON_COLOR_RAMP
+
+    if dem.size == 0 or len(target_rows) == 0:
+        return Image.new(
+            'RGB', RADIO_HORIZON_EMPTY_IMAGE_SIZE_PX, RADIO_HORIZON_EMPTY_IMAGE_COLOR
+        )
+
+    h, w = dem.shape
+    n_targets = len(target_rows)
+
+    # Адаптивный шаг сетки (тот же алгоритм, что в compute_and_colorize_coverage)
+    total_pixels = h * w
+    if total_pixels > RADIO_HORIZON_GRID_STEP_THRESHOLD_PIXELS_LARGE:
+        grid_step = max(grid_step, RADIO_HORIZON_GRID_STEP_LARGE)
+    elif total_pixels > RADIO_HORIZON_GRID_STEP_THRESHOLD_PIXELS_MEDIUM:
+        grid_step = max(grid_step, RADIO_HORIZON_GRID_STEP_MEDIUM)
+    elif total_pixels > RADIO_HORIZON_GRID_STEP_THRESHOLD_PIXELS_SMALL:
+        grid_step = max(grid_step, RADIO_HORIZON_GRID_STEP_SMALL)
+
+    effective_earth_radius = earth_radius_m * refraction_k
+
+    # Для каждой целевой точки: вызываем уже скомпилированный
+    # _compute_grid_values_parallel и комбинируем через np.maximum
+    combined_grid: np.ndarray | None = None
+
+    for i in range(n_targets):
+        tr = int(target_rows[i])
+        tc = int(target_cols[i])
+        tr = max(0, min(tr, h - 1))
+        tc = max(0, min(tc, w - 1))
+        antenna_abs_h = float(dem[tr, tc]) + antenna_height_m
+
+        _logger.info(
+            'NSU target %d/%d: row=%d col=%d abs_h=%.1f',
+            i + 1,
+            n_targets,
+            tr,
+            tc,
+            antenna_abs_h,
+        )
+
+        grid = _compute_grid_values_parallel(
+            dem,
+            tr,
+            tc,
+            antenna_abs_h,
+            pixel_size_m,
+            effective_earth_radius,
+            grid_step,
+            h,
+            w,
+        )
+
+        if combined_grid is None:
+            combined_grid = grid
+        else:
+            np.maximum(combined_grid, grid, out=combined_grid)
+            del grid
+
+    if combined_grid is None:
+        return Image.new(
+            'RGB', RADIO_HORIZON_EMPTY_IMAGE_SIZE_PX, RADIO_HORIZON_EMPTY_IMAGE_COLOR
+        )
+
+    # Интерполяция до полного размера
+    full_values = cv2.resize(
+        combined_grid, (w, h), interpolation=cv2.INTER_LINEAR
+    ).astype(np.float32)
+    del combined_grid
+
+    # Колоризация через LUT (тот же код, что в compute_and_colorize_coverage)
+    lut_size = RADIO_HORIZON_LUT_SIZE
+    lut = _build_color_lut(color_ramp, unreachable_color, lut_size)
+    unreachable_idx = lut_size
+
+    inv_max = (lut_size - 1) / max_height_m if max_height_m > 0 else 0.0
+    indices = (
+        np.nan_to_num(full_values, nan=0.0, posinf=max_height_m + 1, neginf=0.0)
+        * inv_max
+    ).astype(np.int32)
+    np.clip(indices, 0, lut_size - 1, out=indices)
+
+    unreachable_mask = (full_values > max_height_m) | ~np.isfinite(full_values)
+    indices[unreachable_mask] = unreachable_idx
+
+    rgb = lut[indices]
+    del full_values, indices, unreachable_mask
+    return Image.fromarray(rgb)
+
+
+def recompute_nsu_optimizer_fast(
+    dem: np.ndarray,
+    target_rows: np.ndarray,
+    target_cols: np.ndarray,
+    antenna_height_m: float,
+    pixel_size_m: float,
+    topo_base: Image.Image,
+    overlay_alpha: float,
+    max_height_m: float = RADIO_HORIZON_MAX_HEIGHT_M,
+    color_ramp: list[tuple[float, tuple[int, int, int]]] | None = None,
+    unreachable_color: tuple[int, int, int] = RADIO_HORIZON_UNREACHABLE_COLOR,
+    earth_radius_m: float = EARTH_RADIUS_M,
+    refraction_k: float = RADIO_HORIZON_REFRACTION_K,
+    grid_step: int = RADIO_HORIZON_GRID_STEP,
+    final_size: tuple[int, int] | None = None,
+    crop_size: tuple[int, int] | None = None,
+    rotation_deg: float = 0.0,
+) -> tuple[Image.Image, Image.Image]:
+    """
+    Быстрый пересчёт NSU optimizer coverage по кэшированным DEM/topo.
+
+    Returns:
+        (blended_image, coverage_layer_display)
+
+    """
+    _logger = logging.getLogger(__name__)
+
+    if color_ramp is None:
+        color_ramp = RADIO_HORIZON_COLOR_RAMP
+
+    result = compute_and_colorize_nsu_optimizer(
+        dem=dem,
+        target_rows=target_rows,
+        target_cols=target_cols,
+        antenna_height_m=antenna_height_m,
+        pixel_size_m=pixel_size_m,
+        max_height_m=max_height_m,
+        color_ramp=color_ramp,
+        unreachable_color=unreachable_color,
+        earth_radius_m=earth_radius_m,
+        refraction_k=refraction_k,
+        grid_step=grid_step,
+    )
+
+    h, w = dem.shape
+    use_crop = bool(crop_size and final_size)
+    use_rotation = use_crop and abs(rotation_deg) > ROTATION_EPSILON
+
+    # Все операции — на DEM-размере. GUI масштабирует при отображении.
+    blend_alpha = 1.0 - overlay_alpha
+
+    if use_rotation and crop_size is not None and final_size is not None:
+        crop_w, crop_h = crop_size
+        fw, fh = final_size
+
+        if result.size != (w, h):
+            result = result.resize((w, h), Image.Resampling.BILINEAR)
+        result = result.convert('RGBA')
+        coverage_rotated = rotate_keep_size(result, rotation_deg, fill=(0, 0, 0, 0))
+        del result
+
+        fw_dem = round(fw * w / crop_w)
+        fh_dem = round(fh * h / crop_h)
+        coverage_small = center_crop(coverage_rotated, fw_dem, fh_dem)
+        del coverage_rotated
+
+        # topo — тоже вращаем на DEM-размере
+        topo_small = topo_base.copy()
+        topo_small = rotate_keep_size(topo_small, rotation_deg, fill=(128, 128, 128))
+        topo_small = center_crop(topo_small, fw_dem, fh_dem)
+        if topo_small.mode != 'RGBA':
+            topo_small = topo_small.convert('RGBA')
+        blended = Image.blend(topo_small, coverage_small, blend_alpha)
+        del topo_small
+
+        return blended, coverage_small
+
+    if use_crop and crop_size is not None and final_size is not None:
+        crop_w, crop_h = crop_size
+        fw, fh = final_size
+        vis_w = round(fw * w / crop_w)
+        vis_h = round(fh * h / crop_h)
+        left = max(0, (w - vis_w) // 2)
+        top = max(0, (h - vis_h) // 2)
+        right = min(w, left + vis_w)
+        bottom = min(h, top + vis_h)
+
+        coverage_small = result.crop((left, top, right, bottom)).convert('RGBA')
+        topo_for_blend = topo_base
+        if topo_for_blend.size == (w, h):
+            topo_for_blend = topo_for_blend.crop((left, top, right, bottom))
+        if topo_for_blend.mode != 'RGBA':
+            topo_for_blend = topo_for_blend.convert('RGBA')
+        if topo_for_blend.size != coverage_small.size:
+            topo_for_blend = topo_for_blend.resize(
+                coverage_small.size, Image.Resampling.BILINEAR
+            )
+    else:
+        coverage_small = result.convert('RGBA')
+        topo_for_blend = topo_base
+        if topo_for_blend.mode != 'RGBA':
+            topo_for_blend = topo_for_blend.convert('RGBA')
+        if topo_for_blend.size != coverage_small.size:
+            topo_for_blend = topo_for_blend.resize(
+                coverage_small.size, Image.Resampling.BILINEAR
+            )
+
+    blended = Image.blend(topo_for_blend, coverage_small, blend_alpha)
+    del topo_for_blend
+
+    return blended, coverage_small
 
 
 # === Функции совместимости для работы со старым кодом (list[list[float]]) ===

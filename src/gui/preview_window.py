@@ -53,7 +53,9 @@ class OptimizedImageView(QGraphicsView):
     map_right_clicked = Signal(float, float)  # (x, y)
     shift_wheel_rotated = Signal(float)  # delta_degrees (positive = CW)
     shift_key_released = Signal()  # Shift released after rotation
-    point_drag_started = Signal()  # emitted when user grabs a draggable point
+    point_drag_started = Signal(
+        str
+    )  # emitted when user grabs a draggable point (point_id)
     point_drag_finished = Signal(str, float, float)  # (point_id, scene_x, scene_y)
     fade_in_finished = Signal()  # emitted when map fully revealed after loading
 
@@ -140,6 +142,11 @@ class OptimizedImageView(QGraphicsView):
         self._hover_highlight_item: QGraphicsEllipseItem | None = None
         self._hover_point_id: str | None = None
 
+        # NSU target point markers (QGraphicsItems for instant visual feedback)
+        self._nsu_marker_items: list[QGraphicsLineItem] = []
+        # Hiding patches (persists until set_image scene.clear)
+        self._nsu_hide_items: list = []
+
         # Semi-transparent mask over stale inset during recompute
         self._inset_mask_item: QGraphicsRectItem | None = None
         # Upper Y limit for draggable area (inset/chart boundary); None = no limit
@@ -198,6 +205,26 @@ class OptimizedImageView(QGraphicsView):
                 pil_image = pil_image.convert('RGB')
 
             width, height = pil_image.size
+
+            # Free old scene resources BEFORE allocating new QPixmap to avoid
+            # holding two full-size pixmaps simultaneously (~1GB each for 16k images)
+            self._fade_in_timer.stop()
+            self._scene.clear()
+            self._fade_rect = None
+            self._cp_cross_items = []
+            self._cp_line_item = None
+            self._cp_label_item = None
+            self._azimuth_line_item = None
+            self._azimuth_label_item = None
+            self._sector_line_items = []
+            self._nsu_marker_items = []
+            self._nsu_hide_items = []
+            self._drag_marker_items = []
+            self._drag_line_item = None
+            self._drag_other_point = None
+            self._inset_mask_item = None
+            self._image_item = None
+
             t1 = time.monotonic()
             image_data = pil_image.tobytes()
             t2 = time.monotonic()
@@ -219,20 +246,7 @@ class OptimizedImageView(QGraphicsView):
             self._qimage_bytes = None
             self._original_image = None
 
-            # Clear scene and add image (invalidates all scene item references)
-            self._fade_in_timer.stop()
-            self._scene.clear()
-            self._fade_rect = None
-            self._cp_cross_items = []
-            self._cp_line_item = None
-            self._cp_label_item = None
-            self._azimuth_line_item = None
-            self._azimuth_label_item = None
-            self._sector_line_items = []
-            self._drag_marker_items = []
-            self._drag_line_item = None
-            self._drag_other_point = None
-            self._inset_mask_item = None
+            # Add image to scene
             self._image_item = self._scene.addPixmap(qpixmap)
             self._image_item.setFlag(
                 QGraphicsPixmapItem.GraphicsItemFlag.ItemClipsChildrenToShape
@@ -370,6 +384,142 @@ class OptimizedImageView(QGraphicsView):
             with contextlib.suppress(Exception):
                 self._scene.removeItem(self._cp_label_item)
             self._cp_label_item = None
+
+    def _sample_pixmap_luminance(self, x: float, y: float) -> float:
+        """Sample luminance from the displayed pixmap at (x, y). Returns 0..255."""
+        if self._image_item is None:
+            return 128.0
+        pixmap = self._image_item.pixmap()
+        px_int = round(x)
+        py_int = round(y)
+        if (
+            px_int < 0
+            or py_int < 0
+            or px_int >= pixmap.width()
+            or py_int >= pixmap.height()
+        ):
+            return 128.0
+        img = pixmap.toImage()
+        c = img.pixelColor(px_int, py_int)
+        return 0.299 * c.red() + 0.587 * c.green() + 0.114 * c.blue()
+
+    def set_nsu_markers(
+        self, points: list[tuple[float, float, tuple[int, int, int]]]
+    ) -> None:
+        """
+        Draw colored cross markers for NSU target points (instant).
+
+        Args:
+            points: list of (x, y, (r, g, b)) in scene coordinates.
+
+        """
+        self.clear_nsu_markers()
+        if self._image_item is None or self._meters_per_px <= 0:
+            return
+        ppm = 1.0 / self._meters_per_px
+        size_px = max(8, round(CONTROL_POINT_SIZE_M * ppm * 0.7))
+        half = size_px / 2.0
+        for x, y, color in points:
+            # Адаптивная обводка: чёрная на светлом, белая на тёмном
+            lum = self._sample_pixmap_luminance(x, y)
+            lum_threshold = 128
+            outline_color = (
+                QColor(0, 0, 0) if lum > lum_threshold else QColor(255, 255, 255)
+            )
+            outline_pen = QPen(outline_color)
+            outline_pen.setWidth(5)
+            outline_pen.setCosmetic(True)
+            # Толстая обводка крестика
+            ol1 = self._scene.addLine(
+                x - half, y - half, x + half, y + half, outline_pen
+            )
+            ol2 = self._scene.addLine(
+                x - half, y + half, x + half, y - half, outline_pen
+            )
+            # Цветная заливка (тоньше, поверх)
+            pen = QPen(QColor(*color))
+            pen.setWidth(3)
+            pen.setCosmetic(True)
+            line1 = self._scene.addLine(x - half, y - half, x + half, y + half, pen)
+            line2 = self._scene.addLine(x - half, y + half, x + half, y - half, pen)
+            self._nsu_marker_items.extend([ol1, ol2, line1, line2])
+
+    def clear_nsu_markers(self) -> None:
+        """Remove NSU target point markers from the scene."""
+        for item in self._nsu_marker_items:
+            with contextlib.suppress(Exception):
+                self._scene.removeItem(item)
+        self._nsu_marker_items.clear()
+
+    def hide_marker_at(self, x: float, y: float) -> None:
+        """
+        Cover a marker at (x, y) with a filled circle matching background.
+
+        Instant — uses QGraphicsEllipseItem, no image processing.
+        Items are stored in _nsu_marker_items and cleaned with clear_nsu_markers
+        or scene.clear().
+        """
+        if self._image_item is None:
+            logger.info('hide_marker_at: no image_item')
+            return
+        ppm = 1.0 / self._meters_per_px if self._meters_per_px > 0 else 1.0
+        # Radius must cover triangle corners (half*√2) + outline margin
+        radius = max(12, round(CONTROL_POINT_SIZE_M * ppm * 0.9))
+        logger.info(
+            'hide_marker_at: x=%.1f y=%.1f ppm=%.4f radius=%d mpp=%.2f',
+            x,
+            y,
+            ppm,
+            radius,
+            self._meters_per_px,
+        )
+        # Sample background from several points around the marker, average
+        offsets = [
+            (0, radius + 4),  # below
+            (0, -(radius + 4)),  # above
+            (radius + 4, 0),  # right
+            (-(radius + 4), 0),  # left
+        ]
+        r_sum, g_sum, b_sum, n = 0, 0, 0, 0
+        for dx, dy in offsets:
+            c = self._sample_pixmap_luminance_color(x + dx, y + dy)
+            r_sum += c.red()
+            g_sum += c.green()
+            b_sum += c.blue()
+            n += 1
+        bg_color = QColor(r_sum // n, g_sum // n, b_sum // n)
+        logger.info(
+            'hide_marker_at: bg_color=(%d,%d,%d), radius=%d',
+            bg_color.red(),
+            bg_color.green(),
+            bg_color.blue(),
+            radius,
+        )
+        ellipse = self._scene.addEllipse(
+            x - radius,
+            y - radius,
+            radius * 2,
+            radius * 2,
+            QPen(Qt.PenStyle.NoPen),
+            QBrush(bg_color),
+        )
+        ellipse.setZValue(10)  # ensure above pixmap (z=0)
+        self._nsu_hide_items.append(ellipse)
+        self.viewport().update()
+
+    def _sample_pixmap_luminance_color(self, x: float, y: float) -> QColor:
+        """Sample the actual pixel color from the displayed pixmap."""
+        if self._image_item is None:
+            return QColor(200, 200, 200)
+        pixmap = self._image_item.pixmap()
+        ix, iy = int(x), int(y)
+        # Clamp to valid range
+        ix = max(0, min(ix, pixmap.width() - 1))
+        iy = max(0, min(iy, pixmap.height() - 1))
+        # Copy a tiny 3x3 area and sample the center
+        tiny = pixmap.copy(max(0, ix - 1), max(0, iy - 1), 3, 3)
+        img = tiny.toImage()
+        return img.pixelColor(min(1, img.width() - 1), min(1, img.height() - 1))
 
     def set_control_point_line(
         self,
@@ -599,6 +749,10 @@ class OptimizedImageView(QGraphicsView):
             )
         else:
             logger.info('DRAG-DEBUG set_draggable_points: {} (cleared)')
+
+    def get_draggable_point(self, point_id: str) -> tuple[float, float] | None:
+        """Get the (x, y) scene position of a draggable point, or None."""
+        return self._draggable_points.get(point_id)
 
     def merge_draggable_points(
         self,
@@ -1019,7 +1173,7 @@ class OptimizedImageView(QGraphicsView):
             if hit is not None:
                 logger.info('DRAG-DEBUG LMB press → start drag %s', hit)
                 self._dragging_point_id = hit
-                self.point_drag_started.emit()
+                self.point_drag_started.emit(hit)
                 self._start_drag_feedback(hit)
                 self.viewport().setCursor(QCursor(Qt.CursorShape.ClosedHandCursor))
                 event.accept()

@@ -889,7 +889,8 @@ class TestRecomputeRadioHorizonFast:
             grid_step=2,
         )
 
-        assert result.size == (40, 40)
+        # Result stays at DEM size (not upscaled to final_size)
+        assert result.size == (20, 20)
 
     def test_recompute_with_mismatched_topo_base(self) -> None:
         """Перестроение с несовпадающим размером топоосновы масштабирует её."""
@@ -908,7 +909,8 @@ class TestRecomputeRadioHorizonFast:
             grid_step=2,
         )
 
-        assert result.size == (40, 40)
+        # Result stays at DEM size (not upscaled to final_size)
+        assert result.size == (20, 20)
 
     def test_recompute_overlay_alpha_zero(self) -> None:
         """Прозрачность 0.0 — результат ближе к чистому радиогоризонту."""
@@ -1323,7 +1325,8 @@ class TestRecomputeCoverageFast:
             max_range_m=100.0,
         )
 
-        assert result.size == (40, 40)
+        # Result stays at DEM size (not upscaled to final_size)
+        assert result.size == (20, 20)
 
     def test_sector_vs_no_sector_differ(self) -> None:
         """Sector enabled should produce different result from no sector."""
@@ -1349,4 +1352,48 @@ class TestRecomputeCoverageFast:
         arr_f = np.array(result_full)
         arr_s = np.array(result_sector)
         assert not np.array_equal(arr_f, arr_s)
+
+    def test_no_image_exceeds_dem_size_with_rotation(self) -> None:
+        """Neither blended nor coverage should be upscaled to final_size."""
+        dem_size = 64
+        final_w, final_h = 512, 512
+        crop_w, crop_h = 600, 600
+
+        dem = np.full((dem_size, dem_size), 100.0, dtype=np.float32)
+        topo = self._make_topo_base(dem_size, dem_size)
+
+        blended, coverage = recompute_coverage_fast(
+            dem=dem, new_antenna_row=32, new_antenna_col=32,
+            antenna_height_m=10.0, pixel_size_m=10.0,
+            topo_base=topo, overlay_alpha=0.3, grid_step=4,
+            crop_size=(crop_w, crop_h),
+            final_size=(final_w, final_h),
+            rotation_deg=5.0,
+        )
+
+        assert blended.size[0] <= dem_size, (
+            f'blended width {blended.size[0]} should be <= DEM size {dem_size}'
+        )
+        assert coverage.size[0] <= dem_size
+
+    def test_no_image_exceeds_dem_size_no_rotation(self) -> None:
+        """Even without rotation, no returned image should be at final_size."""
+        dem_size = 64
+        final_w, final_h = 512, 512
+        crop_w, crop_h = 600, 600
+
+        dem = np.full((dem_size, dem_size), 100.0, dtype=np.float32)
+        topo = self._make_topo_base(dem_size, dem_size)
+
+        blended, coverage = recompute_coverage_fast(
+            dem=dem, new_antenna_row=32, new_antenna_col=32,
+            antenna_height_m=10.0, pixel_size_m=10.0,
+            topo_base=topo, overlay_alpha=0.3, grid_step=4,
+            crop_size=(crop_w, crop_h),
+            final_size=(final_w, final_h),
+            rotation_deg=0.0,
+        )
+
+        assert blended.size[0] <= dem_size
+        assert coverage.size[0] <= dem_size
 

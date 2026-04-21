@@ -8,6 +8,7 @@ from services.coordinate_transformer import (
     CoordinateTransformer,
     gk_to_sk42_raw,
     is_point_within_bounds,
+    sk42_raw_to_gk,
     validate_control_point_bounds,
 )
 
@@ -334,3 +335,43 @@ class TestGkToSk42Raw:
         assert raw_y == 7440501
         # y_gk=5415250.3 → x_high=54, x_low_km=15.2503 → raw_x = 54*1e5 + round(15250.3) = 5415250
         assert raw_x == 5415250
+
+
+class TestSk42RawToGk:
+    """Tests for sk42_raw_to_gk — inverse of gk_to_sk42_raw."""
+
+    def test_known_values(self):
+        """sk42_raw_to_gk converts raw format to GK easting/northing."""
+        gk_e, gk_n = sk42_raw_to_gk(5415000, 7440000)
+        assert gk_e == pytest.approx(7_440_000.0)
+        assert gk_n == pytest.approx(5_415_000.0)
+
+    def test_roundtrip_via_gk_to_sk42_raw(self):
+        """sk42_raw_to_gk is inverse of gk_to_sk42_raw."""
+        raw_x, raw_y = gk_to_sk42_raw(7_500_000.0, 6_015_000.0)
+        gk_e, gk_n = sk42_raw_to_gk(raw_x, raw_y)
+        assert gk_e == pytest.approx(7_500_000.0, abs=1.0)
+        assert gk_n == pytest.approx(6_015_000.0, abs=1.0)
+
+    def test_roundtrip_reverse(self):
+        """gk_to_sk42_raw(sk42_raw_to_gk(x, y)) returns original values."""
+        orig_x, orig_y = 6015000, 7500000
+        gk_e, gk_n = sk42_raw_to_gk(orig_x, orig_y)
+        raw_x, raw_y = gk_to_sk42_raw(gk_e, gk_n)
+        assert raw_x == orig_x
+        assert raw_y == orig_y
+
+    def test_matches_model_property_logic(self):
+        """sk42_raw_to_gk matches the inline conversion in MapSettings properties."""
+        # Manually replicate the logic from control_point_x_sk42_gk / control_point_y_sk42_gk
+        cp_x, cp_y = 5415000, 7440000
+        y_high = cp_y // 100000
+        y_low_km = (cp_y % 100000) / 1000.0
+        expected_gk_e = 1e3 * y_low_km + 1e5 * y_high
+        x_high = cp_x // 100000
+        x_low_km = (cp_x % 100000) / 1000.0
+        expected_gk_n = 1e3 * x_low_km + 1e5 * x_high
+
+        gk_e, gk_n = sk42_raw_to_gk(cp_x, cp_y)
+        assert gk_e == pytest.approx(expected_gk_e)
+        assert gk_n == pytest.approx(expected_gk_n)

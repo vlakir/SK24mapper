@@ -51,6 +51,12 @@ SECTION_MAP: dict[str, dict[str, str]] = {
         'link_antenna_a_m': 'antenna_a_m',
         'link_antenna_b_m': 'antenna_b_m',
     },
+    'nsu_optimizer': {
+        'nsu_target_points_json': 'target_points',
+        'nsu_antenna_height_m': 'antenna_height_m',
+        'nsu_max_flight_height_m': 'max_flight_height_m',
+        'nsu_overlay_alpha': 'overlay_alpha',
+    },
 }
 
 # Reverse index: flat_field → (section, short_name)

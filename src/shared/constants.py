@@ -118,6 +118,7 @@ class MapType(str, Enum):
     RADIO_HORIZON = 'RADIO_HORIZON'
     RADAR_COVERAGE = 'RADAR_COVERAGE'
     LINK_PROFILE = 'LINK_PROFILE'
+    NSU_OPTIMIZER = 'NSU_OPTIMIZER'
 
 
 class UavHeightReference(str, Enum):
@@ -140,6 +141,7 @@ MAP_TYPE_LABELS_RU: dict[MapType, str] = {
     MapType.RADIO_HORIZON: 'Радиогоризонт НСУ БпЛА',
     MapType.RADAR_COVERAGE: 'Зона обнаружения РЛС',
     MapType.LINK_PROFILE: 'Профиль радиолинии',
+    MapType.NSU_OPTIMIZER: 'Оптимальное размещение НСУ',
 }
 
 UAV_HEIGHT_REFERENCE_LABELS_RU: dict[UavHeightReference, str] = {
@@ -654,6 +656,22 @@ LINK_PROFILE_FONT_MAX_PX = 196
 # Использовать ретина-тайлы для Link Profile (False = 256px)
 LINK_PROFILE_USE_RETINA = False
 
+# --- Оптимальное размещение НСУ (NSU Optimizer)
+NSU_OPTIMIZER_USE_RETINA = False
+NSU_OPTIMIZER_MAX_POINTS = 20
+NSU_OPTIMIZER_POINT_COLORS: list[tuple[int, int, int]] = [
+    (0, 0, 255),  # синий
+    (255, 0, 0),  # красный
+    (0, 180, 0),  # зелёный
+    (255, 165, 0),  # оранжевый
+    (128, 0, 255),  # фиолетовый
+    (0, 200, 200),  # бирюзовый
+    (255, 0, 255),  # пурпурный
+    (200, 200, 0),  # жёлто-зелёный
+    (255, 100, 100),  # розовый
+    (100, 100, 255),  # голубой
+]
+
 # --- Логирование ---
 # Дублировать лог в файл с fsync (переживает OOM/crash)
 LOG_FSYNC_TO_FILE = False
@@ -665,6 +683,9 @@ MEMORY_MIN_TOTAL_MB = 6044
 MEMORY_SAFETY_RATIO = 0.75
 # Минимум свободной памяти, которую нужно оставить (МБ)
 MEMORY_MIN_FREE_MB = 1024
+# Доля total RAM для rlimit (Linux): процесс не сможет выделить больше.
+# При превышении → MemoryError вместо OOM killer → crash OS.
+MEMORY_RLIMIT_RATIO = 0.85
 
 # --- Loading screen (Matrix rain) ---
 LOADING_FADE_OUT_MS = 2400  # Затухание матрицы → чёрный экран

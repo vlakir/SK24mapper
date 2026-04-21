@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 
 from pydantic import BaseModel, field_validator
@@ -134,8 +135,24 @@ class MapSettings(BaseModel):
     link_antenna_a_m: float = 10.0  # Высота антенны A (м)
     link_antenna_b_m: float = 10.0  # Высота антенны B (м)
 
+    # Параметры НСУ Optimizer
+    nsu_target_points_json: str = '[]'  # JSON: [[x1,y1], [x2,y2], ...] (СК-42)
+    nsu_antenna_height_m: float = 10.0  # Высота антенны НСУ (м)
+    nsu_max_flight_height_m: float = 500.0  # Макс. высота полёта БпЛА (м)
+    nsu_overlay_alpha: float = 0.3  # Прозрачность наложения
+
+    @property
+    def nsu_target_points(self) -> list[tuple[int, int]]:
+        """Список целевых точек [(x_sk42, y_sk42), ...]."""
+        try:
+            data = json.loads(self.nsu_target_points_json)
+            min_coords = 2
+            return [(int(p[0]), int(p[1])) for p in data if len(p) >= min_coords]
+        except Exception:
+            return []
+
     # Валидации через Pydantic validators
-    @field_validator('mask_opacity', 'radio_horizon_overlay_alpha')
+    @field_validator('mask_opacity', 'radio_horizon_overlay_alpha', 'nsu_overlay_alpha')
     @classmethod
     def validate_opacity_fields(cls, v: float | str) -> float:
         v = float(v)
@@ -183,45 +200,51 @@ class MapSettings(BaseModel):
 
     @property
     def control_point_x_sk42_gk(self) -> float:
-        # GK X (easting, горизонталь) из Y координаты контрольной точки — без припуска
-        y_high = self.control_point_y // 100000
-        y_low_km = (self.control_point_y % 100000) / 1000.0
-        return 1e3 * y_low_km + 1e5 * y_high
+        """GK X (easting, горизонталь) из координат контрольной точки."""
+        from services.coordinate_transformer import sk42_raw_to_gk
+
+        gk_e, _gk_n = sk42_raw_to_gk(self.control_point_x, self.control_point_y)
+        return gk_e
 
     @property
     def control_point_y_sk42_gk(self) -> float:
-        # GK Y (northing, вертикаль) из X координаты контрольной точки — без припуска
-        x_high = self.control_point_x // 100000
-        x_low_km = (self.control_point_x % 100000) / 1000.0
-        return 1e3 * x_low_km + 1e5 * x_high
+        """GK Y (northing, вертикаль) из координат контрольной точки."""
+        from services.coordinate_transformer import sk42_raw_to_gk
+
+        _gk_e, gk_n = sk42_raw_to_gk(self.control_point_x, self.control_point_y)
+        return gk_n
 
     @property
     def link_point_a_x_sk42_gk(self) -> float:
-        """GK X (easting) точки A — по аналогии с control_point_x_sk42_gk."""
-        y_high = self.link_point_a_y // 100000
-        y_low_km = (self.link_point_a_y % 100000) / 1000.0
-        return 1e3 * y_low_km + 1e5 * y_high
+        """GK X (easting) точки A."""
+        from services.coordinate_transformer import sk42_raw_to_gk
+
+        gk_e, _gk_n = sk42_raw_to_gk(self.link_point_a_x, self.link_point_a_y)
+        return gk_e
 
     @property
     def link_point_a_y_sk42_gk(self) -> float:
-        """GK Y (northing) точки A — по аналогии с control_point_y_sk42_gk."""
-        x_high = self.link_point_a_x // 100000
-        x_low_km = (self.link_point_a_x % 100000) / 1000.0
-        return 1e3 * x_low_km + 1e5 * x_high
+        """GK Y (northing) точки A."""
+        from services.coordinate_transformer import sk42_raw_to_gk
+
+        _gk_e, gk_n = sk42_raw_to_gk(self.link_point_a_x, self.link_point_a_y)
+        return gk_n
 
     @property
     def link_point_b_x_sk42_gk(self) -> float:
-        """GK X (easting) точки B — по аналогии с control_point_x_sk42_gk."""
-        y_high = self.link_point_b_y // 100000
-        y_low_km = (self.link_point_b_y % 100000) / 1000.0
-        return 1e3 * y_low_km + 1e5 * y_high
+        """GK X (easting) точки B."""
+        from services.coordinate_transformer import sk42_raw_to_gk
+
+        gk_e, _gk_n = sk42_raw_to_gk(self.link_point_b_x, self.link_point_b_y)
+        return gk_e
 
     @property
     def link_point_b_y_sk42_gk(self) -> float:
-        """GK Y (northing) точки B — по аналогии с control_point_y_sk42_gk."""
-        x_high = self.link_point_b_x // 100000
-        x_low_km = (self.link_point_b_x % 100000) / 1000.0
-        return 1e3 * x_low_km + 1e5 * x_high
+        """GK Y (northing) точки B."""
+        from services.coordinate_transformer import sk42_raw_to_gk
+
+        _gk_e, gk_n = sk42_raw_to_gk(self.link_point_b_x, self.link_point_b_y)
+        return gk_n
 
     @property
     def custom_helmert(

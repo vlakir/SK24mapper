@@ -338,6 +338,49 @@ class QueueProgressSink:
 
 
 # ---------------------------------------------------------------------------
+# Memory protection for child process
+# ---------------------------------------------------------------------------
+
+
+def _set_child_memory_limit() -> None:
+    """
+    Set RLIMIT_AS in child process (Linux only).
+
+    With multiprocessing start_method='spawn', child processes get a fresh
+    Python interpreter and do NOT inherit resource limits from the parent.
+    Without RLIMIT_AS, Linux memory overcommit allows malloc to succeed even
+    when there is no physical RAM, and the OOM killer crashes the system.
+    """
+    try:
+        import resource
+
+        import psutil
+    except ImportError:
+        return
+
+    from shared.constants import MEMORY_RLIMIT_RATIO
+
+    mem = psutil.virtual_memory()
+    swap = psutil.swap_memory()
+    total_bytes = mem.total + swap.total
+    limit_bytes = int(total_bytes * MEMORY_RLIMIT_RATIO)
+
+    try:
+        _soft, hard = resource.getrlimit(resource.RLIMIT_AS)
+        if hard != resource.RLIM_INFINITY:
+            limit_bytes = min(limit_bytes, hard)
+        resource.setrlimit(resource.RLIMIT_AS, (limit_bytes, limit_bytes))
+        logger.info(
+            'Child RLIMIT_AS set to %.0f MB (RAM=%.0f MB + swap=%.0f MB)',
+            limit_bytes / (1024 * 1024),
+            mem.total / (1024 * 1024),
+            swap.total / (1024 * 1024),
+        )
+    except (ValueError, OSError) as e:
+        logger.warning('Failed to set child RLIMIT_AS: %s', e)
+
+
+# ---------------------------------------------------------------------------
 # Главная функция дочернего процесса
 # ---------------------------------------------------------------------------
 
@@ -381,6 +424,11 @@ def worker_process_main(
         logger.debug('Failed to set up file logging', exc_info=True)
     logging.basicConfig(level=logging.INFO, format=log_fmt, handlers=handlers)
 
+    # Set RLIMIT_AS in child process — spawn mode does NOT inherit it
+    # from the parent. Without this, Linux overcommit lets malloc succeed
+    # and OOM killer crashes the entire system instead of raising MemoryError.
+    _set_child_memory_limit()
+
     from services import map_job
     from shared import diagnostics
     from shared.progress import CancelledError, EventCancelToken
@@ -402,6 +450,9 @@ def worker_process_main(
         queue.put(('finished', True, ''))
     except CancelledError:
         queue.put(('finished', False, 'Операция отменена пользователем'))
+    except MemoryError:
+        logger.exception('Worker process: MemoryError (RLIMIT_AS triggered)')
+        queue.put(('finished', False, 'Недостаточно памяти для построения карты'))
     except Exception as e:
         logger.exception('Worker process failed')
         queue.put(('finished', False, str(e)))

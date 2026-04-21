@@ -11,6 +11,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+if TYPE_CHECKING:
+    import numpy as np
+
 from PIL import Image, ImageDraw
 from pyproj import Transformer
 from PySide6.QtCore import (
@@ -346,34 +349,42 @@ class RhDisplayCacheWorker(QThread):
             cw, ch = crop_size
             has_rotation = abs(rotation_deg) > _ROTATION_EPSILON
 
-            # Topo base → display
+            # --- helper: rotate + crop at native (small) size, NO resize ---
+            def _rotate_crop(
+                img: Image.Image,
+                fill: tuple,
+            ) -> Image.Image:
+                """Rotate at native DEM size → center-crop proportionally."""
+                tw, th = img.size
+                if has_rotation:
+                    img = rotate_keep_size(img, rotation_deg, fill=fill)
+                    fw_small = round(fw * tw / cw)
+                    fh_small = round(fh * th / ch)
+                    img = center_crop(img, fw_small, fh_small)
+                else:
+                    # Without rotation: crop visible area proportionally
+                    vis_w = round(fw * tw / cw)
+                    vis_h = round(fh * th / ch)
+                    left = max(0, (tw - vis_w) // 2)
+                    top = max(0, (th - vis_h) // 2)
+                    img = img.crop((left, top, left + vis_w, top + vis_h))
+                return img
+
+            # Topo base → display (DEM size, no upscale)
             topo_display = None
             topo = self._rh_cache.get('topo_base')
             if topo is not None:
-                topo_d = topo.copy()
-                if topo_d.size != (cw, ch):
-                    topo_d = topo_d.resize((cw, ch), Image.Resampling.BILINEAR)
-                if has_rotation:
-                    topo_d = rotate_keep_size(
-                        topo_d, rotation_deg, fill=(128, 128, 128)
-                    )
-                topo_d = center_crop(topo_d, fw, fh)
+                topo_d = _rotate_crop(topo.copy(), fill=(128, 128, 128))
                 gray = topo_d.convert('L')
                 del topo_d
                 topo_display = gray.convert('RGBA')
                 del gray
 
-            # Coverage layer → display
+            # Coverage layer → display (DEM size, no upscale)
             cov_display = None
             coverage = self._rh_cache.get('coverage_layer')
             if coverage is not None:
-                cov_d = coverage
-                if cov_d.size != (cw, ch):
-                    cov_d = cov_d.resize((cw, ch), Image.Resampling.BILINEAR)
-                if has_rotation:
-                    cov_d = rotate_keep_size(cov_d, rotation_deg, fill=(0, 0, 0, 0))
-                cov_d = center_crop(cov_d, fw, fh)
-                cov_display = cov_d
+                cov_display = _rotate_crop(coverage, fill=(0, 0, 0, 0))
 
             logger.info(
                 'RhDisplayCacheWorker: prepared display layers in %.3f sec',
@@ -382,9 +393,61 @@ class RhDisplayCacheWorker(QThread):
             self.finished.emit(cov_display, topo_display)
         except Exception:
             logger.exception('RhDisplayCacheWorker failed')
+            self.finished.emit(None, None)
         finally:
             self._rh_cache = None  # type: ignore[assignment]  # release reference to free memory
-            self.finished.emit(None, None)
+
+
+class NsuOptimizerRecomputeWorker(QThread):
+    """Worker для пересчёта покрытия НСУ Optimizer при изменении целевых точек."""
+
+    finished = Signal(object, object)  # blended_image, coverage_layer
+    error = Signal(str)
+
+    def __init__(
+        self,
+        rh_cache: dict[str, Any],
+        target_rows: np.ndarray,
+        target_cols: np.ndarray,
+    ) -> None:
+        super().__init__()
+        self._rh_cache = rh_cache
+        self._target_rows = target_rows
+        self._target_cols = target_cols
+
+    def run(self) -> None:
+        try:
+            from services.radio_horizon import recompute_nsu_optimizer_fast
+
+            start = time.monotonic()
+            logger.info(
+                'NsuOptimizerRecomputeWorker: %d targets', len(self._target_rows)
+            )
+
+            blended, coverage = recompute_nsu_optimizer_fast(
+                dem=self._rh_cache['dem'],
+                target_rows=self._target_rows,
+                target_cols=self._target_cols,
+                antenna_height_m=self._rh_cache.get('antenna_height_m', 10.0),
+                pixel_size_m=self._rh_cache['pixel_size_m'],
+                topo_base=self._rh_cache['topo_base'],
+                overlay_alpha=self._rh_cache.get('overlay_alpha', 0.3),
+                max_height_m=self._rh_cache.get('max_height_m', 500.0),
+                final_size=self._rh_cache.get('final_size'),
+                crop_size=self._rh_cache.get('crop_size'),
+                rotation_deg=self._rh_cache.get('rotation_deg', 0.0),
+            )
+
+            logger.info(
+                'NsuOptimizerRecomputeWorker: done in %.3f sec',
+                time.monotonic() - start,
+            )
+            self.finished.emit(blended, coverage)
+        except Exception as e:
+            logger.exception('NsuOptimizerRecomputeWorker failed')
+            self.error.emit(str(e))
+        finally:
+            self._rh_cache = None  # type: ignore[assignment]
 
 
 class LinkProfileRecomputeWorker(QThread):
@@ -1252,7 +1315,9 @@ class MainWindow(QMainWindow):
 
         # Radio horizon cache for interactive rebuilding
         self._rh_cache: dict[str, Any] = {}
-        self._rh_worker: CoverageRecomputeWorker | None = None
+        self._rh_worker: (
+            CoverageRecomputeWorker | NsuOptimizerRecomputeWorker | None
+        ) = None
         self._rh_display_worker: RhDisplayCacheWorker | None = None
         self._rh_click_pos: tuple[float, float] | None = (
             None  # Store click position for marker
@@ -1447,6 +1512,7 @@ class MainWindow(QMainWindow):
 
         # Контрольная точка
         control_point_group = QFrame()
+        self._control_point_group = control_point_group
         control_point_group.setFrameStyle(QFrame.Shape.StyledPanel)
         control_point_layout = QVBoxLayout()
 
@@ -1555,6 +1621,7 @@ class MainWindow(QMainWindow):
             MapType.RADIO_HORIZON,
             MapType.RADAR_COVERAGE,
             MapType.LINK_PROFILE,
+            MapType.NSU_OPTIMIZER,
         ]
         for mt in self._maptype_order:
             self.map_type_combo.addItem(MAP_TYPE_LABELS_RU[mt], userData=mt.value)
@@ -1940,7 +2007,120 @@ class MainWindow(QMainWindow):
         self._link_profile_group = link_profile_group
         settings_main_layout.addWidget(link_profile_group)
 
-        # Helmert widget (не в layout, хранится для диалога и профилей)
+        # --- Панель «Оптимальное размещение НСУ» ---
+        nsu_opt_group = QGroupBox('Оптимальное размещение НСУ')
+        nsu_opt_layout = QVBoxLayout()
+
+        # Hint label
+        nsu_hint = QLabel(
+            'ПКМ на карте — добавить точку.\nЛКМ на маркере - переместить точку.'
+            '\nПКМ на маркере — удалить точку.'
+        )
+        nsu_hint.setWordWrap(True)
+        nsu_hint.setStyleSheet('color: #888; font-size: 11px;')
+        nsu_opt_layout.addWidget(nsu_hint)
+
+        # Table of target points
+        from PySide6.QtWidgets import QHeaderView, QTableWidget
+
+        self._nsu_table = QTableWidget(0, 3)
+        self._nsu_table.setHorizontalHeaderLabels(['№', 'X (СК-42)', 'Y (СК-42)'])
+        self._nsu_table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self._nsu_table.horizontalHeader().setSectionResizeMode(
+            1, QHeaderView.ResizeMode.Stretch
+        )
+        self._nsu_table.horizontalHeader().setSectionResizeMode(
+            2, QHeaderView.ResizeMode.Stretch
+        )
+        self._nsu_table.setMaximumHeight(200)
+        self._nsu_table.verticalHeader().setVisible(False)
+        self._nsu_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        nsu_opt_layout.addWidget(self._nsu_table)
+
+        # Buttons row
+        nsu_btn_row = QHBoxLayout()
+        self._nsu_add_btn = QPushButton('Добавить точку')
+        self._nsu_clear_btn = QPushButton('Очистить все')
+        self._nsu_delete_btn = QPushButton('Удалить выбранную')
+        nsu_btn_row.addWidget(self._nsu_add_btn)
+        nsu_btn_row.addWidget(self._nsu_delete_btn)
+        nsu_btn_row.addWidget(self._nsu_clear_btn)
+        nsu_opt_layout.addLayout(nsu_btn_row)
+
+        # Sliders grid
+        nsu_grid = QGridLayout()
+        nsu_grid.setContentsMargins(0, 0, 0, 0)
+        nsu_grid.setVerticalSpacing(2)
+        nsu_grid.setHorizontalSpacing(4)
+
+        # Antenna height slider
+        nsu_ant_col = QVBoxLayout()
+        nsu_ant_col.setContentsMargins(0, 0, 0, 0)
+        nsu_ant_col.setSpacing(0)
+        self._nsu_antenna_label = QLabel('10')
+        self._nsu_antenna_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self._nsu_antenna_slider = QSlider(Qt.Orientation.Horizontal)
+        self._nsu_antenna_slider.setRange(0, 50)
+        self._nsu_antenna_slider.setSingleStep(1)
+        self._nsu_antenna_slider.setValue(10)
+        self._nsu_antenna_slider.setToolTip('Высота антенны НСУ (м)')
+        nsu_ant_col.addWidget(self._nsu_antenna_label)
+        nsu_ant_col.addWidget(self._nsu_antenna_slider)
+        nsu_grid.addWidget(QLabel('Высота ант. НСУ (м):'), 0, 0)
+        nsu_grid.addLayout(nsu_ant_col, 0, 1)
+
+        # Max flight height slider
+        nsu_fh_col = QVBoxLayout()
+        nsu_fh_col.setContentsMargins(0, 0, 0, 0)
+        nsu_fh_col.setSpacing(0)
+        self._nsu_flight_height_label = QLabel('500')
+        self._nsu_flight_height_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self._nsu_flight_height_slider = QSlider(Qt.Orientation.Horizontal)
+        self._nsu_flight_height_slider.setRange(50, 2000)
+        self._nsu_flight_height_slider.setSingleStep(50)
+        self._nsu_flight_height_slider.setPageStep(50)
+        self._nsu_flight_height_slider.setValue(500)
+        self._nsu_flight_height_slider.setToolTip(
+            'Макс. высота полёта БпЛА (значения выше — серый)'
+        )
+        nsu_fh_col.addWidget(self._nsu_flight_height_label)
+        nsu_fh_col.addWidget(self._nsu_flight_height_slider)
+        nsu_grid.addWidget(QLabel('Макс. высота (м):'), 1, 0)
+        nsu_grid.addLayout(nsu_fh_col, 1, 1)
+
+        # Overlay alpha slider
+        nsu_alpha_col = QVBoxLayout()
+        nsu_alpha_col.setContentsMargins(0, 0, 0, 0)
+        nsu_alpha_col.setSpacing(0)
+        self._nsu_alpha_label = QLabel('30%')
+        self._nsu_alpha_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self._nsu_alpha_slider = QSlider(Qt.Orientation.Horizontal)
+        self._nsu_alpha_slider.setRange(0, 100)
+        self._nsu_alpha_slider.setSingleStep(5)
+        self._nsu_alpha_slider.setPageStep(5)
+        self._nsu_alpha_slider.setValue(30)
+        self._nsu_alpha_slider.setToolTip(
+            '0% = топооснова не видна, 100% = чистая топооснова'
+        )
+        nsu_alpha_col.addWidget(self._nsu_alpha_label)
+        nsu_alpha_col.addWidget(self._nsu_alpha_slider)
+        nsu_grid.addWidget(QLabel('Прозрачность:'), 2, 0)
+        nsu_grid.addLayout(nsu_alpha_col, 2, 1)
+
+        nsu_opt_layout.addLayout(nsu_grid)
+
+        nsu_opt_group.setLayout(nsu_opt_layout)
+        nsu_opt_group.setVisible(False)
+        self._nsu_optimizer_group = nsu_opt_group
+        settings_main_layout.addWidget(nsu_opt_group)
+
+        # NSU Optimizer state
+        self._nsu_needs_recompute = False
+        self._nsu_pending_recompute: bool = False
+
+        # Helmert widget (н�� в layout, хранится для д��алога и профилей)
         self.helmert_widget = HelmertSettingsWidget()
 
         settings_main_layout.addStretch()
@@ -2100,6 +2280,7 @@ class MainWindow(QMainWindow):
         self._preview_area.map_right_clicked.connect(self._on_map_right_clicked)
         self._preview_area.shift_wheel_rotated.connect(self._rotate_radar_azimuth)
         self._preview_area.shift_key_released.connect(self._on_shift_released_recompute)
+        self._preview_area.point_drag_started.connect(self._on_point_drag_started)
         self._preview_area.point_drag_finished.connect(self._on_point_dragged)
         self._preview_area.fade_in_finished.connect(self._on_fade_in_finished)
 
@@ -2238,6 +2419,22 @@ class MainWindow(QMainWindow):
 
         # Helmert settings — changed only via AdvancedSettingsDialog
 
+        # NSU Optimizer connections
+        self._nsu_add_btn.clicked.connect(self._nsu_add_point_from_button)
+        self._nsu_delete_btn.clicked.connect(self._nsu_delete_selected_point)
+        self._nsu_clear_btn.clicked.connect(self._nsu_clear_all_points)
+        self._nsu_antenna_slider.valueChanged.connect(self._on_nsu_antenna_changed)
+        self._nsu_antenna_slider.sliderReleased.connect(self._on_nsu_slider_released)
+        self._nsu_flight_height_slider.valueChanged.connect(
+            self._on_nsu_flight_height_changed
+        )
+        self._nsu_flight_height_slider.sliderReleased.connect(
+            self._on_nsu_slider_released
+        )
+        self._nsu_alpha_slider.valueChanged.connect(self._on_nsu_alpha_changed)
+        self._nsu_alpha_slider.sliderReleased.connect(self._on_nsu_alpha_released)
+        self._nsu_table.cellChanged.connect(self._on_nsu_table_cell_changed)
+
     def _load_initial_data(self) -> None:
         """Load initial application data."""
         # Load available profiles
@@ -2281,6 +2478,8 @@ class MainWindow(QMainWindow):
             self._clear_preview_ui()
             # Use the same collection logic as forced sync
             self._sync_ui_to_model_now()
+            # Re-check NSU point bounds (map area may have changed)
+            self._nsu_recolorize_all()
         finally:
             self._ui_sync_in_progress = False
 
@@ -2321,11 +2520,13 @@ class MainWindow(QMainWindow):
                 MapType.ELEVATION_COLOR.value,
                 MapType.ELEVATION_HILLSHADE.value,
             )
+            is_nsu_optimizer = map_type_value == MapType.NSU_OPTIMIZER.value
         except Exception:
             is_radio_horizon = False
             is_radar_coverage = False
             is_link_profile = False
             is_elev_color = False
+            is_nsu_optimizer = False
 
         # Панель видна для НСУ/РЛС/Карта высот (слайдер прозрачности)
         self._radio_horizon_group.setVisible(
@@ -2334,6 +2535,14 @@ class MainWindow(QMainWindow):
 
         # Панель профиля радиолинии
         self._link_profile_group.setVisible(is_link_profile)
+
+        # Панель НСУ Optimizer
+        self._nsu_optimizer_group.setVisible(is_nsu_optimizer)
+
+        # Контрольная точка не нужна для NSU Optimizer и Link Profile
+        self._control_point_group.setVisible(
+            not is_nsu_optimizer and not is_link_profile
+        )
 
         # Заголовок панели зависит от режима
         if is_elev_color:
@@ -2467,6 +2676,13 @@ class MainWindow(QMainWindow):
         payload['link_freq_mhz'] = float(self.link_freq_slider.value())
         payload['link_antenna_a_m'] = float(self.link_antenna_a_slider.value())
         payload['link_antenna_b_m'] = float(self.link_antenna_b_slider.value())
+        # NSU Optimizer parameters
+        payload['nsu_target_points_json'] = self._nsu_collect_points_json()
+        payload['nsu_antenna_height_m'] = float(self._nsu_antenna_slider.value())
+        payload['nsu_max_flight_height_m'] = float(
+            self._nsu_flight_height_slider.value()
+        )
+        payload['nsu_overlay_alpha'] = self._nsu_alpha_slider.value() / 100.0
         self._controller.update_settings_bulk(**payload)
 
     def _get_current_coordinates(self) -> dict[str, int | bool | float | str]:
@@ -2815,7 +3031,95 @@ class MainWindow(QMainWindow):
 
     @Slot(float, float)
     def _on_map_right_clicked(self, px: float, py: float) -> None:
-        """Right-click on map: currently unused (drag via LMB)."""
+        """Right-click on map: add/remove NSU target point."""
+        metadata = self._model.state.last_map_metadata
+        if metadata is None or metadata.map_type != MapType.NSU_OPTIMIZER:
+            return
+
+        # Hit-test existing target points — if near one, delete it
+        hit_radius = 30.0  # pixels tolerance
+        draggable = getattr(self._preview_area, '_draggable_points', {})
+        for pid, (sx, sy) in draggable.items():
+            if pid.startswith('T'):
+                dx = px - sx
+                dy = py - sy
+                if dx * dx + dy * dy <= hit_radius * hit_radius:
+                    try:
+                        idx = int(pid[1:])
+                        if 0 <= idx < self._nsu_table.rowCount():
+                            self._nsu_table.removeRow(idx)
+                            self._nsu_renumber_table()
+                            self._sync_ui_to_model_now()
+                            self._trigger_nsu_recompute()
+                            self._status_proxy.show_message(
+                                f'Точка {idx + 1} удалена', 2000
+                            )
+                            return
+                    except (ValueError, IndexError):
+                        pass
+
+        # No hit — add new point
+        coords = self._calculate_sk42_from_scene_pos(px, py)
+        if coords is None:
+            return
+        x_val, y_val = coords
+        self._nsu_add_point(x_val, y_val)
+        self._status_proxy.show_message(f'Добавлена точка: X={x_val}, Y={y_val}', 2000)
+
+    def _final_pos_to_dem_coords(self, px: float, py: float) -> tuple[int, int] | None:
+        """
+        Convert final image pixel (px, py) to DEM array indices (row, col).
+
+        3-step inverse: undo center crop -> inverse rotation -> scale to DEM.
+        Returns None if DEM is not available in cache.
+        """
+        dem = self._rh_cache.get('dem')
+        if dem is None:
+            return None
+
+        dem_h, dem_w = dem.shape
+        final_size = self._rh_cache.get('final_size')
+
+        if final_size:
+            final_w, final_h = final_size
+            rotation_deg = self._rh_cache.get('rotation_deg', 0.0)
+
+            dem_full = self._rh_cache.get('dem_full')
+            crop_size = self._rh_cache.get('crop_size')
+            if dem_full is not None:
+                crop_h, crop_w = dem_full.shape
+            elif crop_size:
+                crop_w, crop_h = crop_size
+            else:
+                crop_h, crop_w = dem_h, dem_w
+
+            # 1. Undo center crop: final image -> crop_rect (rotated)
+            left_crop = (crop_w - final_w) / 2.0
+            top_crop = (crop_h - final_h) / 2.0
+            px_rot = px + left_crop
+            py_rot = py + top_crop
+
+            # 2. Inverse rotation around crop_rect center
+            if abs(rotation_deg) > ROTATION_INVERSE_THRESHOLD_DEG:
+                cx, cy = crop_w / 2.0, crop_h / 2.0
+                rad = math.radians(rotation_deg)
+                cos_a, sin_a = math.cos(rad), math.sin(rad)
+                dx, dy = px_rot - cx, py_rot - cy
+                ux = dx * cos_a - dy * sin_a + cx
+                uy = dx * sin_a + dy * cos_a + cy
+            else:
+                ux, uy = px_rot, py_rot
+
+            # 3. Scale: crop_rect -> downsampled DEM
+            col = int(ux * dem_w / crop_w)
+            row = int(uy * dem_h / crop_h)
+        else:
+            col = int(px)
+            row = int(py)
+
+        row = max(0, min(row, dem_h - 1))
+        col = max(0, min(col, dem_w - 1))
+        return (row, col)
 
     def _recompute_coverage_at_click(
         self,
@@ -2846,7 +3150,6 @@ class MainWindow(QMainWindow):
         self._pending_recompute_pos = None
 
         dem = self._rh_cache.get('dem')
-        final_size = self._rh_cache.get('final_size')
         if dem is None:
             logger.warning('No DEM in cache, cannot recompute')
             return
@@ -2854,51 +3157,13 @@ class MainWindow(QMainWindow):
         dem_h, dem_w = dem.shape
 
         if dem_row is not None and dem_col is not None:
-            # Direct DEM coords — no round-trip conversion needed
             new_antenna_row = dem_row
             new_antenna_col = dem_col
-        elif final_size:
-            final_w, final_h = final_size
-            rotation_deg = self._rh_cache.get('rotation_deg', 0.0)
-
-            # Размеры полноразмерного DEM (= crop_rect pixel size)
-            dem_full = self._rh_cache.get('dem_full')
-            if dem_full is not None:
-                crop_h, crop_w = dem_full.shape
-            else:
-                crop_h, crop_w = dem_h, dem_w
-
-            # 1. Undo center crop: final image → crop_rect (повёрнутый)
-            left_crop = (crop_w - final_w) / 2.0
-            top_crop = (crop_h - final_h) / 2.0
-            px_rot = px + left_crop
-            py_rot = py + top_crop
-
-            # 2. Обратный поворот вокруг центра crop_rect
-            # cv2 forward rotation: [[cos(a), sin(a)], [-sin(a), cos(a)]]
-            # Inverse = transpose:  [[cos(a), -sin(a)], [sin(a), cos(a)]]
-            # With positive angle, (dx*cos - dy*sin, dx*sin + dy*cos) is the inverse.
-            if abs(rotation_deg) > ROTATION_INVERSE_THRESHOLD_DEG:
-                cx, cy = crop_w / 2.0, crop_h / 2.0
-                rad = math.radians(rotation_deg)
-                cos_a, sin_a = math.cos(rad), math.sin(rad)
-                dx, dy = px_rot - cx, py_rot - cy
-                ux = dx * cos_a - dy * sin_a + cx
-                uy = dx * sin_a + dy * cos_a + cy
-            else:
-                ux, uy = px_rot, py_rot
-
-            # 3. Масштабирование: crop_rect → downsampled DEM
-            scale_x = dem_w / crop_w
-            scale_y = dem_h / crop_h
-            new_antenna_col = int(ux * scale_x)
-            new_antenna_row = int(uy * scale_y)
         else:
-            new_antenna_col = int(px)
-            new_antenna_row = int(py)
-
-        new_antenna_row = max(0, min(new_antenna_row, dem_h - 1))
-        new_antenna_col = max(0, min(new_antenna_col, dem_w - 1))
+            result = self._final_pos_to_dem_coords(px, py)
+            if result is None:
+                return
+            new_antenna_row, new_antenna_col = result
 
         logger.info(
             'Coverage recompute: scene (%.1f, %.1f) -> DEM (%d, %d)',
@@ -2996,9 +3261,16 @@ class MainWindow(QMainWindow):
             # (same coordinate system as first build).
             rotation_deg = self._rh_cache.get('rotation_deg', 0.0)
 
+            # result_image приходит в DEM-размере (~2000x2000).
+            # Resize до final_size ПЕРЕД наложением overlay/маркеров
+            # (overlay_layer кэширован в final_size).
+            final_size = self._rh_cache.get('final_size')
+            if final_size and result_image.size != final_size:
+                result_image = result_image.resize(
+                    final_size, Image.Resampling.BILINEAR
+                )
+
             # Create display-sized topo for interactive alpha blending.
-            # (recompute worker returns coverage_layer at final_size,
-            #  so topo must also be at final_size for correct blend)
             self._prepare_rh_topo_display()
 
             # Apply postprocessing (grid, legend, contours)
@@ -3010,7 +3282,8 @@ class MainWindow(QMainWindow):
             overlay_layer = self._rh_cache.get('overlay_layer')
             if overlay_layer:
                 # Use cached overlay (grid + legend + contours)
-                result_image = result_image.convert('RGBA')
+                if result_image.mode != 'RGBA':
+                    result_image = result_image.convert('RGBA')
                 result_image = Image.alpha_composite(result_image, overlay_layer)
                 step_elapsed = time.monotonic() - step_start
                 logger.info('  └─ Apply cached overlay layer: %.3f sec', step_elapsed)
@@ -3023,7 +3296,8 @@ class MainWindow(QMainWindow):
                     overlay_layer = Image.new('RGBA', result_image.size, (0, 0, 0, 0))
                 self._draw_rh_legend(overlay_layer, mpp)
                 self._rh_cache['overlay_layer'] = overlay_layer
-                result_image = result_image.convert('RGBA')
+                if result_image.mode != 'RGBA':
+                    result_image = result_image.convert('RGBA')
                 result_image = Image.alpha_composite(result_image, overlay_layer)
                 step_elapsed = time.monotonic() - step_start
                 logger.info(
@@ -3599,12 +3873,20 @@ class MainWindow(QMainWindow):
                     old_display.close()
             del old_display
 
+            # Rotate + crop at native (small DEM) size — no resize to final
             topo_d = topo.copy()
-            if topo_d.size != (cw, ch):
-                topo_d = topo_d.resize((cw, ch), Image.Resampling.BILINEAR)
+            tw, th = topo_d.size
             if has_rotation:
                 topo_d = rotate_keep_size(topo_d, rotation_deg, fill=(128, 128, 128))
-            topo_d = center_crop(topo_d, fw, fh)
+                fw_small = round(fw * tw / cw)
+                fh_small = round(fh * th / ch)
+                topo_d = center_crop(topo_d, fw_small, fh_small)
+            else:
+                vis_w = round(fw * tw / cw)
+                vis_h = round(fh * th / ch)
+                left = max(0, (tw - vis_w) // 2)
+                top = max(0, (th - vis_h) // 2)
+                topo_d = topo_d.crop((left, top, left + vis_w, top + vis_h))
             gray = topo_d.convert('L')
             del topo_d
             self._rh_cache['topo_base_display'] = gray.convert('RGBA')
@@ -3637,11 +3919,18 @@ class MainWindow(QMainWindow):
         coverage = self._rh_cache.get('coverage_layer')
         if coverage is not None:
             cov_d = coverage
-            if cov_d.size != (cw, ch):
-                cov_d = cov_d.resize((cw, ch), Image.Resampling.BILINEAR)
+            cov_w, cov_h = cov_d.size
             if has_rotation:
                 cov_d = rotate_keep_size(cov_d, rotation_deg, fill=(0, 0, 0, 0))
-            cov_d = center_crop(cov_d, fw, fh)
+                fw_small = round(fw * cov_w / cw)
+                fh_small = round(fh * cov_h / ch)
+                cov_d = center_crop(cov_d, fw_small, fh_small)
+            else:
+                vis_w = round(fw * cov_w / cw)
+                vis_h = round(fh * cov_h / ch)
+                left = max(0, (cov_w - vis_w) // 2)
+                top = max(0, (cov_h - vis_h) // 2)
+                cov_d = cov_d.crop((left, top, left + vis_w, top + vis_h))
             self._rh_cache['coverage_layer'] = cov_d
 
     @Slot(object, object)
@@ -3658,6 +3947,11 @@ class MainWindow(QMainWindow):
         self._rh_display_worker = None
         logger.info('rh display cache ready (background)')
 
+        # Если NSU recompute ждал завершения display cache — запускаем
+        if self._nsu_pending_recompute:
+            self._nsu_pending_recompute = False
+            self._trigger_nsu_recompute()
+
     def _apply_interactive_alpha(self, alpha_fraction: float) -> None:
         """Re-blend coverage_layer with topo_base at new alpha (instant)."""
         coverage = self._rh_cache.get('coverage_layer')
@@ -3670,10 +3964,15 @@ class MainWindow(QMainWindow):
         self._rh_cache['overlay_alpha'] = alpha_fraction
         blend_alpha = 1.0 - alpha_fraction
         rotation_deg = self._rh_cache.get('rotation_deg', 0.0)
-        # Гарантируем совпадение размеров
+        # Гарантируем совпадение размеров (blend на DEM-размере — дёшево)
         if coverage.size != topo_base.size:
             coverage = coverage.resize(topo_base.size, Image.Resampling.BILINEAR)
         blended = Image.blend(topo_base, coverage, blend_alpha)
+        # Resize до final_size ПЕРЕД наложением overlay и маркеров
+        # (overlay_layer и _rh_click_pos — в координатах final_size)
+        final_size = self._rh_cache.get('final_size')
+        if final_size and blended.size != final_size:
+            blended = blended.resize(final_size, Image.Resampling.BILINEAR)
         # Apply cached overlay (grid + legend)
         overlay_layer = self._rh_cache.get('overlay_layer')
         if overlay_layer:
@@ -3698,9 +3997,18 @@ class MainWindow(QMainWindow):
                     size_m=self._model.settings.grid_font_size_m,
                 )
                 self._draw_rh_control_point_label(blended, px, py, mpp)
+        # Finalize to RGB (same as _on_nsu_recompute_finished)
+        if blended.mode != 'RGB':
+            blended = blended.convert('RGB')
+        # Draw NSU markers on image before displaying
+        is_nsu = self._rh_cache.get('is_nsu_optimizer')
+        if is_nsu:
+            self._nsu_draw_markers_on_image(blended)
         self._preview_area.set_image(blended)
         # Restore QGraphics overlay markers cleared by set_image → scene.clear()
         self._update_cp_marker_from_settings(self._model.settings)
+        if is_nsu:
+            self._nsu_register_draggable_points()
 
     @Slot(int)
     def _on_alpha_slider_changed(self, value: int) -> None:
@@ -4102,6 +4410,16 @@ class MainWindow(QMainWindow):
         else:
             return (px, py)
 
+    @Slot(str)
+    def _on_point_drag_started(self, point_id: str) -> None:
+        """Handle drag start — hide the marker at old position for NSU points."""
+        if not point_id.startswith('T'):
+            return
+        # Закрываем маркер QGraphicsItem'ом с цветом фона (мгновенно)
+        pos = self._preview_area.get_draggable_point(point_id)
+        if pos is not None:
+            self._preview_area.hide_marker_at(pos[0], pos[1])
+
     @Slot(str, float, float)
     def _on_point_dragged(self, point_id: str, px: float, py: float) -> None:
         """Dispatch drag-and-drop finish for any draggable point."""
@@ -4110,6 +4428,10 @@ class MainWindow(QMainWindow):
         )
         if point_id == 'CP':
             self._on_cp_dragged(px, py)
+            return
+        # T0, T1, ... — NSU optimizer target points
+        if point_id.startswith('T'):
+            self._on_nsu_point_dragged(point_id, px, py)
             return
         # A / B — link profile
         self._on_link_point_dragged(point_id, px, py)
@@ -4354,6 +4676,26 @@ class MainWindow(QMainWindow):
             self._download_warnings.append(text)
         if not field_updates:
             return
+
+        # Handle NSU target points update (table, not widgets)
+        nsu_json = field_updates.pop('nsu_target_points_json', None)
+        if nsu_json is not None:
+            import json as _json
+
+            try:
+                pts = [
+                    (int(p[0]), int(p[1]))
+                    for p in _json.loads(nsu_json)
+                    if len(p) >= 2  # noqa: PLR2004
+                ]
+            except Exception:
+                pts = []
+            self._nsu_populate_table(pts)
+            self._model.patch_settings_silent(nsu_target_points_json=nsu_json)
+
+        if not field_updates:
+            return
+
         # Map field names to coordinate input widgets
         _field_widget_map = {
             'control_point_x': self.control_point_x_widget,
@@ -4539,8 +4881,8 @@ class MainWindow(QMainWindow):
             self._preview_area.remove_draggable_point('CP')
             return
 
-        # Link Profile не показывает контрольную точку
-        if metadata.map_type == MapType.LINK_PROFILE:
+        # Link Profile и NSU Optimizer не показывают контрольную точку
+        if metadata.map_type in (MapType.LINK_PROFILE, MapType.NSU_OPTIMIZER):
             self._preview_area.clear_control_point_markers()
             self._preview_area.remove_draggable_point('CP')
             return
@@ -4710,6 +5052,687 @@ class MainWindow(QMainWindow):
         )
         # Restrict dragging to the map area (above the profile inset)
         self._preview_area.set_drag_y_limit(metadata.height_px)
+
+    # ================================================================
+    # NSU Optimizer methods
+    # ================================================================
+
+    def _nsu_collect_points_json(self) -> str:
+        """Collect target points from the table as JSON string."""
+        import json as _json
+
+        points = []
+        for row in range(self._nsu_table.rowCount()):
+            try:
+                x_item = self._nsu_table.item(row, 1)
+                y_item = self._nsu_table.item(row, 2)
+                if x_item and y_item:
+                    x_val = int(x_item.text())
+                    y_val = int(y_item.text())
+                    points.append([x_val, y_val])
+            except (ValueError, TypeError):
+                continue
+        return _json.dumps(points)
+
+    def _nsu_populate_table(self, points: list[tuple[int, int]]) -> None:
+        """Fill table from a list of (x_sk42, y_sk42) tuples."""
+        from PySide6.QtWidgets import QTableWidgetItem
+
+        center = Qt.AlignmentFlag.AlignCenter
+        with QSignalBlocker(self._nsu_table):
+            self._nsu_table.setRowCount(len(points))
+            for i, (x_val, y_val) in enumerate(points):
+                num_item = QTableWidgetItem(str(i + 1))
+                num_item.setFlags(num_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                num_item.setTextAlignment(center)
+                self._nsu_table.setItem(i, 0, num_item)
+                x_item = QTableWidgetItem(str(x_val))
+                x_item.setTextAlignment(center)
+                self._nsu_table.setItem(i, 1, x_item)
+                y_item = QTableWidgetItem(str(y_val))
+                y_item.setTextAlignment(center)
+                self._nsu_table.setItem(i, 2, y_item)
+                self._nsu_colorize_row(i)
+
+    def _nsu_add_point(self, x_sk42: int, y_sk42: int) -> None:
+        """Add a target point to the table and trigger recompute."""
+        from shared.constants import NSU_OPTIMIZER_MAX_POINTS
+
+        if self._nsu_table.rowCount() >= NSU_OPTIMIZER_MAX_POINTS:
+            from PySide6.QtWidgets import QMessageBox
+
+            QMessageBox.warning(
+                self,
+                'Ограничение',
+                f'Максимум {NSU_OPTIMIZER_MAX_POINTS} целевых точек.',
+            )
+            return
+
+        from PySide6.QtWidgets import QTableWidgetItem
+
+        center = Qt.AlignmentFlag.AlignCenter
+        row = self._nsu_table.rowCount()
+        with QSignalBlocker(self._nsu_table):
+            self._nsu_table.insertRow(row)
+            num_item = QTableWidgetItem(str(row + 1))
+            num_item.setFlags(num_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            num_item.setTextAlignment(center)
+            self._nsu_table.setItem(row, 0, num_item)
+            x_item = QTableWidgetItem(str(x_sk42))
+            x_item.setTextAlignment(center)
+            self._nsu_table.setItem(row, 1, x_item)
+            y_item = QTableWidgetItem(str(y_sk42))
+            y_item.setTextAlignment(center)
+            self._nsu_table.setItem(row, 2, y_item)
+            self._nsu_colorize_row(row)
+
+        self._sync_ui_to_model_now()
+
+        # Мгновенно показываем крестик ТОЛЬКО для новой точки
+        self._nsu_show_single_marker(x_sk42, y_sk42, row)
+
+        self._trigger_nsu_recompute()
+
+    @Slot()
+    def _nsu_add_point_from_button(self) -> None:
+        """Add a point at map center via button."""
+        settings = self._model.settings
+        if settings is None:
+            return
+        # Default to map center (rough)
+        x_val = settings.control_point_x
+        y_val = settings.control_point_y
+        self._nsu_add_point(x_val, y_val)
+
+    @Slot()
+    def _nsu_delete_selected_point(self) -> None:
+        """Delete selected row from table."""
+        rows = set()
+        for item in self._nsu_table.selectedItems():
+            rows.add(item.row())
+        if not rows:
+            return
+        for row in sorted(rows, reverse=True):
+            self._nsu_table.removeRow(row)
+        # Renumber
+        self._nsu_renumber_table()
+        self._sync_ui_to_model_now()
+        self._trigger_nsu_recompute()
+
+    @Slot()
+    def _nsu_clear_all_points(self) -> None:
+        """Remove all target points."""
+        self._nsu_table.setRowCount(0)
+        self._sync_ui_to_model_now()
+        self._trigger_nsu_recompute()
+
+    def _is_nsu_point_in_bounds(self, x_sk42: int, y_sk42: int) -> bool:
+        """
+        Check if NSU point is within current map bounds.
+
+        Returns True when settings are unavailable (no map context).
+        """
+        settings = getattr(self._model, 'settings', None)
+        if settings is None:
+            return True
+        try:
+            from services.coordinate_transformer import (
+                is_point_within_bounds,
+                sk42_raw_to_gk,
+            )
+
+            gk_e, gk_n = sk42_raw_to_gk(x_sk42, y_sk42)
+            bl_x = settings.bottom_left_x_sk42_gk
+            bl_y = settings.bottom_left_y_sk42_gk
+            tr_x = settings.top_right_x_sk42_gk
+            tr_y = settings.top_right_y_sk42_gk
+            center_x = (bl_x + tr_x) / 2
+            center_y = (bl_y + tr_y) / 2
+            width_m = tr_x - bl_x
+            height_m = tr_y - bl_y
+            return is_point_within_bounds(
+                gk_e, gk_n, center_x, center_y, width_m, height_m
+            )
+        except Exception:
+            return True
+
+    def _nsu_colorize_row(self, row: int) -> None:
+        """Set background color for all cells in row based on point color and bounds."""
+        from PySide6.QtGui import QBrush as _QBrush
+        from PySide6.QtGui import QColor as _QColor
+
+        from shared.constants import NSU_OPTIMIZER_POINT_COLORS
+
+        # Check if point is out of bounds
+        oob = False
+        try:
+            x_item = self._nsu_table.item(row, 1)
+            y_item = self._nsu_table.item(row, 2)
+            if x_item and y_item:
+                x_val = int(x_item.text())
+                y_val = int(y_item.text())
+                oob = not self._is_nsu_point_in_bounds(x_val, y_val)
+        except (ValueError, TypeError):
+            pass
+
+        if oob:
+            bg = _QColor(255, 80, 80, 100)
+        else:
+            color = NSU_OPTIMIZER_POINT_COLORS[row % len(NSU_OPTIMIZER_POINT_COLORS)]
+            bg = _QColor(color[0], color[1], color[2], 80)
+        brush = _QBrush(bg)
+        for col in range(self._nsu_table.columnCount()):
+            item = self._nsu_table.item(row, col)
+            if item is not None:
+                item.setBackground(brush)
+
+    def _nsu_recolorize_all(self) -> None:
+        """Re-check bounds and update colors for every table row."""
+        for row in range(self._nsu_table.rowCount()):
+            self._nsu_colorize_row(row)
+
+    def _nsu_renumber_table(self) -> None:
+        """Renumber the first column after deletion."""
+        from PySide6.QtWidgets import QTableWidgetItem
+
+        center = Qt.AlignmentFlag.AlignCenter
+        with QSignalBlocker(self._nsu_table):
+            for i in range(self._nsu_table.rowCount()):
+                num_item = QTableWidgetItem(str(i + 1))
+                num_item.setFlags(num_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                num_item.setTextAlignment(center)
+                self._nsu_table.setItem(i, 0, num_item)
+                self._nsu_colorize_row(i)
+
+    @Slot(int)
+    def _on_nsu_antenna_changed(self, value: int) -> None:
+        self._nsu_antenna_label.setText(str(value))
+        if self._has_nsu_cache():
+            self._rh_cache['antenna_height_m'] = float(value)
+            self._nsu_needs_recompute = True
+
+    @Slot(int)
+    def _on_nsu_flight_height_changed(self, value: int) -> None:
+        step = self._nsu_flight_height_slider.singleStep()
+        snapped = round(value / step) * step
+        if snapped != value:
+            self._nsu_flight_height_slider.setValue(snapped)
+            return
+        self._nsu_flight_height_label.setText(str(value))
+        if self._has_nsu_cache():
+            self._rh_cache['max_height_m'] = float(value)
+            self._nsu_needs_recompute = True
+
+    @Slot()
+    def _on_nsu_slider_released(self) -> None:
+        if self._nsu_needs_recompute:
+            self._nsu_needs_recompute = False
+            self._trigger_nsu_recompute()
+        self._sync_ui_to_model_now()
+
+    @Slot(int)
+    def _on_nsu_alpha_changed(self, value: int) -> None:
+        step = self._nsu_alpha_slider.singleStep()
+        snapped = round(value / step) * step
+        if snapped != value:
+            self._nsu_alpha_slider.setValue(snapped)
+            return
+        self._nsu_alpha_label.setText(f'{value}%')
+
+    @Slot()
+    def _on_nsu_alpha_released(self) -> None:
+        if self._has_nsu_cache() and 'coverage_layer' in self._rh_cache:
+            alpha = self._nsu_alpha_slider.value() / 100.0
+            self._rh_cache['overlay_alpha'] = alpha
+            self._apply_interactive_alpha(alpha)
+        self._sync_ui_to_model_now()
+
+    @Slot(int, int)
+    def _on_nsu_table_cell_changed(self, _row: int, col: int) -> None:
+        """Handle manual coordinate edit in table."""
+        if col in (1, 2):  # X or Y column
+            self._sync_ui_to_model_now()
+            self._nsu_recolorize_all()
+            self._trigger_nsu_recompute()
+
+    def _has_nsu_cache(self) -> bool:
+        """Check if NSU optimizer cache is available."""
+        return bool(
+            self._rh_cache
+            and self._rh_cache.get('is_nsu_optimizer')
+            and 'dem' in self._rh_cache
+        )
+
+    def _nsu_reset_overlay(self) -> None:
+        """Clear NSU heatmap overlay and markers when all points deleted."""
+        import contextlib
+
+        # 1. Remove coverage layer from cache
+        old_cov = self._rh_cache.pop('coverage_layer', None)
+        if old_cov is not None and hasattr(old_cov, 'close'):
+            with contextlib.suppress(Exception):
+                old_cov.close()
+
+        # 2. Remove all T* draggable points
+        for i in range(10):
+            self._preview_area.remove_draggable_point(f'T{i}')
+
+        # 3. Clear NSU markers (crosses on map)
+        self._preview_area.clear_nsu_markers()
+
+        # 4. Restore clean topo base with overlay
+        topo = self._rh_cache.get('topo_base')
+        if topo is not None:
+            display = topo.copy()
+            final_size = self._rh_cache.get('final_size')
+            if final_size and display.size != final_size:
+                display = display.resize(final_size, Image.Resampling.BILINEAR)
+            overlay_layer = self._rh_cache.get('overlay_layer')
+            if overlay_layer:
+                if display.mode != 'RGBA':
+                    display = display.convert('RGBA')
+                display = Image.alpha_composite(display, overlay_layer)
+                display = display.convert('RGB')
+            self._preview_area.set_image(display)
+
+    def _trigger_nsu_recompute(self) -> None:
+        """
+        Start NSU optimizer recomputation in background.
+
+        Следует тому же паттерну, что и _recompute_coverage_at_click:
+        блокировка GUI, WaitCursor, прогресс-бар, gc.collect().
+        """
+        if not self._has_nsu_cache():
+            return
+
+        # Если worker ещё работает — откладываем (та же логика, что в РГ)
+        if self._rh_worker is not None and self._rh_worker.isRunning():
+            self._nsu_pending_recompute = True
+            logger.info('NSU recompute deferred — worker still running')
+            return
+        # Если display cache worker ещё работает — тоже откладываем
+        if self._rh_display_worker is not None and self._rh_display_worker.isRunning():
+            self._nsu_pending_recompute = True
+            logger.info('NSU recompute deferred — display cache worker still running')
+            return
+
+        import json as _json
+
+        import numpy as np
+
+        points_json = self._nsu_collect_points_json()
+        try:
+            points = _json.loads(points_json)
+        except Exception:
+            points = []
+        if not points:
+            self._nsu_reset_overlay()
+            return
+
+        metadata = self._model.state.last_map_metadata
+        if self._rh_cache.get('dem') is None or metadata is None:
+            return
+
+        target_rows = []
+        target_cols = []
+        skipped_nums: list[int] = []
+        for i, p in enumerate(points):
+            x_sk42, y_sk42 = int(p[0]), int(p[1])
+            if not self._is_nsu_point_in_bounds(x_sk42, y_sk42):
+                skipped_nums.append(i + 1)
+                continue
+            pos = self._nsu_point_to_image_pos(x_sk42, y_sk42, metadata)
+            if pos is None:
+                continue
+            px, py = pos
+            result = self._final_pos_to_dem_coords(px, py)
+            if result is None:
+                continue
+            dem_row, dem_col = result
+            target_rows.append(dem_row)
+            target_cols.append(dem_col)
+
+        if skipped_nums:
+            labels = ', '.join(f'#{n}' for n in skipped_nums)
+            self._status_proxy.show_message(f'Точки {labels} за пределами карты', 4000)
+
+        if not target_rows:
+            self._nsu_reset_overlay()
+            return
+
+        target_rows_arr = np.array(target_rows, dtype=np.int32)
+        target_cols_arr = np.array(target_cols, dtype=np.int32)
+
+        self._nsu_register_draggable_points()
+
+        # --- Блокировка GUI (как в _recompute_coverage_at_click) ---
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        self._set_controls_enabled(enabled=False)
+        self._progress_label.setText('Пересчёт покрытия НСУ…')
+        self.status_bar.clearMessage()
+        self._progress_bar.setRange(0, 0)
+        self._progress_label.setVisible(True)
+        self._progress_bar.setVisible(True)
+        self._cancel_btn.setVisible(True)
+
+        # Cleanup: используем _rh_worker как общий слот для worker'а
+        if self._rh_worker is not None:
+            self._rh_worker.finished.disconnect()
+            self._rh_worker.error.disconnect()
+            self._rh_worker.deleteLater()
+            self._rh_worker = None
+
+        self._nsu_pending_recompute = False
+        worker = NsuOptimizerRecomputeWorker(
+            rh_cache=self._rh_cache,
+            target_rows=target_rows_arr,
+            target_cols=target_cols_arr,
+        )
+        worker.finished.connect(self._on_nsu_recompute_finished)
+        worker.error.connect(self._on_nsu_recompute_error)
+        self._rh_worker = worker
+        worker.start()
+
+    def _nsu_point_to_image_pos(
+        self, x_sk42: int, y_sk42: int, metadata: MapMetadata
+    ) -> tuple[float, float] | None:
+        """Convert SK-42 point to image pixel coordinates."""
+        try:
+            from services.coordinate_transformer import sk42_raw_to_gk
+
+            gk_x, gk_y = sk42_raw_to_gk(x_sk42, y_sk42)
+
+            transformer = CoordinateTransformer(
+                gk_x,
+                gk_y,
+                helmert_params=metadata.helmert_params,
+            )
+            lat_wgs, lng_wgs = transformer.get_wgs84_center()
+            from services.map_postprocessing import compute_control_point_image_coords
+
+            px, py = compute_control_point_image_coords(
+                lat_wgs,
+                lng_wgs,
+                metadata.center_lat_wgs,
+                metadata.center_lng_wgs,
+                metadata.zoom,
+                metadata.scale,
+                metadata.width_px,
+                metadata.height_px,
+                metadata.rotation_deg,
+                latlng_to_pixel_xy,
+            )
+        except Exception:
+            return None
+        else:
+            return (px, py)
+
+    @Slot(object, object)
+    def _on_nsu_recompute_finished(
+        self, result_image: Image.Image, coverage_layer: Image.Image
+    ) -> None:
+        """
+        Handle NSU recompute worker completion.
+
+        Структура аналогична _on_radio_horizon_recompute_finished:
+        try/except/finally с обязательным восстановлением GUI.
+        """
+        try:
+            if result_image is None:
+                return
+
+            # Сохраняем coverage в кэш (для alpha-слайдера).
+            old_cov = self._rh_cache.pop('coverage_layer', None)
+            if old_cov is not None and hasattr(old_cov, 'close'):
+                with contextlib.suppress(Exception):
+                    old_cov.close()
+            del old_cov
+            self._rh_cache['coverage_layer'] = coverage_layer
+
+            # result_image — DEM-размер (~2000x2000). Все тяжёлые операции
+            # уже сделаны на маленьком размере. Resize до final_size — один раз,
+            # в самом конце (DEM-RGB 12 МиБ → final-RGB ~800 МиБ).
+            if result_image.mode != 'RGB':
+                result_rgb = result_image.convert('RGB')
+                del result_image
+            else:
+                result_rgb = result_image
+            final_size = self._rh_cache.get('final_size')
+            if final_size and result_rgb.size != final_size:
+                result_rgb = result_rgb.resize(final_size, Image.Resampling.BILINEAR)
+
+            # Накладываем overlay (сетка + легенда + изолинии)
+            overlay_layer = self._rh_cache.get('overlay_layer')
+            if overlay_layer:
+                if result_rgb.mode != 'RGBA':
+                    result_rgb = result_rgb.convert('RGBA')
+                result_rgb = Image.alpha_composite(result_rgb, overlay_layer)
+                result_rgb = result_rgb.convert('RGB')
+            else:
+                overlay_base = self._rh_cache.get('overlay_base')
+                if overlay_base is not None:
+                    ol = overlay_base.copy()
+                else:
+                    ol = Image.new('RGBA', result_rgb.size, (0, 0, 0, 0))
+                metadata = self._model.state.last_map_metadata
+                mpp = metadata.meters_per_pixel if metadata else 0.0
+                self._draw_rh_legend(ol, mpp)
+                self._rh_cache['overlay_layer'] = ol
+                if result_rgb.mode != 'RGBA':
+                    result_rgb = result_rgb.convert('RGBA')
+                result_rgb = Image.alpha_composite(result_rgb, ol)
+                result_rgb = result_rgb.convert('RGB')
+
+            # Рисуем маркеры целевых точек (координаты в final_size space)
+            self._nsu_draw_markers_on_image(result_rgb)
+
+            self._base_image = result_rgb
+            self._current_image = result_rgb
+            metadata = self._model.state.last_map_metadata
+            mpp = metadata.meters_per_pixel if metadata else 0.0
+            self._preview_area.set_image(result_rgb, meters_per_px=mpp)
+            # Восстанавливаем draggable points (set_image очищает сцену)
+            self._nsu_register_draggable_points()
+
+            QApplication.restoreOverrideCursor()
+            self._status_proxy.show_message('Покрытие НСУ обновлено', 2000)
+
+        except Exception as e:
+            logger.exception('Failed to update preview after NSU recompute')
+            QApplication.restoreOverrideCursor()
+            self._status_proxy.show_message(f'Ошибка при обновлении: {e}', 5000)
+        finally:
+            self._progress_bar.setVisible(False)
+            self._progress_label.setVisible(False)
+            self._cancel_btn.setVisible(False)
+            self._set_controls_enabled(enabled=True)
+
+            if self._rh_worker is not None:
+                self._rh_worker.deleteLater()
+                self._rh_worker = None
+
+            gc.collect()
+
+            # Отложенный пересчёт (та же модель, что в РГ)
+            if self._nsu_pending_recompute:
+                self._nsu_pending_recompute = False
+                self._trigger_nsu_recompute()
+
+    def _on_nsu_recompute_error(self, error_msg: str) -> None:
+        """Handle NSU recompute error — аналог _on_radio_horizon_recompute_error."""
+        logger.error('NSU recompute failed: %s', error_msg)
+        QApplication.restoreOverrideCursor()
+        self._progress_bar.setVisible(False)
+        self._progress_label.setVisible(False)
+        self._cancel_btn.setVisible(False)
+        self._set_controls_enabled(enabled=True)
+        self._status_proxy.show_message(f'Ошибка пересчёта НСУ: {error_msg}', 5000)
+
+        if self._rh_worker is not None:
+            self._rh_worker.deleteLater()
+            self._rh_worker = None
+
+        gc.collect()
+
+        if self._nsu_pending_recompute:
+            self._nsu_pending_recompute = False
+            self._trigger_nsu_recompute()
+
+    def _nsu_show_single_marker(self, x_sk42: int, y_sk42: int, idx: int) -> None:
+        """Show a single QGraphics cross for the newly added point (instant)."""
+        from shared.constants import NSU_OPTIMIZER_POINT_COLORS
+
+        metadata = self._model.state.last_map_metadata
+        if metadata is None:
+            return
+        pos = self._nsu_point_to_image_pos(x_sk42, y_sk42, metadata)
+        if pos is None:
+            return
+        color = NSU_OPTIMIZER_POINT_COLORS[idx % len(NSU_OPTIMIZER_POINT_COLORS)]
+        self._preview_area.set_nsu_markers([(pos[0], pos[1], color)])
+
+    def _nsu_show_scene_markers(self) -> None:
+        """Show NSU target points as QGraphicsItems (instant visual feedback)."""
+        import json as _json
+
+        from shared.constants import NSU_OPTIMIZER_POINT_COLORS
+
+        metadata = self._model.state.last_map_metadata
+        if metadata is None:
+            self._preview_area.clear_nsu_markers()
+            return
+
+        points_json = self._nsu_collect_points_json()
+        try:
+            points = _json.loads(points_json)
+        except Exception:
+            self._preview_area.clear_nsu_markers()
+            return
+
+        marker_data: list[tuple[float, float, tuple[int, int, int]]] = []
+        for i, p in enumerate(points):
+            pos = self._nsu_point_to_image_pos(int(p[0]), int(p[1]), metadata)
+            if pos is None:
+                continue
+            color = NSU_OPTIMIZER_POINT_COLORS[i % len(NSU_OPTIMIZER_POINT_COLORS)]
+            marker_data.append((pos[0], pos[1], color))
+
+        self._preview_area.set_nsu_markers(marker_data)
+
+    def _nsu_draw_markers_on_image(
+        self, image: Image.Image, exclude_idx: int = -1
+    ) -> None:
+        """
+        Draw triangular markers for all target points on the image.
+
+        Переиспользует draw_control_point_triangle — тот же маркер,
+        что для КТ в радиогоризонте, но с цветом из палитры NSU.
+
+        Args:
+            image: PIL-изображение для отрисовки маркеров.
+            exclude_idx: индекс точки, которую НЕ рисовать (-1 = рисовать все).
+
+        """
+        import json as _json
+
+        metadata = self._model.state.last_map_metadata
+        if metadata is None:
+            return
+
+        points_json = self._nsu_collect_points_json()
+        try:
+            points = _json.loads(points_json)
+        except Exception:
+            return
+
+        mpp = metadata.meters_per_pixel
+        if mpp <= 0:
+            return
+
+        from shared.constants import NSU_OPTIMIZER_POINT_COLORS
+
+        for i, p in enumerate(points):
+            if i == exclude_idx:
+                continue
+            pos = self._nsu_point_to_image_pos(int(p[0]), int(p[1]), metadata)
+            if pos is None:
+                continue
+            color = NSU_OPTIMIZER_POINT_COLORS[i % len(NSU_OPTIMIZER_POINT_COLORS)]
+            draw_control_point_triangle(
+                image,
+                pos[0],
+                pos[1],
+                mpp,
+                rotation_deg=metadata.rotation_deg,
+                color=color,
+                adaptive_outline=True,
+            )
+
+    def _nsu_register_draggable_points(self) -> None:
+        """Register NSU target points as draggable."""
+        import json as _json
+
+        from shared.constants import NSU_OPTIMIZER_POINT_COLORS
+
+        metadata = self._model.state.last_map_metadata
+        if metadata is None:
+            return
+
+        points_json = self._nsu_collect_points_json()
+        try:
+            points = _json.loads(points_json)
+        except Exception:
+            return
+
+        drag_points: dict[str, tuple[float, float]] = {}
+        drag_colors: dict[str, tuple[int, int, int]] = {}
+        for i, p in enumerate(points):
+            pos = self._nsu_point_to_image_pos(int(p[0]), int(p[1]), metadata)
+            if pos is not None:
+                point_id = f'T{i}'
+                drag_points[point_id] = pos
+                drag_colors[point_id] = NSU_OPTIMIZER_POINT_COLORS[
+                    i % len(NSU_OPTIMIZER_POINT_COLORS)
+                ]
+
+        self._preview_area.merge_draggable_points(drag_points, colors=drag_colors)
+
+    def _on_nsu_point_dragged(self, point_id: str, px: float, py: float) -> None:
+        """Handle drag-and-drop of an NSU target point marker."""
+        self._preview_area.clear_drag_feedback()
+
+        try:
+            idx = int(point_id[1:])
+        except (ValueError, IndexError):
+            return
+
+        if idx >= self._nsu_table.rowCount():
+            return
+
+        coords = self._calculate_sk42_from_scene_pos(px, py)
+        if coords is None:
+            return
+
+        x_val, y_val = coords
+
+        from PySide6.QtWidgets import QTableWidgetItem
+
+        center = Qt.AlignmentFlag.AlignCenter
+        with QSignalBlocker(self._nsu_table):
+            x_item = QTableWidgetItem(str(x_val))
+            x_item.setTextAlignment(center)
+            self._nsu_table.setItem(idx, 1, x_item)
+            y_item = QTableWidgetItem(str(y_val))
+            y_item.setTextAlignment(center)
+            self._nsu_table.setItem(idx, 2, y_item)
+
+        self._sync_ui_to_model_now()
+        # Показываем крестик на новом месте (мгновенно, до пересчёта)
+        self._nsu_show_single_marker(x_val, y_val, idx)
+        self._trigger_nsu_recompute()
+        self._status_proxy.show_message(
+            f'Точка {idx + 1} обновлена: X={x_val}, Y={y_val}', 2000
+        )
 
     def _update_ui_from_settings(self, settings: MapSettings) -> None:
         """Update UI controls from settings object."""
@@ -4913,6 +5936,13 @@ class MainWindow(QMainWindow):
         # Панель профиля радиолинии
         self._link_profile_group.setVisible(is_link_profile)
 
+        # Панель НСУ Optimizer
+        is_nsu_optimizer = current_mt == MapType.NSU_OPTIMIZER
+        self._nsu_optimizer_group.setVisible(is_nsu_optimizer)
+        self._control_point_group.setVisible(
+            not is_nsu_optimizer and not is_link_profile
+        )
+
         # Заголовок панели зависит от режима
         if is_elev_color:
             self._radio_horizon_group.setTitle('')
@@ -4957,6 +5987,26 @@ class MainWindow(QMainWindow):
         self.control_point_x_widget.setEnabled(cp_fields_enabled)
         self.control_point_y_widget.setEnabled(cp_fields_enabled)
         self.control_point_name_edit.setEnabled(cp_fields_enabled)
+
+        # NSU Optimizer settings
+        nsu_points = getattr(settings, 'nsu_target_points', [])
+        self._nsu_populate_table(nsu_points)
+
+        nsu_ant = round(float(getattr(settings, 'nsu_antenna_height_m', 10.0)))
+        with QSignalBlocker(self._nsu_antenna_slider):
+            self._nsu_antenna_slider.setValue(nsu_ant)
+        self._nsu_antenna_label.setText(str(nsu_ant))
+
+        nsu_fh = int(float(getattr(settings, 'nsu_max_flight_height_m', 500.0)))
+        with QSignalBlocker(self._nsu_flight_height_slider):
+            self._nsu_flight_height_slider.setValue(nsu_fh)
+        self._nsu_flight_height_label.setText(str(nsu_fh))
+
+        nsu_alpha = float(getattr(settings, 'nsu_overlay_alpha', 0.3))
+        nsu_alpha_pct = int(nsu_alpha * 100)
+        with QSignalBlocker(self._nsu_alpha_slider):
+            self._nsu_alpha_slider.setValue(nsu_alpha_pct)
+        self._nsu_alpha_label.setText(f'{nsu_alpha_pct}%')
 
         # Unblock settings propagation after UI is fully synced
         self._ui_sync_in_progress = False
@@ -5054,6 +6104,18 @@ class MainWindow(QMainWindow):
                         logger.info(
                             '  set_clean_base_pixmap: %.3f sec', time.monotonic() - t_cb
                         )
+                elif rh_cache.get('is_nsu_optimizer'):
+                    logger.info('NSU optimizer cache saved for interactive rebuilding')
+                    # Cleanup previous display worker
+                    if self._rh_display_worker is not None:
+                        self._rh_display_worker.deleteLater()
+                        self._rh_display_worker = None
+                    # Трансформация слоёв в фоне (resize → rotate → crop)
+                    self._rh_display_worker = RhDisplayCacheWorker(rh_cache)
+                    self._rh_display_worker.finished.connect(
+                        self._on_rh_display_cache_ready,
+                    )
+                    self._rh_display_worker.start()
                 else:
                     logger.info('Radio horizon cache saved for interactive rebuilding')
                     self._rh_click_pos = self._compute_cp_image_pos(metadata)
@@ -5107,18 +6169,12 @@ class MainWindow(QMainWindow):
             if metadata and metadata.map_type == MapType.LINK_PROFILE:
                 self._register_link_draggable(metadata)
 
-            # Set tooltip for coordinate informer and preview area
-            if metadata and metadata.map_type == MapType.LINK_PROFILE:
-                tooltip = 'Перетащите маркер A или B для перемещения точки'
-                self._coords_label.setToolTip(tooltip)
-                self._preview_area.setToolTip(tooltip)
-            elif metadata and metadata.control_point_enabled:
-                tooltip = 'Перетащите маркер КТ для перемещения контрольной точки'
-                self._coords_label.setToolTip(tooltip)
-                self._preview_area.setToolTip(tooltip)
-            else:
-                self._coords_label.setToolTip('Текущие координаты курсора')
-                self._preview_area.setToolTip('')
+            # Set draggable points for NSU optimizer target points
+            if metadata and metadata.map_type == MapType.NSU_OPTIMIZER:
+                self._nsu_register_draggable_points()
+
+            self._coords_label.setToolTip('')
+            self._preview_area.setToolTip('')
 
             # Hide progress bar and label when preview is ready
             try:
@@ -5227,6 +6283,9 @@ class MainWindow(QMainWindow):
             self._set_sliders_enabled(enabled=False)
             # Aggressively clear global QPixmap cache between runs
             QPixmapCache.clear()
+            # Force GC to free large objects (PIL images, numpy arrays, QPixmap)
+            # before the child process starts and competes for RAM
+            gc.collect()
         except Exception as e:
             logger.debug(f'Failed to clear preview UI: {e}')
 

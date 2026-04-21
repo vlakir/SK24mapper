@@ -261,6 +261,31 @@ def is_point_within_bounds(
     )
 
 
+def sk42_raw_to_gk(x_sk42: int, y_sk42: int) -> tuple[float, float]:
+    """
+    Convert raw SK-42 (x=northing, y=easting) to GK (easting, northing).
+
+    Inverse of :func:`gk_to_sk42_raw`.
+
+    Args:
+        x_sk42: Raw SK-42 X (northing, e.g. 5415000).
+        y_sk42: Raw SK-42 Y (easting, e.g. 7440000).
+
+    Returns:
+        ``(gk_easting, gk_northing)`` — floats in GK format.
+
+    """
+    y_high = y_sk42 // 100000
+    y_low_km = (y_sk42 % 100000) / 1000.0
+    gk_easting = 1e3 * y_low_km + 1e5 * y_high
+
+    x_high = x_sk42 // 100000
+    x_low_km = (x_sk42 % 100000) / 1000.0
+    gk_northing = 1e3 * x_low_km + 1e5 * x_high
+
+    return gk_easting, gk_northing
+
+
 def gk_to_sk42_raw(x_gk_easting: float, y_gk_northing: float) -> tuple[int, int]:
     """
     Convert GK easting/northing back to raw SK-42 integer format.
