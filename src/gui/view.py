@@ -2007,14 +2007,14 @@ class MainWindow(QMainWindow):
         self._link_profile_group = link_profile_group
         settings_main_layout.addWidget(link_profile_group)
 
-        # --- Панель «Оптимальное размещение НСУ» ---
-        nsu_opt_group = QGroupBox('Оптимальное размещение НСУ')
+        # --- Панель НСУ ---
+        nsu_opt_group = QWidget()
         nsu_opt_layout = QVBoxLayout()
+        nsu_opt_layout.setContentsMargins(0, 0, 0, 0)
 
         # Hint label
         nsu_hint = QLabel(
-            'ПКМ на карте — добавить точку.\nЛКМ на маркере - переместить точку.'
-            '\nПКМ на маркере — удалить точку.'
+            'ПКМ на карте — добавить точку. ЛКМ на маркере - переместить точку.'
         )
         nsu_hint.setWordWrap(True)
         nsu_hint.setStyleSheet('color: #888; font-size: 11px;')
