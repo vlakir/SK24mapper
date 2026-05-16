@@ -6,7 +6,20 @@ import contextlib
 import gc
 import logging
 import math
+import os
 import time
+
+import psutil
+
+_proc = psutil.Process(os.getpid())
+
+
+def _gui_rss_mb() -> float:
+    """RSS of the current (GUI) process in MB — for memory-leak tracing logs."""
+    try:
+        return _proc.memory_info().rss / (1024 * 1024)
+    except Exception:
+        return -1.0
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -111,6 +124,8 @@ from shared.constants import (
     ELEVATION_LEGEND_STEP_M,
     MAP_TYPE_LABELS_RU,
     MIN_DECIMALS_FOR_SMALL_STEP,
+    MIN_MEMORY_FOR_BUILD_MB,
+    MIN_MEMORY_FOR_RECOMPUTE_MB,
     RADIO_HORIZON_COLOR_RAMP,
     ROTATION_EPSILON,
     ROTATION_INVERSE_THRESHOLD_DEG,
@@ -123,6 +138,7 @@ from shared.diagnostics import (
     log_memory_usage,
     log_thread_status,
 )
+from shared.memory_limit import compact_c_heap, system_memory_available_mb
 from shared.progress import cleanup_all_progress_resources
 
 # ---------------------------------------------------------------------------
@@ -229,8 +245,8 @@ class CoverageRecomputeWorker(QThread):
     """Обобщённый worker для пересчёта покрытия (НСУ 360° или РЛС с сектором)."""
 
     finished = Signal(
-        Image.Image, Image.Image, int, int
-    )  # result_image, coverage_layer, new_antenna_row, new_antenna_col
+        Image.Image, Image.Image, int, int, int
+    )  # result_image, coverage_layer, new_antenna_row, new_antenna_col, low_res_factor
     error = Signal(str)
 
     def __init__(
@@ -239,12 +255,17 @@ class CoverageRecomputeWorker(QThread):
         new_antenna_row: int,
         new_antenna_col: int,
         sector_params: dict[str, Any] | None = None,
+        low_res_factor: int = 1,
     ) -> None:
         super().__init__()
         self._rh_cache = rh_cache
         self._new_antenna_row = new_antenna_row
         self._new_antenna_col = new_antenna_col
         self._sector_params = sector_params  # None = НСУ (360°), dict = РЛС
+        # low_res_factor: 2 = квадратный downsample DEM (4× меньше пикселей)
+        # для быстрого drag-preview. После него follow-up worker с factor=1
+        # рендерит чистую версию. 1 = native resolution, full quality.
+        self._low_res_factor = max(1, low_res_factor)
 
     def run(self) -> None:
         """Execute recomputation in background thread."""
@@ -289,6 +310,22 @@ class CoverageRecomputeWorker(QThread):
             else:
                 max_h = self._rh_cache['max_height_m']
 
+            # Low-res preview через увеличение grid_step (sparser raycast),
+            # а НЕ downsample DEM. Раньше я уменьшал DEM 2× через cv2.INTER
+            # _AREA — это меняло forward-проекцию coverage→final внутри
+            # recompute_coverage_fast (fw_dem = fw × dem_w / crop_w), и
+            # output был 1050² для draft vs 2101² для fine. set_image с
+            # разным размером → scene rect другой → топооснова визуально
+            # «прыгает» при refine. Vladimir это поймал.
+            #
+            # Текущий путь: DEM full-size, output same size. compute scales
+            # O(N² / grid_step²), поэтому grid_step *= 2 даёт ~4× быстрее
+            # без изменения геометрии. _compute_grid_values_parallel
+            # интерполирует sparse результат к full-res через cv2.INTER
+            # _LINEAR — визуально гладкая LOS-карта.
+            from shared.constants import RADIO_HORIZON_GRID_STEP  # noqa: PLC0415
+            grid_step = RADIO_HORIZON_GRID_STEP * (self._low_res_factor ** 2)
+
             result_image, coverage_layer = recompute_coverage_fast(
                 dem=self._rh_cache['dem'],
                 new_antenna_row=self._new_antenna_row,
@@ -302,10 +339,14 @@ class CoverageRecomputeWorker(QThread):
                 final_size=final_size,
                 crop_size=self._rh_cache.get('crop_size'),
                 rotation_deg=self._rh_cache.get('rotation_deg', 0.0),
+                grid_step=grid_step,
                 **sector_kwargs,
             )
             step_elapsed = time.monotonic() - step_start
-            logger.info('  └─ Recompute coverage (with resize): %.3f sec', step_elapsed)
+            logger.info(
+                '  └─ Recompute coverage (low_res_factor=%d, grid_step=%d): %.3f sec',
+                self._low_res_factor, grid_step, step_elapsed,
+            )
 
             total_elapsed = time.monotonic() - start_time
             logger.info(
@@ -317,6 +358,7 @@ class CoverageRecomputeWorker(QThread):
                 coverage_layer,
                 self._new_antenna_row,
                 self._new_antenna_col,
+                self._low_res_factor,
             )
 
         except Exception as e:
@@ -374,7 +416,7 @@ class RhDisplayCacheWorker(QThread):
             topo_display = None
             topo = self._rh_cache.get('topo_base')
             if topo is not None:
-                topo_d = _rotate_crop(topo.copy(), fill=(128, 128, 128))
+                topo_d = _rotate_crop(topo, fill=(128, 128, 128))
                 gray = topo_d.convert('L')
                 del topo_d
                 topo_display = gray.convert('RGBA')
@@ -401,7 +443,7 @@ class RhDisplayCacheWorker(QThread):
 class NsuOptimizerRecomputeWorker(QThread):
     """Worker для пересчёта покрытия НСУ Optimizer при изменении целевых точек."""
 
-    finished = Signal(object, object)  # blended_image, coverage_layer
+    finished = Signal(object, object, int)  # blended_image, coverage_layer, low_res_factor
     error = Signal(str)
 
     def __init__(
@@ -409,21 +451,30 @@ class NsuOptimizerRecomputeWorker(QThread):
         rh_cache: dict[str, Any],
         target_rows: np.ndarray,
         target_cols: np.ndarray,
+        low_res_factor: int = 1,
     ) -> None:
         super().__init__()
         self._rh_cache = rh_cache
         self._target_rows = target_rows
         self._target_cols = target_cols
+        # См. CoverageRecomputeWorker: low_res_factor=2 для drag preview,
+        # 1 для full-res refine. grid_step *= factor² → ~4× быстрее compute
+        # без изменения output-геометрии. DEM не трогаем, чтобы fw_dem
+        # в recompute_nsu_optimizer_fast не плавал → топооснова не прыгает.
+        self._low_res_factor = max(1, low_res_factor)
 
     def run(self) -> None:
         try:
             from services.radio_horizon import recompute_nsu_optimizer_fast
+            from shared.constants import RADIO_HORIZON_GRID_STEP
 
             start = time.monotonic()
             logger.info(
-                'NsuOptimizerRecomputeWorker: %d targets', len(self._target_rows)
+                'NsuOptimizerRecomputeWorker: %d targets (low_res=%d)',
+                len(self._target_rows), self._low_res_factor,
             )
 
+            grid_step = RADIO_HORIZON_GRID_STEP * (self._low_res_factor ** 2)
             blended, coverage = recompute_nsu_optimizer_fast(
                 dem=self._rh_cache['dem'],
                 target_rows=self._target_rows,
@@ -436,18 +487,112 @@ class NsuOptimizerRecomputeWorker(QThread):
                 final_size=self._rh_cache.get('final_size'),
                 crop_size=self._rh_cache.get('crop_size'),
                 rotation_deg=self._rh_cache.get('rotation_deg', 0.0),
+                grid_step=grid_step,
             )
 
             logger.info(
-                'NsuOptimizerRecomputeWorker: done in %.3f sec',
+                'NsuOptimizerRecomputeWorker: done in %.3f sec (low_res=%d, grid_step=%d)',
                 time.monotonic() - start,
+                self._low_res_factor, grid_step,
             )
-            self.finished.emit(blended, coverage)
+            self.finished.emit(blended, coverage, self._low_res_factor)
         except Exception as e:
             logger.exception('NsuOptimizerRecomputeWorker failed')
             self.error.emit(str(e))
         finally:
             self._rh_cache = None  # type: ignore[assignment]
+
+
+class AlphaApplyWorker(QThread):
+    """
+    Background blend + overlay для alpha-slider — без 300 ms main-thread
+    freeze, который раньше «подвешивал» GUI при release слайдера.
+
+    Принимает immutable snapshot из rh_cache (один read на start), делает:
+      1) PIL.Image.blend(topo, coverage, 1-alpha) на DEM-size,
+      2) cv2.resize blended → final_size (multi-threaded SIMD),
+      3) cv2.resize overlay_layer → final_size + PIL.paste с RGBA-маской.
+
+    Возвращает RGB blended готовый для display. Маркеры (CP / NSU)
+    дорисовываются в _on_alpha_apply_finished на main thread, потому
+    что они дёшевы (~10 ms) и требуют доступа к self._model state.
+    """
+
+    finished = Signal(Image.Image, float)  # blended_rgb, alpha_fraction
+    error = Signal(str)
+
+    def __init__(
+        self,
+        coverage: Image.Image,
+        topo_base: Image.Image,
+        overlay_layer: Image.Image | None,
+        final_size: tuple[int, int] | None,
+        alpha_fraction: float,
+    ) -> None:
+        super().__init__()
+        self._coverage = coverage
+        self._topo_base = topo_base
+        self._overlay_layer = overlay_layer
+        self._final_size = final_size
+        self._alpha = alpha_fraction
+
+    def run(self) -> None:
+        try:
+            import cv2  # noqa: PLC0415
+            import numpy as np  # noqa: PLC0415
+
+            start = time.monotonic()
+            blend_alpha = 1.0 - self._alpha
+            coverage = self._coverage
+            topo = self._topo_base
+
+            if coverage.size != topo.size:
+                coverage = coverage.resize(topo.size, Image.Resampling.BILINEAR)
+            blended = Image.blend(topo, coverage, blend_alpha)
+
+            # Up-resize blend до final_size до overlay-paste (overlay в
+            # final-space).
+            if self._final_size and blended.size != self._final_size:
+                b_arr = np.asarray(
+                    blended if blended.mode == 'RGB' else blended.convert('RGB')
+                )
+                b_resized = cv2.resize(
+                    b_arr, self._final_size, interpolation=cv2.INTER_LINEAR,
+                )
+                blended = Image.fromarray(b_resized)
+
+            # Overlay = grid + legend + contours, RGBA at PUBLISH_OVERLAY
+            # _MAX_DIM или native. cv2.resize → blended.size, затем
+            # PIL.paste с alpha-маской.
+            if self._overlay_layer is not None:
+                overlay = self._overlay_layer
+                if overlay.size != blended.size:
+                    ov_arr = np.asarray(overlay)
+                    overlay = Image.fromarray(
+                        cv2.resize(
+                            ov_arr, blended.size,
+                            interpolation=cv2.INTER_LINEAR,
+                        ),
+                    )
+                blended.paste(overlay, (0, 0), overlay)
+
+            if blended.mode != 'RGB':
+                blended = blended.convert('RGB')
+
+            logger.info(
+                'AlphaApplyWorker: done in %.3f sec',
+                time.monotonic() - start,
+            )
+            self.finished.emit(blended, self._alpha)
+        except Exception as e:
+            logger.exception('AlphaApplyWorker failed')
+            self.error.emit(str(e))
+        finally:
+            # Drop refs чтобы не держать ~200 MB RGBA на время Qt
+            # event loop cleanup.
+            self._coverage = None  # type: ignore[assignment]
+            self._topo_base = None  # type: ignore[assignment]
+            self._overlay_layer = None
 
 
 class LinkProfileRecomputeWorker(QThread):
@@ -1331,6 +1476,37 @@ class MainWindow(QMainWindow):
         self._drag_debounce_timer.setInterval(250)
         self._drag_debounce_timer.timeout.connect(self._on_drag_debounce_timeout)
         self._drag_debounce_pending: tuple[float, float] | None = None
+        # Progressive refine: после быстрого low-res preview через эту
+        # паузу планируется полноразмерный recompute, чтобы пользователь
+        # увидел сначала ~100 ms превью, затем чистую финальную карту.
+        # Если пользователь снова потянет маркер до firing — таймер
+        # останавливается в _recompute_coverage_at_click.
+        self._coverage_refine_timer = QTimer(self)
+        self._coverage_refine_timer.setSingleShot(True)
+        self._coverage_refine_timer.setInterval(700)
+        self._coverage_refine_timer.timeout.connect(
+            self._on_coverage_refine_timeout
+        )
+        self._refine_antenna: tuple[int, int] | None = None
+        self._rh_is_refine_active: bool = False
+        # Same pattern для NSU optimizer.
+        self._nsu_refine_timer = QTimer(self)
+        self._nsu_refine_timer.setSingleShot(True)
+        self._nsu_refine_timer.setInterval(700)
+        self._nsu_refine_timer.timeout.connect(self._on_nsu_refine_timeout)
+        self._nsu_is_refine_active: bool = False
+        # Targets для refine берутся свежими из текущего UI-стейта в
+        # _trigger_nsu_recompute, поэтому здесь храним только factor.
+        # Background worker для alpha-slider apply — снимает 300 ms
+        # main-thread freeze на каждый release.
+        self._alpha_apply_worker: AlphaApplyWorker | None = None
+        # Orphaned workers — refine, который пользователь обогнал новым
+        # действием. deleteLater на исполняющийся QThread = Qt warning
+        # «Destroyed while thread is still running» → SIGSEGV. Поэтому
+        # держим Python-ссылку до естественной смерти worker'а: его
+        # finished/error подключаются к лямбде-reaper'у, которая просто
+        # убирает worker из списка → GC + Qt-cleanup делают остальное.
+        self._orphaned_workers: list[QThread] = []
 
         # Link profile drag recompute
         self._link_profile_worker: QThread | None = None
@@ -1369,6 +1545,7 @@ class MainWindow(QMainWindow):
             # Disconnect all signals from worker to UI
             self._download_worker.finished.disconnect()
             self._download_worker.progress_update.disconnect()
+            self._download_worker.preview_starting.disconnect()
             self._download_worker.preview_ready.disconnect()
             # Остановить дочерний процесс
             self._download_worker.stop_and_join(timeout_ms=2000)
@@ -2840,6 +3017,60 @@ class MainWindow(QMainWindow):
         self.status_bar.clearMessage()
         self._progress_label.setText('')
 
+        # Pre-flight системной памяти. Build — самая heavy операция
+        # (worker tile fetch + decode + postprocess + publish-shm + GUI
+        # deserialize, peak ~1-2 GB transient). Если system Available
+        # ниже порога, kernel OOM-killer может выбрать GUI или IDE при
+        # попытке аллокаций. Diagnostic MessageBox (явный user action,
+        # пользователь должен знать что произошло).
+        avail = system_memory_available_mb()
+        if avail is not None and avail < MIN_MEMORY_FOR_BUILD_MB:
+            logger.warning(
+                'Download pre-flight blocked: Available=%.0f MB < %.0f MB',
+                avail, MIN_MEMORY_FOR_BUILD_MB,
+            )
+            QMessageBox.warning(
+                self,
+                'Недостаточно памяти',
+                'Системе мало свободной памяти '
+                f'({avail:.0f} MB при необходимых {MIN_MEMORY_FOR_BUILD_MB:.0f}+).\n\n'
+                'Закройте лишние приложения (браузер, IDE) и повторите.',
+            )
+            return
+
+        # Останавливаем pending coverage / NSU refine: используют stale
+        # rh_cache от старого build'а и при гонке с новым full build'ом
+        # подвешивают UI (Vladimir поймал на повторном РЛС). Сейчас
+        # новый build вытесняет refine целиком — таймер ожидающий +
+        # активный refine-worker который ещё считает.
+        self._coverage_refine_timer.stop()
+        self._refine_antenna = None
+        self._nsu_refine_timer.stop()
+        # Также гасим in-flight alpha-apply: blended-image из старого
+        # rh_cache перепишет свежий preview после _show_preview.
+        if (
+            self._alpha_apply_worker is not None
+            and self._alpha_apply_worker.isRunning()
+        ):
+            self._orphan_worker(self._alpha_apply_worker)
+            self._alpha_apply_worker = None
+        refine_in_progress = (
+            self._rh_is_refine_active or self._nsu_is_refine_active
+        )
+        if (
+            refine_in_progress
+            and self._rh_worker is not None
+            and self._rh_worker.isRunning()
+        ):
+            # Безопасный orphan вместо deleteLater на работающем
+            # QThread (= Qt SIGSEGV «Destroyed while thread is still
+            # running», что Vladimir поймал при добавлении точки NSU
+            # во время refine).
+            self._orphan_worker(self._rh_worker)
+            self._rh_worker = None
+            self._rh_is_refine_active = False
+            self._nsu_is_refine_active = False
+
         if self._download_worker and self._download_worker.isRunning():
             QMessageBox.information(self, 'Информация', 'Загрузка уже выполняется')
             return
@@ -2871,6 +3102,7 @@ class MainWindow(QMainWindow):
             )
         )
         self._download_worker.progress_update.connect(self._update_progress)
+        self._download_worker.preview_starting.connect(self._on_preview_starting)
         self._download_worker.preview_ready.connect(self._show_preview_in_main_window)
         self._download_worker.warning_received.connect(self._on_download_warning)
         self._download_worker.start()
@@ -2939,16 +3171,24 @@ class MainWindow(QMainWindow):
                 )
             return s
 
-        # Get elevation from DEM if available
+        # Get elevation from DEM if available. The dem_grid is downsampled
+        # for IPC (typically ~2100×2100 vs 8400×8400 image), so scale the
+        # image pixel coords to dem indices.
         elevation_str = ''
         if self._dem_grid is not None and px is not None and py is not None:
             try:
-                row = int(py)
-                col = int(px)
                 dem_h, dem_w = self._dem_grid.shape
+                img_w = metadata.width_px if metadata else dem_w
+                img_h = metadata.height_px if metadata else dem_h
+                col = int(px * dem_w / max(1, img_w))
+                row = int(py * dem_h / max(1, img_h))
                 if 0 <= row < dem_h and 0 <= col < dem_w:
                     elevation = self._dem_grid[row, col]
-                    elevation_str = f'  H: {int(elevation)} м'
+                    # round() вместо int() — int() truncate-к-нулю даёт
+                    # систематическое смещение −0.5м, из-за чего значение
+                    # под контурной линией с уровнем 105м могло показывать
+                    # 104 при истинных 104.7. round() даёт корректное 105.
+                    elevation_str = f'  H: {round(float(elevation))} м'
             except Exception:
                 logger.debug('Elevation lookup failed at px=%s, py=%s', px, py)
 
@@ -3035,6 +3275,11 @@ class MainWindow(QMainWindow):
         metadata = self._model.state.last_map_metadata
         if metadata is None or metadata.map_type != MapType.NSU_OPTIMIZER:
             return
+        # Cancel any pending full-res Stage-2 swap from the previous
+        # build — would otherwise block main thread for ~300-500 ms on
+        # 16k² images, lagging the status messages and the recompute
+        # spinner the user is about to see.
+        self._preview_area.cancel_pending_full_swap()
 
         # Hit-test existing target points — if near one, delete it
         hit_radius = 30.0  # pixels tolerance
@@ -3084,11 +3329,8 @@ class MainWindow(QMainWindow):
             final_w, final_h = final_size
             rotation_deg = self._rh_cache.get('rotation_deg', 0.0)
 
-            dem_full = self._rh_cache.get('dem_full')
             crop_size = self._rh_cache.get('crop_size')
-            if dem_full is not None:
-                crop_h, crop_w = dem_full.shape
-            elif crop_size:
+            if crop_size:
                 crop_w, crop_h = crop_size
             else:
                 crop_h, crop_w = dem_h, dem_w
@@ -3128,6 +3370,7 @@ class MainWindow(QMainWindow):
         *,
         dem_row: int | None = None,
         dem_col: int | None = None,
+        low_res_factor: int = 2,
     ) -> None:
         """
         Recompute coverage (НСУ or РЛС) with new position at clicked point.
@@ -3139,9 +3382,41 @@ class MainWindow(QMainWindow):
                 instead of converting from (px, py).
             dem_col: If provided, use this DEM column directly
                 instead of converting from (px, py).
+            low_res_factor: Downsample factor для DEM в kernel'е.
+                По умолчанию 2 — быстрый drag-preview (~100 ms compute).
+                Pass 1 для full-quality refine.
 
         """
-        # If worker is still running, defer this recompute until it finishes
+        # Pre-flight: если system Available < threshold, kernel OOM-killer
+        # может выбрать GUI/IDE при попытке recompute. Откажемся раньше с
+        # понятным сообщением вместо silent kill.
+        if not self._ensure_memory_available(
+            MIN_MEMORY_FOR_RECOMPUTE_MB, 'Coverage recompute',
+        ):
+            return
+        # Drop pending Stage-2 swap from previous build — see comment in
+        # _on_map_right_clicked.
+        self._preview_area.cancel_pending_full_swap()
+        # Останавливаем pending refine: пользователь снова взаимодействует,
+        # значит превью устарело, и refine из предыдущего click уже не
+        # актуален.
+        self._coverage_refine_timer.stop()
+        # Если активный worker — refine (full-res в фоне), он
+        # устаревший — пользователь только что дёрнул маркер. Перекидываем
+        # worker в orphan-list (он естественно умрёт через ~300 ms) и
+        # стартуем свежий draft сразу. Безопаснее чем deleteLater().
+        if (
+            self._rh_is_refine_active
+            and self._rh_worker is not None
+            and self._rh_worker.isRunning()
+        ):
+            logger.info('Coverage recompute: orphaning active refine worker')
+            self._orphan_worker(self._rh_worker)
+            self._rh_worker = None
+            self._rh_is_refine_active = False
+        # If worker is still running (draft, не refine), defer this
+        # recompute until it finishes — draft уже видим пользователю,
+        # обрывать его на новый draft даёт flicker.
         if self._rh_worker is not None and self._rh_worker.isRunning():
             logger.info('Worker busy — deferring recompute to pending queue')
             self._pending_recompute_pos = (px, py)
@@ -3173,8 +3448,15 @@ class MainWindow(QMainWindow):
             new_antenna_row,
         )
 
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        self._set_controls_enabled(enabled=False)
+        # Refine-проход (full-res после low-res preview): идёт в фоне,
+        # не блокирует GUI и не показывает busy-cursor / прогресс-бар.
+        # Vladimir специально отметил это в UX — пользователь уже видит
+        # preview, refine просто уточняет в фоне.
+        is_refine = low_res_factor == 1 and dem_row is not None and dem_col is not None
+        self._rh_is_refine_active = is_refine
+        if not is_refine:
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            self._set_controls_enabled(enabled=False)
 
         # Determine if this is a radar coverage map
         is_radar = self._rh_cache.get('is_radar_coverage', False)
@@ -3203,21 +3485,34 @@ class MainWindow(QMainWindow):
         else:
             self._progress_label.setText('Пересчет радиогоризонта…')
 
-        # Очищаем временное сообщение статус-бара, иначе оно скроет виджеты
-        self.status_bar.clearMessage()
-        # Индикатор прогресса (indeterminate)
-        self._progress_bar.setRange(0, 0)
-        self._progress_label.setVisible(True)
-        self._progress_bar.setVisible(True)
-        self._cancel_btn.setVisible(True)
+        # Прогресс-бар / cancel-кнопку показываем только в видимом
+        # draft-проходе. Refine идёт «тихо» — но для прозрачности
+        # пользователю короткий status-bar hint, чтобы он понимал,
+        # что черновой результат сейчас уточняется.
+        if not is_refine:
+            # Очищаем временное сообщение статус-бара, иначе оно скроет виджеты
+            self.status_bar.clearMessage()
+            # Индикатор прогресса (indeterminate)
+            self._progress_bar.setRange(0, 0)
+            self._progress_label.setVisible(True)
+            self._progress_bar.setVisible(True)
+            self._cancel_btn.setVisible(True)
+            self._status_proxy.show_message('Черновой пересчёт…', 1500)
+        else:
+            self._status_proxy.show_message('Уточнение…', 1500)
 
-        self._rh_click_pos = (px, py)
+        # На refine-проходе (dem_row/dem_col даны, low_res_factor=1) px,py
+        # передаются (0, 0) — не апдейтим _rh_click_pos, иначе маркер
+        # уедет в угол. Сохраняем позицию маркера из предыдущего
+        # low-res preview.
+        if not is_refine:
+            self._rh_click_pos = (px, py)
 
-        # Cleanup previous worker before creating new one
+        # Cleanup previous worker through orphan-helper — на случай если
+        # он ещё isRunning() (race с defer-path). _orphan_worker делает
+        # safe deleteLater для not-running и orphan-list для running.
         if self._rh_worker is not None:
-            self._rh_worker.finished.disconnect()
-            self._rh_worker.error.disconnect()
-            self._rh_worker.deleteLater()
+            self._orphan_worker(self._rh_worker)
             self._rh_worker = None
 
         # Use generalized CoverageRecomputeWorker
@@ -3226,20 +3521,52 @@ class MainWindow(QMainWindow):
             new_antenna_row,
             new_antenna_col,
             sector_params=sector_params,
+            low_res_factor=low_res_factor,
         )
         self._rh_worker.finished.connect(self._on_radio_horizon_recompute_finished)
         self._rh_worker.error.connect(self._on_radio_horizon_recompute_error)
         self._rh_worker.start()
 
-    @Slot(Image.Image, Image.Image, int, int)
+    def _on_coverage_refine_timeout(self) -> None:
+        """Запустить полноразмерный recompute после низкоразрешённого preview."""
+        if self._refine_antenna is None:
+            return
+        ant_row, ant_col = self._refine_antenna
+        self._refine_antenna = None
+        # Не запускаем если worker занят (новый клик уже идёт) или нет
+        # rh_cache (тип карты сменили).
+        if self._rh_worker is not None and self._rh_worker.isRunning():
+            return
+        if not self._rh_cache or 'dem' not in self._rh_cache:
+            return
+        logger.info(
+            'Coverage refine: full-res recompute at DEM (%d, %d)',
+            ant_col, ant_row,
+        )
+        # px, py не нужны — передаём dem_row/dem_col напрямую. low_res
+        # _factor=1 даёт чистый результат на полном DEM.
+        self._recompute_coverage_at_click(
+            0.0, 0.0,
+            dem_row=ant_row, dem_col=ant_col,
+            low_res_factor=1,
+        )
+
+    @Slot(Image.Image, Image.Image, int, int, int)
     def _on_radio_horizon_recompute_finished(
         self,
         result_image: Image.Image,
         coverage_layer: Image.Image,
         new_antenna_row: int,
         new_antenna_col: int,
+        low_res_factor: int = 1,
     ) -> None:
-        """Handle radio horizon recompute completion."""
+        """
+        Handle radio horizon recompute completion.
+
+        Если worker отдал low-res preview (factor > 1), после успешного
+        отображения через QTimer.singleShot планируется full-res refine.
+        Refine отменяется если пользователь снова потянет точку.
+        """
         try:
             gui_start_time = time.monotonic()
             # Sync UI → model FIRST so that label drawing reads current values
@@ -3262,13 +3589,23 @@ class MainWindow(QMainWindow):
             rotation_deg = self._rh_cache.get('rotation_deg', 0.0)
 
             # result_image приходит в DEM-размере (~2000x2000).
-            # Resize до final_size ПЕРЕД наложением overlay/маркеров
-            # (overlay_layer кэширован в final_size).
+            # Resize до final_size ПЕРЕД наложением overlay/маркеров.
+            # cv2.resize INTER_LINEAR is ~5× faster than PIL.resize on
+            # 8k² target and runs SIMD/multi-threaded — saves ~700 ms
+            # of main-thread blocking on RH/Radar recompute.
+            import cv2  # noqa: PLC0415
+            import numpy as np  # noqa: PLC0415
+
             final_size = self._rh_cache.get('final_size')
             if final_size and result_image.size != final_size:
-                result_image = result_image.resize(
-                    final_size, Image.Resampling.BILINEAR
+                src_arr = np.asarray(
+                    result_image if result_image.mode == 'RGB'
+                    else result_image.convert('RGB')
                 )
+                resized = cv2.resize(
+                    src_arr, final_size, interpolation=cv2.INTER_LINEAR,
+                )
+                result_image = Image.fromarray(resized)
 
             # Create display-sized topo for interactive alpha blending.
             self._prepare_rh_topo_display()
@@ -3277,32 +3614,40 @@ class MainWindow(QMainWindow):
             metadata = self._model.state.last_map_metadata
             mpp = metadata.meters_per_pixel if metadata else 0.0
 
-            # Apply cached overlay layer, or rebuild from base + fresh legend
+            # Apply cached overlay layer, or rebuild from base + fresh
+            # legend. Composite via PIL.paste-with-RGBA-mask: one C-loop,
+            # in-place on result_image, no transient 800 MB RGBA buffer
+            # like Image.alpha_composite would build. Same trick as
+            # _on_nsu_recompute_finished (commit 2408f68) and
+            # services/_apply_overlay_contours.
             step_start = time.monotonic()
             overlay_layer = self._rh_cache.get('overlay_layer')
-            if overlay_layer:
-                # Use cached overlay (grid + legend + contours)
-                if result_image.mode != 'RGBA':
-                    result_image = result_image.convert('RGBA')
-                result_image = Image.alpha_composite(result_image, overlay_layer)
-                step_elapsed = time.monotonic() - step_start
-                logger.info('  └─ Apply cached overlay layer: %.3f sec', step_elapsed)
-            else:
+            if overlay_layer is None:
                 # Rebuild overlay: base (contours + grid) + fresh legend
                 overlay_base = self._rh_cache.get('overlay_base')
                 if overlay_base is not None:
                     overlay_layer = overlay_base.copy()
                 else:
-                    overlay_layer = Image.new('RGBA', result_image.size, (0, 0, 0, 0))
+                    overlay_layer = Image.new(
+                        'RGBA', result_image.size, (0, 0, 0, 0),
+                    )
                 self._draw_rh_legend(overlay_layer, mpp)
                 self._rh_cache['overlay_layer'] = overlay_layer
-                if result_image.mode != 'RGBA':
-                    result_image = result_image.convert('RGBA')
-                result_image = Image.alpha_composite(result_image, overlay_layer)
-                step_elapsed = time.monotonic() - step_start
-                logger.info(
-                    '  └─ Rebuilt overlay (base + legend): %.3f sec', step_elapsed
+                log_label = 'Rebuilt overlay (base + legend)'
+            else:
+                log_label = 'Apply cached overlay layer'
+
+            if overlay_layer.size != result_image.size:
+                ov_arr = np.asarray(overlay_layer)
+                overlay_layer = Image.fromarray(
+                    cv2.resize(
+                        ov_arr, result_image.size,
+                        interpolation=cv2.INTER_LINEAR,
+                    ),
                 )
+            result_image.paste(overlay_layer, (0, 0), overlay_layer)
+            step_elapsed = time.monotonic() - step_start
+            logger.info('  └─ %s: %.3f sec', log_label, step_elapsed)
 
             # Draw control point triangle and label on the image (like in first build)
             step_start = time.monotonic()
@@ -3422,38 +3767,59 @@ class MainWindow(QMainWindow):
             # Restore QGraphics overlay markers cleared by set_image → scene.clear()
             self._update_cp_marker_from_settings(self._model.settings)
 
-            # Restore cursor and show success message
-            QApplication.restoreOverrideCursor()
+            is_refine = self._rh_is_refine_active
+            # Restore cursor — только если мы его меняли (draft, не refine).
+            if not is_refine:
+                QApplication.restoreOverrideCursor()
 
             gui_total_elapsed = time.monotonic() - gui_start_time
             logger.info('GUI postprocessing total: %.3f sec', gui_total_elapsed)
-            if self._rh_cache.get('is_radar_coverage', False):
-                self._status_proxy.show_message(
-                    'Зона обнаружения РЛС пересчитана', 2000
-                )
-            else:
-                self._status_proxy.show_message('Радиогоризонт пересчитан', 2000)
+            if not is_refine:
+                if self._rh_cache.get('is_radar_coverage', False):
+                    self._status_proxy.show_message(
+                        'Зона обнаружения РЛС пересчитана', 2000
+                    )
+                else:
+                    self._status_proxy.show_message('Радиогоризонт пересчитан', 2000)
+
+            # Progressive refine: после успешного low-res preview через
+            # короткую паузу запустить full-res recompute. Пауза даёт
+            # пользователю возможность снова потянуть точку — _recompute
+            # _coverage_at_click останавливает таймер до старта refine.
+            if low_res_factor > 1:
+                self._refine_antenna = (new_antenna_row, new_antenna_col)
+                self._coverage_refine_timer.start()
 
         except Exception as e:
             logger.exception('Failed to update preview after radio horizon recompute')
-            QApplication.restoreOverrideCursor()
+            if not self._rh_is_refine_active:
+                QApplication.restoreOverrideCursor()
             self._status_proxy.show_message(f'Ошибка при обновлении превью: {e}', 5000)
         finally:
-            # Скрыть прогресс-бар
-            self._progress_bar.setVisible(False)
-            self._progress_label.setVisible(False)
-            self._cancel_btn.setVisible(False)
-
-            # Re-enable all UI controls
-            self._set_controls_enabled(enabled=True)
+            is_refine_finally = self._rh_is_refine_active
+            # Прогресс-бар / cancel и блокировку UI трогаем только если
+            # их же показывали — в draft-проходе. Refine идёт в фоне без
+            # этих визуальных эффектов.
+            if not is_refine_finally:
+                self._progress_bar.setVisible(False)
+                self._progress_label.setVisible(False)
+                self._cancel_btn.setVisible(False)
+                self._set_controls_enabled(enabled=True)
 
             # Clean up worker
             if self._rh_worker is not None:
                 self._rh_worker.deleteLater()
                 self._rh_worker = None
 
-            # Force garbage collection after heavy recompute
+            # Force garbage collection after heavy recompute, then return
+            # free pages to the OS — иначе RSS GUI пухнет, и kernel OOM
+            # killer добивает GUI + IDE при system memory pressure (13 GB
+            # машина + browser + IDE — впритык).
             gc.collect()
+            compact_c_heap()
+
+            # Сброс refine-флага, чтобы следующий вызов начался с нуля.
+            self._rh_is_refine_active = False
 
             # If a recompute was requested while worker was busy, run it now
             self._flush_pending_recompute()
@@ -3465,6 +3831,80 @@ class MainWindow(QMainWindow):
             self._pending_recompute_pos = None
             logger.info('Flushing pending recompute at (%.1f, %.1f)', px, py)
             self._recompute_coverage_at_click(px, py)
+
+    def _ensure_memory_available(self, min_mb: float, op_name: str) -> bool:
+        """
+        Pre-flight system-memory check перед heavy GUI операцией.
+
+        RLIMIT_AS защищает только сам GUI process; от system-wide pressure
+        (browser + IDE + worker + GUI ≈ 12.5 GB на 13 GB машине) нужна
+        именно pre-проверка `psutil.virtual_memory().available`.
+
+        Возвращает True если памяти достаточно. Иначе показывает
+        non-blocking warning в status-bar (без MessageBox, чтобы не
+        ловить пользователя за руки на каждом drag) и возвращает False
+        — caller отменяет операцию. Логирует event для post-mortem.
+
+        На системах без psutil — возвращает True (fail-open: лучше
+        попытаться чем безусловно отказаться).
+        """
+        avail = system_memory_available_mb()
+        if avail is None:
+            return True
+        if avail >= min_mb:
+            return True
+        logger.warning(
+            'Memory pre-flight: %s skipped, Available=%.0f MB < %.0f MB',
+            op_name, avail, min_mb,
+        )
+        self._status_proxy.show_message(
+            f'Мало памяти ({avail:.0f} MB свободно, нужно {min_mb:.0f}+). '
+            f'Закройте лишние приложения и повторите.',
+            5000,
+        )
+        return False
+
+    def _orphan_worker(self, worker: QThread) -> None:
+        """
+        Take ownership of an in-flight worker we no longer care about.
+
+        Безопасная альтернатива `worker.deleteLater()` на исполняющемся
+        QThread — Qt warning «Destroyed while thread is still running»
+        → SIGSEGV. Держим Python-ссылку в списке, отключаем наши
+        slot'ы, переподключаем finished/error на reaper-лямбду, которая
+        убирает worker из списка → GC + Qt-cleanup сделают остальное
+        естественно после `run()` finish.
+
+        Защищаем `worker.isRunning()` от RuntimeError «Internal C++
+        object already deleted»: caller мог держать stale Python ref
+        на worker, чей Qt object уже уничтожен (handler сбросил, GC
+        не успел). Тогда orphan не нужен — ничего не делаем.
+        """
+        if worker is None:
+            return
+        try:
+            is_running = worker.isRunning()
+        except RuntimeError:
+            # Qt C++ object уже delete'нут — нечего orphan-ить.
+            return
+        if not is_running:
+            with contextlib.suppress(Exception):
+                worker.deleteLater()
+            return
+        with contextlib.suppress(Exception):
+            worker.finished.disconnect()
+        with contextlib.suppress(Exception):
+            worker.error.disconnect()
+        self._orphaned_workers.append(worker)
+
+        def _reap(*_args: object) -> None:
+            with contextlib.suppress(ValueError):
+                self._orphaned_workers.remove(worker)
+            with contextlib.suppress(Exception):
+                worker.deleteLater()
+
+        worker.finished.connect(_reap)
+        worker.error.connect(_reap)
 
     @Slot()
     def _on_drag_debounce_timeout(self) -> None:
@@ -3618,18 +4058,22 @@ class MainWindow(QMainWindow):
                 current_y += name_height + bg_padding_px * 2
 
             # Height line with subscript
-            # Get elevation from _dem_grid (same source as informer tooltip)
+            # Get elevation from _dem_grid (same source as informer tooltip).
+            # _dem_grid is downsampled for IPC — scale coords from result-image
+            # pixels into dem array indices.
             cp_elev = None
             if self._dem_grid is not None:
-                row, col = int(cy_img), int(cx_img)
                 dh, dw = self._dem_grid.shape
+                img_w, img_h = result.size
+                col = int(cx_img * dw / max(1, img_w))
+                row = int(cy_img * dh / max(1, img_h))
                 if 0 <= row < dh and 0 <= col < dw:
                     cp_elev = float(self._dem_grid[row, col])
 
             if cp_elev is not None:
                 height_parts = [
                     ('h = ', False),
-                    (f'{int(cp_elev)}', False),
+                    (f'{round(cp_elev)}', False),
                     (' + ', False),
                     (f'{int(antenna_h)} м', False),
                 ]
@@ -3670,6 +4114,7 @@ class MainWindow(QMainWindow):
             self._rh_worker = None
 
         gc.collect()
+        compact_c_heap()
 
         # If a recompute was deferred, run it now
         self._flush_pending_recompute()
@@ -3940,12 +4385,30 @@ class MainWindow(QMainWindow):
         topo_display: Image.Image | None,
     ) -> None:
         """Slot: фоновая подготовка display-слоёв завершена."""
+        rss_in = _gui_rss_mb()
         if coverage_display is not None:
             self._rh_cache['coverage_layer'] = coverage_display
         if topo_display is not None:
             self._rh_cache['topo_base_display'] = topo_display
+            # Free original full-DEM-size topo_base for map types that have no
+            # recompute path. ELEVATION_COLOR has only an alpha slider, and
+            # _apply_interactive_alpha prefers topo_base_display anyway. For
+            # RH/RADAR/NSU/LINK_PROFILE the *_fast recompute workers re-blend
+            # new coverage with topo_base at native DEM resolution, so we
+            # must keep it for them. Whitelist (not blacklist) avoids the
+            # plain-RH bug where rh_cache carries no is_radio_horizon flag.
+            if self._rh_cache.get('is_elev_color'):
+                old_topo = self._rh_cache.pop('topo_base', None)
+                if old_topo is not None and hasattr(old_topo, 'close'):
+                    with contextlib.suppress(Exception):
+                        old_topo.close()
         self._rh_display_worker = None
-        logger.info('rh display cache ready (background)')
+        gc.collect()
+        compact_c_heap()
+        logger.info(
+            'GUI mem: display_cache_ready RSS %.0f → %.0f MB (Δ=%+.0f)',
+            rss_in, _gui_rss_mb(), _gui_rss_mb() - rss_in,
+        )
 
         # Если NSU recompute ждал завершения display cache — запускаем
         if self._nsu_pending_recompute:
@@ -3964,24 +4427,41 @@ class MainWindow(QMainWindow):
         self._rh_cache['overlay_alpha'] = alpha_fraction
         blend_alpha = 1.0 - alpha_fraction
         rotation_deg = self._rh_cache.get('rotation_deg', 0.0)
-        # Гарантируем совпадение размеров (blend на DEM-размере — дёшево)
+        # Гарантируем совпадение размеров (blend на DEM-размере — дёшево).
+        # Image.blend на DEM-size (~4k²) ещё дешёвый; апскейл результата —
+        # уже нет, делаем cv2 (~5× быстрее PIL).
+        import cv2  # noqa: PLC0415
+        import numpy as np  # noqa: PLC0415
+
         if coverage.size != topo_base.size:
             coverage = coverage.resize(topo_base.size, Image.Resampling.BILINEAR)
         blended = Image.blend(topo_base, coverage, blend_alpha)
         # Resize до final_size ПЕРЕД наложением overlay и маркеров
-        # (overlay_layer и _rh_click_pos — в координатах final_size)
+        # (overlay_layer и _rh_click_pos — в координатах final_size).
         final_size = self._rh_cache.get('final_size')
         if final_size and blended.size != final_size:
-            blended = blended.resize(final_size, Image.Resampling.BILINEAR)
-        # Apply cached overlay (grid + legend)
+            b_arr = np.asarray(
+                blended if blended.mode == 'RGB' else blended.convert('RGB')
+            )
+            b_resized = cv2.resize(
+                b_arr, final_size, interpolation=cv2.INTER_LINEAR,
+            )
+            blended = Image.fromarray(b_resized)
+        # Apply cached overlay (grid + legend). PIL.paste-with-mask is
+        # the fast composite path — saves the convert('RGBA') round-
+        # trip and the ~800 MB transient that Image.alpha_composite
+        # builds; same trick as in _on_nsu_recompute_finished.
         overlay_layer = self._rh_cache.get('overlay_layer')
         if overlay_layer:
-            blended = blended.convert('RGBA')
             if overlay_layer.size != blended.size:
-                overlay_layer = overlay_layer.resize(
-                    blended.size, Image.Resampling.BILINEAR
+                ov_arr = np.asarray(overlay_layer)
+                overlay_layer = Image.fromarray(
+                    cv2.resize(
+                        ov_arr, blended.size,
+                        interpolation=cv2.INTER_LINEAR,
+                    ),
                 )
-            blended = Image.alpha_composite(blended, overlay_layer)
+            blended.paste(overlay_layer, (0, 0), overlay_layer)
         # Redraw control point triangle + label
         if hasattr(self, '_rh_click_pos') and self._rh_click_pos is not None:
             metadata = self._model.state.last_map_metadata
@@ -4024,30 +4504,200 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _on_alpha_slider_released(self) -> None:
-        """Alpha slider released — apply blend + sync model."""
+        """Alpha slider released — apply blend в фоне."""
         if self._alpha_needs_recompute:
             self._alpha_needs_recompute = False
             if self._has_coverage_cache() and 'coverage_layer' in self._rh_cache:
                 alpha = self.radio_horizon_alpha_slider.value() / 100.0
                 self._rh_cache['overlay_alpha'] = alpha
-                self._set_controls_enabled(enabled=False)
-                self.status_bar.clearMessage()
-                self._progress_label.setText('Пересчёт…')
-                self._progress_bar.setRange(0, 0)
-                self._progress_label.setVisible(True)
-                self._progress_bar.setVisible(True)
-                self._cancel_btn.setVisible(False)  # Быстрая операция — без отмены
-                QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-                QApplication.processEvents()
-                try:
-                    self._apply_interactive_alpha(alpha)
-                finally:
-                    QApplication.restoreOverrideCursor()
-                    self._progress_bar.setVisible(False)
-                    self._progress_label.setVisible(False)
-                    self._cancel_btn.setVisible(False)
-                    self._set_controls_enabled(enabled=True)
+                self._start_alpha_apply(alpha)
         self._sync_ui_to_model_now()
+
+    def _start_alpha_apply(self, alpha_fraction: float) -> None:
+        """
+        Start AlphaApplyWorker for non-blocking alpha-slider apply.
+
+        Раньше apply шёл синхронно на main thread (~300 ms freeze).
+        Сейчас worker делает blend + overlay в фоне, main thread
+        получает готовый blended Image для display.
+
+        Если предыдущий worker ещё не закончил — отсоединяем его
+        signal'ы и запускаем новый со свежими параметрами (последний
+        release побеждает).
+        """
+        coverage = self._rh_cache.get('coverage_layer')
+        topo_base = self._rh_cache.get('topo_base_display') or self._rh_cache.get(
+            'topo_base'
+        )
+        if coverage is None or topo_base is None:
+            return
+
+        # Pre-flight системной памяти. См. _ensure_memory_available.
+        if not self._ensure_memory_available(
+            MIN_MEMORY_FOR_RECOMPUTE_MB, 'Alpha apply',
+        ):
+            return
+
+        # Cancel previous worker — orphan-list если он ещё running
+        # (deleteLater на active QThread = Qt SIGSEGV).
+        if self._alpha_apply_worker is not None:
+            self._orphan_worker(self._alpha_apply_worker)
+            self._alpha_apply_worker = None
+
+        self.status_bar.clearMessage()
+        self._status_proxy.show_message('Пересчёт прозрачности…', 1500)
+
+        worker = AlphaApplyWorker(
+            coverage=coverage,
+            topo_base=topo_base,
+            overlay_layer=self._rh_cache.get('overlay_layer'),
+            final_size=self._rh_cache.get('final_size'),
+            alpha_fraction=alpha_fraction,
+        )
+        worker.finished.connect(self._on_alpha_apply_finished)
+        worker.error.connect(self._on_alpha_apply_error)
+        self._alpha_apply_worker = worker
+        worker.start()
+
+    @Slot(Image.Image, float)
+    def _on_alpha_apply_finished(
+        self,
+        blended: Image.Image,
+        alpha_fraction: float,  # noqa: ARG002 — kept for future symmetry
+    ) -> None:
+        """Finalize alpha apply: draw markers (cheap) + set_image."""
+        try:
+            rotation_deg = self._rh_cache.get('rotation_deg', 0.0)
+            # Redraw control point triangle + label на main thread —
+            # cheap (~10 ms) и требует доступа к self._model.settings.
+            if self._rh_click_pos is not None:
+                metadata = self._model.state.last_map_metadata
+                mpp = metadata.meters_per_pixel if metadata else 0.0
+                if mpp > 0:
+                    px, py = self._rh_click_pos
+                    draw_control_point_triangle(
+                        blended,
+                        px,
+                        py,
+                        mpp,
+                        rotation_deg=rotation_deg,
+                        size_m=self._model.settings.grid_font_size_m,
+                    )
+                    self._draw_rh_control_point_label(blended, px, py, mpp)
+
+            is_nsu = self._rh_cache.get('is_nsu_optimizer')
+            if is_nsu:
+                self._nsu_draw_markers_on_image(blended)
+
+            # Radar-sector overlay (граничные линии + ceiling arcs +
+            # diamond marker) рисуется НА pixmap в _on_radio_horizon
+            # _recompute_finished, но AlphaApplyWorker возвращает
+            # blended БЕЗ этого — overlay не часть rh_cache. Дорисовываем
+            # ДО set_image, чтобы линии вернулись на свои места.
+            if self._rh_cache.get('is_radar_coverage', False):
+                self._draw_radar_sector_on_blended(blended, rotation_deg)
+
+            self._preview_area.set_image(blended)
+
+            # Центральная линия азимута — отдельный QGraphics overlay
+            # поверх pixmap (sector lines уже baked в pixmap выше).
+            if self._rh_cache.get('is_radar_coverage', False):
+                az = self._rh_cache.get('radar_azimuth_deg', 0.0)
+                self._update_azimuth_indicator(az)
+
+            if is_nsu:
+                self._nsu_register_draggable_points()
+        except Exception:
+            logger.exception('Alpha apply post-processing failed')
+        finally:
+            if self._alpha_apply_worker is not None:
+                self._alpha_apply_worker.deleteLater()
+                self._alpha_apply_worker = None
+
+    def _draw_radar_sector_on_blended(
+        self, blended: Image.Image, rotation_deg: float,
+    ) -> None:
+        """
+        Bake radar sector overlay + diamond marker onto blended image.
+
+        Извлечено из _on_radio_horizon_recompute_finished, чтобы
+        _on_alpha_apply_finished мог использовать ту же логику — иначе
+        граничные линии сектора пропадают после alpha-slider release
+        (Vladimir's bug).
+        """
+        try:
+            radar_az = self._rh_cache.get('radar_azimuth_deg', 0.0)
+            radar_sw = self._rh_cache.get('radar_sector_width_deg', 90.0)
+            radar_range_km = self._rh_cache.get('radar_max_range_km', 15.0)
+            radar_elev_max = self._rh_cache.get('radar_elevation_max_deg', 30.0)
+
+            pixel_size_final = self._get_final_pixel_size_m()
+            if pixel_size_final <= 0:
+                return
+            max_range_px = (radar_range_km * 1000.0) / pixel_size_final
+
+            radar_cx, radar_cy = (
+                self._rh_click_pos
+                if self._rh_click_pos
+                else (blended.width / 2, blended.height / 2)
+            )
+
+            ppm = 1.0 / pixel_size_final
+            settings = self._rh_cache.get('settings')
+            font_size_m = settings.grid_font_size_m if settings else 100.0
+            font_size_px = max(10, round(font_size_m * ppm * 0.4))
+            try:
+                arc_font = load_grid_font(font_size_px)
+            except Exception:
+                arc_font = None
+
+            # draw_sector_overlay требует RGBA. blended приходит RGB
+            # после AlphaApplyWorker → convert через PIL.paste чтобы
+            # не плодить лишних копий.
+            if blended.mode != 'RGBA':
+                rgba = blended.convert('RGBA')
+            else:
+                rgba = blended
+
+            draw_sector_overlay(
+                img=rgba,
+                cx=radar_cx,
+                cy=radar_cy,
+                azimuth_deg=radar_az,
+                sector_width_deg=radar_sw,
+                max_range_px=max_range_px,
+                pixel_size_m=pixel_size_final,
+                elevation_max_deg=radar_elev_max,
+                font=arc_font,
+                rotation_deg=rotation_deg,
+            )
+            draw_radar_marker(
+                rgba,
+                radar_cx,
+                radar_cy,
+                pixel_size_final,
+                azimuth_deg=radar_az,
+                rotation_deg=rotation_deg,
+            )
+
+            if rgba is not blended:
+                # Pour RGB обратно в blended (in-place), чтобы caller
+                # не менял refs.
+                rgb_copy = rgba.convert('RGB')
+                blended.paste(rgb_copy)
+                rgba.close()
+                rgb_copy.close()
+        except Exception:
+            logger.exception('Failed to draw radar sector on blended')
+
+    @Slot(str)
+    def _on_alpha_apply_error(self, error_msg: str) -> None:
+        """Handle AlphaApplyWorker error."""
+        logger.error('Alpha apply failed: %s', error_msg)
+        self._status_proxy.show_message(f'Ошибка пересчёта alpha: {error_msg}', 5000)
+        if self._alpha_apply_worker is not None:
+            self._alpha_apply_worker.deleteLater()
+            self._alpha_apply_worker = None
 
     # ── Link profile param sliders (freq, antenna heights) ────
 
@@ -4227,6 +4877,8 @@ class MainWindow(QMainWindow):
         """
         if not self._rh_cache or 'dem' not in self._rh_cache:
             return
+        # Drop pending Stage-2 swap — see _on_map_right_clicked.
+        self._preview_area.cancel_pending_full_swap()
 
         ant_row = self._rh_cache.get('antenna_row', 0)
         ant_col = self._rh_cache.get('antenna_col', 0)
@@ -4426,6 +5078,10 @@ class MainWindow(QMainWindow):
         logger.info(
             'DRAG-DEBUG _on_point_dragged: %s at (%.1f, %.1f)', point_id, px, py
         )
+        # Drop pending Stage-2 swap from previous build — the drag is
+        # about to trigger a new build and the stale setPixmap would
+        # block the main thread mid-recompute.
+        self._preview_area.cancel_pending_full_swap()
         if point_id == 'CP':
             self._on_cp_dragged(px, py)
             return
@@ -4525,13 +5181,23 @@ class MainWindow(QMainWindow):
             self._start_download()
             return
 
-        # UI feedback: cursor + progress label (inset already dimmed above)
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        self._set_controls_enabled(enabled=False)
-        self._progress_label.setText('Пересчет профиля радиолинии…')
-        self._progress_label.setVisible(True)
-        self._progress_bar.setRange(0, 0)  # indeterminate
-        self._progress_bar.setVisible(True)
+        # Pre-flight: LinkProfile recompute = DEM fetch + Numba + draw
+        # _overlay (peak ~500-700 MB transient). Без проверки серия
+        # быстрых drag'ов под memory pressure ловит MemoryError'ы в
+        # set_clean_base_pixmap, OS отказывает в новых thread'ах
+        # («can't start new thread») → полное подвисание системы
+        # (Vladimir's catastrophe в режиме LP).
+        if not self._ensure_memory_available(
+            MIN_MEMORY_FOR_RECOMPUTE_MB, 'LinkProfile recompute',
+        ):
+            return
+
+        # LinkProfile recompute идёт в фоне без блокировки GUI: inset
+        # уже dimmed через _dim_stale_preview / show_inset_mask, и
+        # пользователь видит визуальный feedback. Vladimir хочет
+        # responsive UX без busy-cursor на 600 ms wallclock.
+        self.status_bar.clearMessage()
+        self._status_proxy.show_message('Пересчёт профиля радиолинии…', 1500)
 
         api_key = self._controller.get_api_key()
         worker = LinkProfileRecomputeWorker(
@@ -4558,11 +5224,22 @@ class MainWindow(QMainWindow):
             # Update link_data in cache
             self._rh_cache['link_profile_data'] = link_data
 
-            # Display
+            # Free previous _base_image BEFORE allocating new RGB+QPixmap so
+            # we don't hold two full-size PIL buffers simultaneously during
+            # set_image's tobytes() (which transiently doubles the memory
+            # footprint of the base map). At z=17 link_profile that's ~265 MB
+            # avoided — was enough to push GUI VMS over RLIMIT_AS and
+            # MemoryError out (black preview).
+            old_base = self._base_image
             self._base_image = (
                 composite.convert('RGB') if composite.mode != 'RGB' else composite
             )
             self._current_image = self._base_image
+            if old_base is not None and old_base is not self._base_image:
+                with contextlib.suppress(Exception):
+                    old_base.close()
+                del old_base
+
             metadata = self._model.state.last_map_metadata
             mpp = metadata.meters_per_pixel if metadata else 0.0
             self._preview_area.set_image(self._current_image, meters_per_px=mpp)
@@ -4579,19 +5256,14 @@ class MainWindow(QMainWindow):
             if metadata:
                 self._register_link_draggable(metadata)
 
-            QApplication.restoreOverrideCursor()
             self._status_proxy.show_message('Профиль радиолинии пересчитан', 2000)
 
         except Exception as e:
             logger.exception('Failed to display recomputed link profile')
-            QApplication.restoreOverrideCursor()
             self._status_proxy.show_message(f'Ошибка отображения: {e}', 5000)
         finally:
-            self._progress_bar.setVisible(False)
-            self._progress_label.setVisible(False)
-            self._cancel_btn.setVisible(False)
-            self._set_controls_enabled(enabled=True)
-
+            # GUI больше не блокировался в _on_link_point_dragged — здесь
+            # тоже без restoreOverrideCursor / _set_controls_enabled.
             if self._link_profile_worker is not None:
                 self._link_profile_worker.deleteLater()
                 self._link_profile_worker = None
@@ -4602,11 +5274,6 @@ class MainWindow(QMainWindow):
     def _on_link_profile_recompute_error(self, error_msg: str) -> None:
         """Handle link profile recompute error."""
         logger.error('Link profile recompute failed: %s', error_msg)
-        QApplication.restoreOverrideCursor()
-        self._progress_bar.setVisible(False)
-        self._progress_label.setVisible(False)
-        self._cancel_btn.setVisible(False)
-        self._set_controls_enabled(enabled=True)
         self._status_proxy.show_message(f'Ошибка пересчета профиля: {error_msg}', 5000)
 
         if self._link_profile_worker is not None:
@@ -5284,7 +5951,9 @@ class MainWindow(QMainWindow):
         if self._has_nsu_cache() and 'coverage_layer' in self._rh_cache:
             alpha = self._nsu_alpha_slider.value() / 100.0
             self._rh_cache['overlay_alpha'] = alpha
-            self._apply_interactive_alpha(alpha)
+            # Background apply через AlphaApplyWorker — main thread не
+            # freeze'ит на ~300 ms.
+            self._start_alpha_apply(alpha)
         self._sync_ui_to_model_now()
 
     @Slot(int, int)
@@ -5329,23 +5998,66 @@ class MainWindow(QMainWindow):
                 display = display.resize(final_size, Image.Resampling.BILINEAR)
             overlay_layer = self._rh_cache.get('overlay_layer')
             if overlay_layer:
+                # overlay_layer хранится downsampled (commit 11e97a5,
+                # PUBLISH_OVERLAY_MAX_DIM=4096), а display всегда
+                # final_size (≈8404²) → Image.alpha_composite валится
+                # ValueError: image size mismatch. Ресайз overlay к
+                # display.size через cv2 (multi-threaded, ~50 ms на
+                # 4096→8404 RGBA, vs PIL.resize ~500 ms).
+                if overlay_layer.size != display.size:
+                    import cv2  # noqa: PLC0415
+                    import numpy as np  # noqa: PLC0415
+                    ov_arr = np.asarray(overlay_layer)
+                    ov_resized = cv2.resize(
+                        ov_arr, display.size,
+                        interpolation=cv2.INTER_LINEAR,
+                    )
+                    overlay_layer = Image.fromarray(ov_resized)
                 if display.mode != 'RGBA':
                     display = display.convert('RGBA')
                 display = Image.alpha_composite(display, overlay_layer)
                 display = display.convert('RGB')
             self._preview_area.set_image(display)
 
-    def _trigger_nsu_recompute(self) -> None:
+    def _trigger_nsu_recompute(self, low_res_factor: int = 2) -> None:
         """
         Start NSU optimizer recomputation in background.
 
-        Следует тому же паттерну, что и _recompute_coverage_at_click:
-        блокировка GUI, WaitCursor, прогресс-бар, gc.collect().
+        Args:
+            low_res_factor: 2 (default) — быстрый draft preview для drag.
+                После него _on_nsu_recompute_finished планирует full-res
+                refine с factor=1. Cancel-pattern идентичен RH coverage.
+
         """
         if not self._has_nsu_cache():
             return
+        # Pre-flight системной памяти. См. _ensure_memory_available.
+        if not self._ensure_memory_available(
+            MIN_MEMORY_FOR_RECOMPUTE_MB, 'NSU recompute',
+        ):
+            return
+        # Drop pending Stage-2 swap — see _on_map_right_clicked.
+        self._preview_area.cancel_pending_full_swap()
+        # Останавливаем pending NSU refine: пользователь снова
+        # взаимодействует, refine от предыдущего drag устарел.
+        self._nsu_refine_timer.stop()
 
-        # Если worker ещё работает — откладываем (та же логика, что в РГ)
+        # Если активный worker — refine, обрываем его (orphan-list,
+        # безопасно). Это решает Vladimir's «невозможно поставить
+        # новую точку пока идёт fine стадия».
+        if (
+            self._nsu_is_refine_active
+            and self._rh_worker is not None
+            and self._rh_worker.isRunning()
+        ):
+            logger.info('NSU recompute: orphaning active refine worker')
+            self._orphan_worker(self._rh_worker)
+            self._rh_worker = None
+            self._nsu_is_refine_active = False
+
+        # Если worker ещё работает (draft) — откладываем (та же логика,
+        # что в РГ; draft is user-visible, прерывать на новый draft не
+        # стоит — flicker).
         if self._rh_worker is not None and self._rh_worker.isRunning():
             self._nsu_pending_recompute = True
             logger.info('NSU recompute deferred — worker still running')
@@ -5405,21 +6117,28 @@ class MainWindow(QMainWindow):
 
         self._nsu_register_draggable_points()
 
-        # --- Блокировка GUI (как в _recompute_coverage_at_click) ---
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        self._set_controls_enabled(enabled=False)
-        self._progress_label.setText('Пересчёт покрытия НСУ…')
-        self.status_bar.clearMessage()
-        self._progress_bar.setRange(0, 0)
-        self._progress_label.setVisible(True)
-        self._progress_bar.setVisible(True)
-        self._cancel_btn.setVisible(True)
+        # Refine-проход (full-res после draft) идёт в фоне, без
+        # WaitCursor/блокировки/прогресс-бара — Vladimir хочет, чтобы
+        # пользователь мог работать пока refine докомпилируется.
+        is_refine = low_res_factor == 1
+        self._nsu_is_refine_active = is_refine
+        if not is_refine:
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            self._set_controls_enabled(enabled=False)
+            self._progress_label.setText('Пересчёт покрытия НСУ…')
+            self.status_bar.clearMessage()
+            self._progress_bar.setRange(0, 0)
+            self._progress_label.setVisible(True)
+            self._progress_bar.setVisible(True)
+            self._cancel_btn.setVisible(True)
+            self._status_proxy.show_message('Черновой пересчёт НСУ…', 1500)
+        else:
+            self._status_proxy.show_message('Уточнение НСУ…', 1500)
 
-        # Cleanup: используем _rh_worker как общий слот для worker'а
+        # Cleanup: используем _rh_worker как общий слот для worker'а.
+        # Через _orphan_worker — safe и для running, и для finished.
         if self._rh_worker is not None:
-            self._rh_worker.finished.disconnect()
-            self._rh_worker.error.disconnect()
-            self._rh_worker.deleteLater()
+            self._orphan_worker(self._rh_worker)
             self._rh_worker = None
 
         self._nsu_pending_recompute = False
@@ -5427,6 +6146,7 @@ class MainWindow(QMainWindow):
             rh_cache=self._rh_cache,
             target_rows=target_rows_arr,
             target_cols=target_cols_arr,
+            low_res_factor=low_res_factor,
         )
         worker.finished.connect(self._on_nsu_recompute_finished)
         worker.error.connect(self._on_nsu_recompute_error)
@@ -5467,15 +6187,28 @@ class MainWindow(QMainWindow):
         else:
             return (px, py)
 
-    @Slot(object, object)
+    def _on_nsu_refine_timeout(self) -> None:
+        """Запустить полноразмерный NSU recompute после низкоразрешённого preview."""
+        if self._rh_worker is not None and self._rh_worker.isRunning():
+            return
+        if not self._has_nsu_cache():
+            return
+        logger.info('NSU refine: full-res recompute')
+        self._trigger_nsu_recompute(low_res_factor=1)
+
+    @Slot(object, object, int)
     def _on_nsu_recompute_finished(
-        self, result_image: Image.Image, coverage_layer: Image.Image
+        self,
+        result_image: Image.Image,
+        coverage_layer: Image.Image,
+        low_res_factor: int = 1,
     ) -> None:
         """
         Handle NSU recompute worker completion.
 
-        Структура аналогична _on_radio_horizon_recompute_finished:
-        try/except/finally с обязательным восстановлением GUI.
+        При low_res_factor>1 (draft preview) после успешного отображения
+        через _nsu_refine_timer планируется full-res recompute. Refine
+        идёт в фоне без блокировки UI.
         """
         try:
             if result_image is None:
@@ -5489,40 +6222,57 @@ class MainWindow(QMainWindow):
             del old_cov
             self._rh_cache['coverage_layer'] = coverage_layer
 
-            # result_image — DEM-размер (~2000x2000). Все тяжёлые операции
-            # уже сделаны на маленьком размере. Resize до final_size — один раз,
-            # в самом конце (DEM-RGB 12 МиБ → final-RGB ~800 МиБ).
-            if result_image.mode != 'RGB':
-                result_rgb = result_image.convert('RGB')
-                del result_image
-            else:
-                result_rgb = result_image
-            final_size = self._rh_cache.get('final_size')
-            if final_size and result_rgb.size != final_size:
-                result_rgb = result_rgb.resize(final_size, Image.Resampling.BILINEAR)
+            import cv2  # noqa: PLC0415
+            import numpy as np  # noqa: PLC0415
 
-            # Накладываем overlay (сетка + легенда + изолинии)
+            # result_image is RGB at DEM-size. Resize to final_size
+            # via cv2 (multi-threaded, SIMD) instead of PIL.resize
+            # (single-threaded, ~5× slower on 8k²).
+            src_arr = np.asarray(
+                result_image if result_image.mode == 'RGB'
+                else result_image.convert('RGB')
+            )
+            del result_image
+            final_size = self._rh_cache.get('final_size')
+            if final_size and src_arr.shape[:2][::-1] != final_size:
+                src_arr = cv2.resize(
+                    src_arr, final_size, interpolation=cv2.INTER_LINEAR,
+                )
+            result_rgb = Image.fromarray(src_arr)
+
+            # Overlay = grid + legend + contours, stored as RGBA in
+            # rh_cache. Composite via PIL.paste with the RGBA layer as
+            # mask: PIL drops overlay.alpha as a per-pixel mask and
+            # blends overlay.rgb into result.rgb in ONE C-loop. Same
+            # mathematics as Image.alpha_composite(result.convert(
+            # 'RGBA'), overlay).convert('RGB'), but in-place on result
+            # — no transient ~800 MB RGBA buffer (which crashed the
+            # uint16 numpy path under RLIMIT_AS).
             overlay_layer = self._rh_cache.get('overlay_layer')
-            if overlay_layer:
-                if result_rgb.mode != 'RGBA':
-                    result_rgb = result_rgb.convert('RGBA')
-                result_rgb = Image.alpha_composite(result_rgb, overlay_layer)
-                result_rgb = result_rgb.convert('RGB')
-            else:
+            if overlay_layer is None:
                 overlay_base = self._rh_cache.get('overlay_base')
                 if overlay_base is not None:
-                    ol = overlay_base.copy()
+                    overlay_layer = overlay_base.copy()
                 else:
-                    ol = Image.new('RGBA', result_rgb.size, (0, 0, 0, 0))
-                metadata = self._model.state.last_map_metadata
-                mpp = metadata.meters_per_pixel if metadata else 0.0
-                self._draw_rh_legend(ol, mpp)
-                self._rh_cache['overlay_layer'] = ol
-                if result_rgb.mode != 'RGBA':
-                    result_rgb = result_rgb.convert('RGBA')
-                result_rgb = Image.alpha_composite(result_rgb, ol)
-                result_rgb = result_rgb.convert('RGB')
+                    overlay_layer = Image.new(
+                        'RGBA', result_rgb.size, (0, 0, 0, 0),
+                    )
+                metadata_tmp = self._model.state.last_map_metadata
+                mpp_tmp = metadata_tmp.meters_per_pixel if metadata_tmp else 0.0
+                self._draw_rh_legend(overlay_layer, mpp_tmp)
+                self._rh_cache['overlay_layer'] = overlay_layer
 
+            # If the overlay was prepared at a different size, resize it
+            # in-place via cv2 (PIL.resize on a 4k² RGBA is ~500 ms).
+            if overlay_layer.size != result_rgb.size:
+                ov_arr = np.asarray(overlay_layer)
+                ov_resized = cv2.resize(
+                    ov_arr,
+                    result_rgb.size,
+                    interpolation=cv2.INTER_LINEAR,
+                )
+                overlay_layer = Image.fromarray(ov_resized)
+            result_rgb.paste(overlay_layer, (0, 0), overlay_layer)
             # Рисуем маркеры целевых точек (координаты в final_size space)
             self._nsu_draw_markers_on_image(result_rgb)
 
@@ -5534,24 +6284,36 @@ class MainWindow(QMainWindow):
             # Восстанавливаем draggable points (set_image очищает сцену)
             self._nsu_register_draggable_points()
 
-            QApplication.restoreOverrideCursor()
-            self._status_proxy.show_message('Покрытие НСУ обновлено', 2000)
+            is_refine = self._nsu_is_refine_active
+            if not is_refine:
+                QApplication.restoreOverrideCursor()
+                self._status_proxy.show_message('Покрытие НСУ обновлено', 2000)
+
+            # Schedule refine после успешного low-res preview.
+            if low_res_factor > 1:
+                self._nsu_refine_timer.start()
 
         except Exception as e:
             logger.exception('Failed to update preview after NSU recompute')
-            QApplication.restoreOverrideCursor()
+            if not self._nsu_is_refine_active:
+                QApplication.restoreOverrideCursor()
             self._status_proxy.show_message(f'Ошибка при обновлении: {e}', 5000)
         finally:
-            self._progress_bar.setVisible(False)
-            self._progress_label.setVisible(False)
-            self._cancel_btn.setVisible(False)
-            self._set_controls_enabled(enabled=True)
+            is_refine_finally = self._nsu_is_refine_active
+            if not is_refine_finally:
+                self._progress_bar.setVisible(False)
+                self._progress_label.setVisible(False)
+                self._cancel_btn.setVisible(False)
+                self._set_controls_enabled(enabled=True)
 
             if self._rh_worker is not None:
                 self._rh_worker.deleteLater()
                 self._rh_worker = None
 
+            self._nsu_is_refine_active = False
+
             gc.collect()
+            compact_c_heap()
 
             # Отложенный пересчёт (та же модель, что в РГ)
             if self._nsu_pending_recompute:
@@ -5573,6 +6335,7 @@ class MainWindow(QMainWindow):
             self._rh_worker = None
 
         gc.collect()
+        compact_c_heap()
 
         if self._nsu_pending_recompute:
             self._nsu_pending_recompute = False
@@ -6064,6 +6827,36 @@ class MainWindow(QMainWindow):
         if label:
             self._progress_label.setText(label)
 
+    @Slot()
+    def _on_preview_starting(self) -> None:
+        """
+        Free the previous build's heavy buffers BEFORE the new build's bitmaps
+        are deserialised from shared memory.
+
+        Fired from DownloadWorker._reader_loop right when a 'preview' message
+        is dequeued — Qt routes it via queued connection to this main-thread
+        slot, so it runs in parallel with the reader's deserialisation. By
+        the time the reader is done (0.5–3s later), the old _rh_cache has
+        been released and the new build's PIL Images land in freed RAM.
+        Without this, peak GUI RSS = old + new builds simultaneously and
+        z=17 elev_color second-build deserialisation overflows RLIMIT_AS
+        / triggers OOM SIGKILL.
+
+        Released: _rh_cache (multi-100MB PIL layers) and _dem_grid (large
+        float32 array). Left alone: _current_image / _base_image — those
+        may be read by cursor-position handlers during the deserialise
+        window and are relatively small (RGB, not RGBA).
+        """
+        rss_before = _gui_rss_mb()
+        self._release_rh_cache()
+        self._dem_grid = None
+        gc.collect()
+        compact_c_heap()
+        logger.info(
+            'GUI mem: preview_starting  RSS %.0f → %.0f MB (Δ=%+.0f)',
+            rss_before, _gui_rss_mb(), _gui_rss_mb() - rss_before,
+        )
+
     @Slot(object, object, object, object)
     def _show_preview_in_main_window(
         self,
@@ -6075,6 +6868,10 @@ class MainWindow(QMainWindow):
         """Show preview image in the main window's integrated preview area."""
         try:
             t_start = time.monotonic()
+            rss_show_enter = _gui_rss_mb()
+            logger.info(
+                'GUI mem: show_preview ENTER RSS %.0f MB', rss_show_enter
+            )
             if not hasattr(image, 'mode') or not hasattr(image, 'size'):
                 logger.warning('Invalid image object for preview: %s', type(image))
                 return
@@ -6106,9 +6903,9 @@ class MainWindow(QMainWindow):
                         )
                 elif rh_cache.get('is_nsu_optimizer'):
                     logger.info('NSU optimizer cache saved for interactive rebuilding')
-                    # Cleanup previous display worker
+                    # Cleanup previous display worker — orphan-safe.
                     if self._rh_display_worker is not None:
-                        self._rh_display_worker.deleteLater()
+                        self._orphan_worker(self._rh_display_worker)
                         self._rh_display_worker = None
                     # Трансформация слоёв в фоне (resize → rotate → crop)
                     self._rh_display_worker = RhDisplayCacheWorker(rh_cache)
@@ -6119,9 +6916,9 @@ class MainWindow(QMainWindow):
                 else:
                     logger.info('Radio horizon cache saved for interactive rebuilding')
                     self._rh_click_pos = self._compute_cp_image_pos(metadata)
-                    # Cleanup previous display worker
+                    # Cleanup previous display worker — orphan-safe.
                     if self._rh_display_worker is not None:
-                        self._rh_display_worker.deleteLater()
+                        self._orphan_worker(self._rh_display_worker)
                         self._rh_display_worker = None
                     # Трансформация слоёв в фоне (resize → rotate → crop)
                     self._rh_display_worker = RhDisplayCacheWorker(rh_cache)
@@ -6193,6 +6990,10 @@ class MainWindow(QMainWindow):
             except Exception as _e:
                 logger.debug(f'Failed to hide progress widgets on preview: {_e}')
 
+            logger.info(
+                'GUI mem: show_preview EXIT  RSS %.0f → %.0f MB (Δ=%+.0f)',
+                rss_show_enter, _gui_rss_mb(), _gui_rss_mb() - rss_show_enter,
+            )
             logger.info('Preview displayed in main window')
 
         except Exception as e:
@@ -6213,35 +7014,43 @@ class MainWindow(QMainWindow):
             self._clear_preview_ui()
 
     def _stop_background_workers(self) -> None:
-        """Terminate any running background workers that hold cache references."""
+        """
+        Release any running background workers that hold cache references.
+
+        Не используем QThread.terminate() — он оставляет mutex'ы заблокированными
+        и может крашить процесс. Не используем deleteLater на running thread —
+        Qt warning «Destroyed while thread is still running» → SIGSEGV.
+        Workers переходят в orphan-list и естественно умрут после run().
+
+        Zовётся при map_type change и profile_loaded — GUI операция,
+        блокировать на wait(500) × N worker'ов недопустимо.
+        """
         if self._rh_worker is not None:
-            with contextlib.suppress(Exception):
-                self._rh_worker.finished.disconnect()
-                self._rh_worker.error.disconnect()
-            if self._rh_worker.isRunning():
-                self._rh_worker.terminate()
-                self._rh_worker.wait(500)
-            self._rh_worker.deleteLater()
+            self._orphan_worker(self._rh_worker)
             self._rh_worker = None
 
         if self._rh_display_worker is not None:
-            if self._rh_display_worker.isRunning():
-                self._rh_display_worker.terminate()
-                self._rh_display_worker.wait(500)
-            self._rh_display_worker.deleteLater()
+            self._orphan_worker(self._rh_display_worker)
             self._rh_display_worker = None
 
         if self._link_profile_worker is not None:
-            if self._link_profile_worker.isRunning():
-                self._link_profile_worker.terminate()
-                self._link_profile_worker.wait(500)
-            self._link_profile_worker.deleteLater()
+            self._orphan_worker(self._link_profile_worker)
             self._link_profile_worker = None
 
-        # Cancel pending debounce
+        if self._alpha_apply_worker is not None:
+            self._orphan_worker(self._alpha_apply_worker)
+            self._alpha_apply_worker = None
+
+        # Cancel pending debounce / refine timers — старые координаты
+        # уже не релевантны для новой карты.
         self._drag_debounce_timer.stop()
         self._drag_debounce_pending = None
         self._pending_recompute_pos = None
+        self._coverage_refine_timer.stop()
+        self._refine_antenna = None
+        self._nsu_refine_timer.stop()
+        self._rh_is_refine_active = False
+        self._nsu_is_refine_active = False
 
     def _release_rh_cache(self) -> None:
         """Close PIL images and release large numpy arrays in _rh_cache."""
@@ -6259,7 +7068,6 @@ class MainWindow(QMainWindow):
                     img.close()
         # Drop numpy DEM arrays
         self._rh_cache.pop('dem', None)
-        self._rh_cache.pop('dem_full', None)
         self._rh_cache.clear()
 
     def _clear_preview_ui(self) -> None:
@@ -6286,6 +7094,7 @@ class MainWindow(QMainWindow):
             # Force GC to free large objects (PIL images, numpy arrays, QPixmap)
             # before the child process starts and competes for RAM
             gc.collect()
+            compact_c_heap()
         except Exception as e:
             logger.debug(f'Failed to clear preview UI: {e}')
 
@@ -6619,6 +7428,10 @@ class MainWindow(QMainWindow):
         QPixmapCache.clear()
         # Also cleanup any lingering download worker connections/callbacks
         self._cleanup_download_worker()
+        # Shut down the long-lived worker process — it survives across builds
+        # in the persistent-worker model, so closeEvent is the only place
+        # that asks it to exit.
+        DownloadWorker.shutdown_shared_worker(timeout_ms=3000)
 
         # Cleanup progress system resources first
         log_memory_usage('before progress cleanup')

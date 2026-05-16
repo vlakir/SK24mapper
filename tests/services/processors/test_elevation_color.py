@@ -65,7 +65,7 @@ async def test_process_elevation_color_basic():
 
         assert isinstance(result, Image.Image)
         assert result.size == (256, 256)
-        assert result.mode == 'RGBA'
+        assert result.mode == 'RGB'
         assert ctx.elev_min_m is not None
         assert ctx.elev_max_m is not None
         assert ctx.elev_min_m < ctx.elev_max_m

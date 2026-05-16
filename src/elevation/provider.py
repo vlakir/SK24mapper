@@ -14,6 +14,17 @@ from geo.topography import (
 from infrastructure.http.client import resolve_cache_dir
 
 
+def _decode_terrain_image(raw: bytes) -> Image.Image:
+    """Sync PNG bytes → RGB Image — for asyncio.to_thread."""
+    return Image.open(BytesIO(raw)).convert('RGB')
+
+
+def _decode_terrain_dem(raw: bytes):
+    """Sync PNG bytes → elevation ndarray — for asyncio.to_thread."""
+    img = Image.open(BytesIO(raw)).convert('RGB')
+    return decode_terrain_rgb_to_elevation_m(img)
+
+
 @dataclass(frozen=True)
 class TileKey:
     z: int
@@ -148,7 +159,10 @@ class ElevationTileProvider:
             raw = await self._fetch_raw(key)
         else:
             self._touch(key)
-        return Image.open(BytesIO(raw)).convert('RGB')
+        # PNG decode (libpng releases GIL during decompression) — run in a
+        # threadpool so 110 concurrent decodes parallelise across cores
+        # instead of serialising on the event loop.
+        return await asyncio.to_thread(_decode_terrain_image, raw)
 
     async def get_tile_dem(self, z: int, x: int, y: int) -> list[list[float]]:
         key = self._key(z, x, y)
@@ -156,7 +170,13 @@ class ElevationTileProvider:
         if dem is not None:
             self._touch(key)
             return dem
-        img = await self.get_tile_image(z, x, y)
-        dem2 = decode_terrain_rgb_to_elevation_m(img)
+        # Combined decode (PNG → RGB → elevation array) in one threadpool
+        # round-trip — both phases release the GIL during their C/numpy work.
+        raw = self._mem_raw.get(key)
+        if raw is None:
+            raw = await self._fetch_raw(key)
+        else:
+            self._touch(key)
+        dem2 = await asyncio.to_thread(_decode_terrain_dem, raw)
         self._mem_dem[key] = dem2
         return dem2

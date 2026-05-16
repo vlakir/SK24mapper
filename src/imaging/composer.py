@@ -59,10 +59,19 @@ def assemble_and_crop(
                 dst_x = inter_x0 - crop_x
                 dst_y = inter_y0 - crop_y
 
-                # Вырезаем и вставляем
-                tile_crop = img.crop((src_x0, src_y0, src_x1, src_y1))
-                result.paste(tile_crop, (dst_x, dst_y))
-                tile_crop.close()
+                # Для внутренних тайлов (полностью внутри crop_rect) пропускаем
+                # промежуточный crop — это лишний memcpy 3MB на тайл. PIL.paste
+                # сам копирует исходник по координатам.
+                tw, th = img.size
+                if (
+                    src_x0 == 0 and src_y0 == 0
+                    and src_x1 == tw and src_y1 == th
+                ):
+                    result.paste(img, (dst_x, dst_y))
+                else:
+                    tile_crop = img.crop((src_x0, src_y0, src_x1, src_y1))
+                    result.paste(tile_crop, (dst_x, dst_y))
+                    tile_crop.close()
 
             # Освобождаем память тайла
             try:

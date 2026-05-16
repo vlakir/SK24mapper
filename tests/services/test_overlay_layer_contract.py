@@ -56,30 +56,35 @@ def test_elev_color_contours_on_separate_layer():
     """In _postprocess, the branch that creates rh_contour_layer must include
     is_elev_color so contours go on a separate transparent layer."""
     src = _get_postprocess_source()
-    # Find the line that creates contour_layer (separate transparent layer)
-    # It should be guarded by a condition that includes is_elev_color
+    # Find any block that creates contour_layer; verify is_elev_color appears
+    # in a guard above it. The guard may be a literal `if (...):` or an
+    # assignment to an intermediate boolean (e.g. `needs_rh_overlay = (...
+    # is_elev_color...)`) used as the if-condition.
     pattern = r'if\s+.*is_elev_color.*:.*\n\s+#.*contour.*\n\s+contour_layer\s*='
     match = re.search(pattern, src, re.IGNORECASE)
-    if match is None:
-        # Alternative: check that the condition containing rh_contour_layer has is_elev_color
-        lines = src.split('\n')
-        for i, line in enumerate(lines):
-            if 'rh_contour_layer' in line and 'contour_layer' in line:
-                # Look backwards for the if-condition (up to 20 lines for multi-line ifs)
-                for j in range(i, max(i - 20, 0), -1):
-                    if 'if ' in lines[j] and 'is_elev_color' in lines[j]:
-                        return  # OK, found
-                    if 'is_elev_color' in lines[j]:
-                        return  # Part of multi-line if condition
-        # Last resort: find block containing both is_radio_horizon and is_elev_color
-        # (possibly on different lines in a multi-line if)
-        contour_block = re.search(
-            r'if\s*\([\s\S]*?is_elev_color[\s\S]*?\):',
-            src,
-        )
-        assert contour_block is not None, (
-            'Contour layer creation condition must include is_elev_color'
-        )
+    if match is not None:
+        return
+
+    lines = src.split('\n')
+    for i, line in enumerate(lines):
+        if 'rh_contour_layer' in line and 'contour_layer' in line:
+            # Look backwards for any reference to is_elev_color in
+            # surrounding guard (direct if, or boolean assigned above).
+            for j in range(i, max(i - 30, 0), -1):
+                if 'is_elev_color' in lines[j]:
+                    return
+
+    # Last resort: find any boolean expression (`if (...):` or `var = (...)`)
+    # that includes is_elev_color — preserves the contract while allowing
+    # the condition to be lifted into a named bool.
+    contour_block = re.search(
+        r'(if|=)\s*\([\s\S]*?is_elev_color[\s\S]*?\)',
+        src,
+    )
+    assert contour_block is not None, (
+        'Contour layer creation guard must include is_elev_color '
+        '(directly or via a boolean assigned in the same source)'
+    )
 
 
 # ---------------------------------------------------------------------------

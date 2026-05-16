@@ -39,16 +39,24 @@ class TestDownloadWorkerCancel:
         assert hasattr(DownloadWorker, 'request_cancel')
 
     def test_request_cancel_sets_event(self):
-        """request_cancel() should set the internal threading.Event."""
-        from unittest.mock import MagicMock
+        """
+        request_cancel() should set the shared cancel event.
 
+        In the persistent-worker model the cancel event is class-level
+        (DownloadWorker._shared_cancel) — it is shared across builds because
+        only one worker process serves them all.
+        """
         from gui.workers.download_worker import DownloadWorker
 
         worker = DownloadWorker.__new__(DownloadWorker)
-        worker._cancel_event = threading.Event()
-        assert not worker._cancel_event.is_set()
-        worker.request_cancel()
-        assert worker._cancel_event.is_set()
+        prev_shared = DownloadWorker._shared_cancel
+        try:
+            DownloadWorker._shared_cancel = threading.Event()
+            assert not DownloadWorker._shared_cancel.is_set()
+            worker.request_cancel()
+            assert DownloadWorker._shared_cancel.is_set()
+        finally:
+            DownloadWorker._shared_cancel = prev_shared
 
     def test_cancel_event_integration_with_progress(self):
         """Setting cancel event should cause check_cancelled() to raise."""

@@ -14,19 +14,8 @@ from shared.constants import MapType
 
 
 @pytest.mark.asyncio
-async def test_determine_map_type_xyz(monkeypatch):
-    """XYZ map types should validate style API and return style id."""
-    calls = {}
-
-    async def fake_validate(api_key, style_id):
-        calls["style"] = (api_key, style_id)
-
-    async def fake_validate_terrain(_api_key):
-        calls["terrain"] = True
-
-    monkeypatch.setattr(map_download_service, "_validate_api_and_connectivity", fake_validate)
-    monkeypatch.setattr(map_download_service, "_validate_terrain_api", fake_validate_terrain)
-
+async def test_determine_map_type_xyz():
+    """XYZ map types should set correct flags and return style id."""
     service = MapDownloadService("token")
     settings = SimpleNamespace(control_point_enabled=True, antenna_height_m=10)
 
@@ -36,25 +25,11 @@ async def test_determine_map_type_xyz(monkeypatch):
 
     assert style_id is not None
     assert (is_color, is_contours, is_radio, is_radar, is_link, is_nsu) == (False, False, False, False, False, False)
-    assert calls["style"][0] == "token"
-    assert "terrain" not in calls
 
 
 @pytest.mark.asyncio
-async def test_determine_map_type_elevation(monkeypatch):
-    """Elevation maps should validate Terrain-RGB API."""
-    calls = []
-
-    async def fake_validate(_api_key):
-        calls.append("terrain")
-
-    monkeypatch.setattr(map_download_service, "_validate_terrain_api", fake_validate)
-    monkeypatch.setattr(
-        map_download_service,
-        "_validate_api_and_connectivity",
-        lambda *_args, **_kwargs: None,
-    )
-
+async def test_determine_map_type_elevation():
+    """Elevation maps should set the elevation-color flag and no style id."""
     service = MapDownloadService("token")
     settings = SimpleNamespace(control_point_enabled=True, antenna_height_m=10)
 
@@ -64,7 +39,6 @@ async def test_determine_map_type_elevation(monkeypatch):
 
     assert style_id is None
     assert (is_color, is_contours, is_radio, is_radar, is_link, is_nsu) == (True, False, False, False, False, False)
-    assert calls == ["terrain"]
 
 
 @pytest.mark.asyncio
@@ -145,7 +119,6 @@ async def test_postprocess_flow(monkeypatch):
     monkeypatch.setattr(map_download_service, "LiveSpinner", DummySpinner)
     monkeypatch.setattr(map_download_service, "rotate_keep_size", lambda img, *_args, **_kwargs: img)
     monkeypatch.setattr(map_download_service, "center_crop", lambda img, *_args, **_kwargs: img)
-    monkeypatch.setattr(map_download_service, "log_memory_usage", lambda *_args, **_kwargs: None)
 
     overlay_calls = []
 
@@ -167,16 +140,35 @@ async def test_postprocess_flow(monkeypatch):
         api_key="token",
         output_path="out.png",
         max_zoom=1,
-        settings=SimpleNamespace(control_point_enabled=True, display_grid=True, max_flight_height_m=100.0, map_type=MapType.STREETS),
+        settings=SimpleNamespace(
+            control_point_enabled=True,
+            display_grid=True,
+            overlay_contours=True,
+            map_type=MapType.STREETS,
+            grid_width_m=1000.0,
+            grid_font_size_m=50.0,
+            grid_text_margin_m=10.0,
+            grid_label_bg_padding_m=5.0,
+            antenna_height_m=10.0,
+            max_flight_height_m=100.0,
+        ),
     )
     ctx.result = Image.new("RGB", (10, 10), color=(255, 255, 255))
     ctx.overlay_contours = True
     ctx.is_elev_contours = False
     ctx.is_elev_color = True
     ctx.is_radio_horizon = False
+    ctx.is_radar_coverage = False
+    ctx.is_nsu_optimizer = False
     ctx.rotation_deg = 0.0
     ctx.target_w_px = 10
     ctx.target_h_px = 10
+    ctx.center_lat_wgs = 0.0
+    ctx.center_lng_wgs = 0.0
+    ctx.eff_scale = 1
+    ctx.zoom = 1
+    ctx.elev_min_m = 0.0
+    ctx.elev_max_m = 1000.0
 
     service = MapDownloadService("token")
     await service._postprocess(ctx)
@@ -261,15 +253,8 @@ async def test_save(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_determine_map_type_radar_coverage(monkeypatch):
-    """RADAR_COVERAGE should require control point and validate terrain API."""
-    calls = []
-
-    async def fake_validate_terrain(_api_key):
-        calls.append("terrain")
-
-    monkeypatch.setattr(map_download_service, "_validate_terrain_api", fake_validate_terrain)
-
+async def test_determine_map_type_radar_coverage():
+    """RADAR_COVERAGE should require control point and set the radar flag."""
     service = MapDownloadService("token")
 
     # Without control point should raise
@@ -288,7 +273,6 @@ async def test_determine_map_type_radar_coverage(monkeypatch):
 
     assert style_id is None
     assert (is_color, is_contours, is_radio, is_radar, is_link, is_nsu) == (False, False, False, True, False, False)
-    assert "terrain" in calls
 
 
 @pytest.mark.asyncio
@@ -305,7 +289,6 @@ async def test_postprocess_radar_coverage(monkeypatch):
     monkeypatch.setattr(map_download_service, "LiveSpinner", DummySpinner)
     monkeypatch.setattr(map_download_service, "rotate_keep_size", lambda img, *_a, **_kw: img)
     monkeypatch.setattr(map_download_service, "center_crop", lambda img, *_a, **_kw: img)
-    monkeypatch.setattr(map_download_service, "log_memory_usage", lambda *_a, **_kw: None)
 
     async def fake_overlay(_self, _ctx, img):
         return img

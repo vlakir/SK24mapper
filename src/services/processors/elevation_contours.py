@@ -6,14 +6,16 @@ import asyncio
 import logging
 import math
 import random
+import time
 from typing import TYPE_CHECKING
 
 import cv2
 import numpy as np
 from PIL import Image, ImageDraw
 
-from contours import draw_contour_labels
+from contours import draw_contour_labels, draw_prepared_labels
 from contours.adaptive import ContourAdaptiveParams, compute_contour_adaptive_params
+from contours.labels import PreparedLabel
 from contours.helpers import tx_ty_from_index
 from elevation.provider import ElevationTileProvider
 from geo.geometry import tile_overlap_rect_common
@@ -285,8 +287,17 @@ def _add_contour_labels(
     overlay_retina_factor: int | None = None,
     label_params: ContourAdaptiveParams | None = None,
     grid_font_size_m: float = 100.0,
+    precomputed_label_bboxes: list[tuple[int, int, int, int]] | None = None,
 ) -> Image.Image:
-    """Add labels to contour lines."""
+    """
+    Add labels to contour lines.
+
+    If precomputed_label_bboxes is provided, skips the internal dry_run pass —
+    the caller has already computed identical bboxes (same seed_polylines,
+    levels, seed_ds, mpp, label_params, image size → place_labels_for_levels
+    is deterministic and doesn't read pixels). Used by the overlay path which
+    needs bboxes earlier to break contour lines under labels.
+    """
     try:
         logger.info(
             'Подписи изогипс: подготовка (zoom=%d, crop=%dx%d at (%d,%d), '
@@ -328,24 +339,32 @@ def _add_contour_labels(
                 label_params.label_font_m,
             )
 
-        # Dry run to get label positions
-        label_bboxes = draw_contour_labels(
-            result,
-            seed_polylines,
-            levels,
-            crop_rect,
-            seed_ds,
-            mpp,
-            dry_run=True,
-            label_spacing_m=label_params.label_spacing_m,
-            label_min_seg_len_m=label_params.label_min_seg_len_m,
-            label_edge_margin_m=label_params.label_edge_margin_m,
-            label_font_m=label_params.label_font_m,
-        )
+        if precomputed_label_bboxes is not None:
+            label_bboxes = precomputed_label_bboxes
+            logger.info(
+                'Подписи изогипс: dry_run пропущен (используются предвычисленные '
+                'bboxes), кандидатов=%d',
+                len(label_bboxes),
+            )
+        else:
+            # Dry run to get label positions
+            label_bboxes = draw_contour_labels(
+                result,
+                seed_polylines,
+                levels,
+                crop_rect,
+                seed_ds,
+                mpp,
+                dry_run=True,
+                label_spacing_m=label_params.label_spacing_m,
+                label_min_seg_len_m=label_params.label_min_seg_len_m,
+                label_edge_margin_m=label_params.label_edge_margin_m,
+                label_font_m=label_params.label_font_m,
+            )
 
-        logger.info(
-            'Подписи изогипс: dry_run завершён, кандидатов=%d', len(label_bboxes)
-        )
+            logger.info(
+                'Подписи изогипс: dry_run завершён, кандидатов=%d', len(label_bboxes)
+            )
 
         if not label_bboxes:
             logger.warning(
@@ -467,43 +486,45 @@ async def apply_contours_to_image(
         # Build seed_dem directly from pre-loaded DEM
         raw_dem = ctx.raw_dem_for_cursor
 
-        # Scale raw_dem to elev_crop_rect size if needed
-        if scale_factor != 1.0:
-            target_h = elev_ch
-            target_w = elev_cw
+        # Resize only if the actual shape differs from elev_crop_rect target.
+        # With _ensure_raw_dem_loaded now storing DEM at native tile resolution
+        # (matching elev_crop_rect in the common case), this branch usually
+        # short-circuits — saving the 50-80ms cv2.resize 9580→4790 that the
+        # old upscale+downscale round-trip incurred.
+        if raw_dem.shape[0] != elev_ch or raw_dem.shape[1] != elev_cw:
             raw_dem_scaled = cv2.resize(
                 raw_dem.astype(np.float32),
-                (target_w, target_h),
+                (elev_cw, elev_ch),
                 interpolation=cv2.INTER_LINEAR,
             )
         else:
             raw_dem_scaled = raw_dem
 
-        # Downsample to seed resolution
-        seed_dem = np.zeros((seed_h, seed_w), dtype=np.float64)
-        dem_h, dem_w = raw_dem_scaled.shape
-        for sy in range(seed_h):
-            for sx in range(seed_w):
-                y0 = sy * seed_ds
-                x0 = sx * seed_ds
-                y1 = min(y0 + seed_ds, dem_h)
-                x1 = min(x0 + seed_ds, dem_w)
-                if y1 > y0 and x1 > x0:
-                    seed_dem[sy, sx] = np.mean(raw_dem_scaled[y0:y1, x0:x1])
+        # Downsample to seed resolution via cv2.INTER_AREA (pixel-area
+        # averaging). Vectorised C path — replaces a Python double loop over
+        # seed_h × seed_w that called np.mean on a tiny slice each iteration.
+        seed_dem = cv2.resize(
+            raw_dem_scaled.astype(np.float32, copy=False),
+            (seed_w, seed_h),
+            interpolation=cv2.INTER_AREA,
+        ).astype(np.float64, copy=False)
 
-        # Sample elevations for range calculation
-        samples_contours = raw_dem_scaled.flatten()[::100].tolist()
-        if len(samples_contours) > CONTOUR_MAX_ELEVATION_SAMPLES:
-            samples_contours = samples_contours[:CONTOUR_MAX_ELEVATION_SAMPLES]
+        # Range for level computation: take true extrema of the full DEM.
+        # The previous flatten()[::100] stride-sample sat on a regular grid
+        # and systematically missed isolated peaks/pits (e.g. 215m peak
+        # collapsed to 178m max), producing a narrower elevation band and
+        # fewer levels than the streaming branch on the same area.
+        mn_arr = float(np.min(raw_dem_scaled))
+        mx_arr = float(np.max(raw_dem_scaled))
+        samples_contours = [mn_arr, mx_arr]
 
         logger.info(
             'Seed DEM построен из предзагруженного DEM: size=%dx%d, '
-            'samples=%d, min=%.1f, max=%.1f, seed_min=%.1f, seed_max=%.1f',
+            'min=%.1f, max=%.1f, seed_min=%.1f, seed_max=%.1f',
             seed_w,
             seed_h,
-            len(samples_contours),
-            min(samples_contours) if samples_contours else 0,
-            max(samples_contours) if samples_contours else 0,
+            mn_arr,
+            mx_arr,
             float(np.min(seed_dem)),
             float(np.max(seed_dem)),
         )
@@ -688,23 +709,31 @@ async def apply_contours_to_image(
             interval,
         )
         # Build global polylines from seed_dem
+        _t_polys = time.monotonic()
         seed_polylines = build_seed_polylines(seed_dem, levels, seed_h, seed_w)
+        _t_polys_dt = time.monotonic() - _t_polys
 
         total_polys = sum(len(polys) for polys in seed_polylines.values())
         logger.info(
-            'Overlay polylines: levels=%d, total_polylines=%d, base_image=%dx%d',
+            'Overlay polylines: levels=%d, total_polylines=%d, base_image=%dx%d, '
+            'build_seed_polylines=%.3fs',
             len(levels),
             total_polys,
             base_image.width,
             base_image.height,
+            _t_polys_dt,
         )
 
-        # Pass B: draw contours on base image
-        # Convert to RGBA if needed for compositing
-        if base_image.mode != 'RGBA':
-            result = base_image.convert('RGBA')
-        else:
-            result = base_image.copy()
+        # Pass B: draw contours directly onto the caller's image. Both
+        # call-sites in _postprocess discard their input reference right
+        # after assigning the return value (`result = await
+        # self._apply_overlay_contours(ctx, result)`), so an extra .copy()
+        # would just be a 275MB memcpy with no observable effect.
+        # Drawing ops work transparently on either mode:
+        #   - line fills: 3-tuple on RGB, 4-tuple on RGBA
+        #   - labels: process_polyline branches on img.mode (alpha_composite
+        #     on RGBA, paste-with-mask on RGB — both alpha-correct).
+        result = base_image
 
         img_w, img_h = result.size
 
@@ -716,15 +745,19 @@ async def apply_contours_to_image(
         effective_seed_ds = round(coord_scale)
 
         # Для создания разрывов в линиях под подписями:
-        # 1. Сначала получаем позиции подписей (dry_run)
-        # 2. Рисуем линии, пропуская сегменты в местах подписей
-        # 3. Рисуем подписи
+        # 1. Сначала получаем позиции подписей (dry_run) И собираем уже
+        #    отрисованные+повёрнутые bitmap'ы в collected_labels.
+        # 2. Рисуем линии, пропуская сегменты в местах подписей.
+        # 3. Просто paste'им подготовленные bitmap'ы — без повторной
+        #    отрисовки текста и без повторного PIL.rotate.
         label_bboxes: list[tuple[int, int, int, int]] = []
+        collected_labels: list[PreparedLabel] = []
         lat_rad = math.radians(ctx.center_lat_wgs)
         mpp = (math.cos(lat_rad) * 2 * math.pi * EARTH_RADIUS_M) / (
             TILE_SIZE * overlay_retina_factor * (2**ctx.zoom)
         )
         if CONTOUR_LABELS_ENABLED:
+            _t_dry = time.monotonic()
             label_bboxes = draw_contour_labels(
                 result,
                 seed_polylines,
@@ -737,10 +770,13 @@ async def apply_contours_to_image(
                 label_min_seg_len_m=adaptive_params.label_min_seg_len_m,
                 label_edge_margin_m=adaptive_params.label_edge_margin_m,
                 label_font_m=adaptive_params.label_font_m,
+                collected=collected_labels,
             )
             logger.info(
-                'Overlay: получено %d позиций подписей для создания разрывов',
-                len(label_bboxes),
+                'Overlay: dry_run labels=%.3fs, получено %d позиций '
+                '(prepared bitmaps: %d)',
+                time.monotonic() - _t_dry, len(label_bboxes),
+                len(collected_labels),
             )
 
         # Функция проверки пересечения сегмента с bbox (с учётом padding)
@@ -815,6 +851,7 @@ async def apply_contours_to_image(
             return False
 
         # Рисуем контуры напрямую на PIL Image (без numpy-копии)
+        _t_lines = time.monotonic()
         draw = ImageDraw.Draw(result)
         # Цвет с альфа-каналом, если изображение RGBA
         is_rgba = result.mode == 'RGBA'
@@ -868,25 +905,20 @@ async def apply_contours_to_image(
                         draw.line(coords, fill=fill_color, width=width)
 
         del draw
+        logger.info('Overlay: draw lines=%.3fs', time.monotonic() - _t_lines)
 
-        # Add contour labels if enabled (final pass - actual drawing)
+        # Paste the labels that were prepared during the dry-run pass. No
+        # placement, no font render, no PIL.rotate — just alpha-correct
+        # paste at known coordinates.
         if CONTOUR_LABELS_ENABLED:
-            result = _add_contour_labels(
-                result,
-                seed_polylines,
-                levels,
-                (0, 0, img_w, img_h),
-                effective_seed_ds,
-                ctx.center_lat_wgs,
-                ctx.zoom,
-                is_overlay=True,
-                overlay_retina_factor=overlay_retina_factor,
-                label_params=adaptive_params,
+            _t_labels = time.monotonic()
+            draw_prepared_labels(result, collected_labels)
+            logger.info(
+                'Overlay: paste prepared labels=%.3fs (%d labels)',
+                time.monotonic() - _t_labels, len(collected_labels),
             )
 
-        # Convert back to RGB if original was RGB
-        if base_image.mode == 'RGB':
-            result = result.convert('RGB')
+        # No back-conversion needed: we now keep the original mode throughout.
     finally:
         sp.stop('Построение изолиний завершено')
 

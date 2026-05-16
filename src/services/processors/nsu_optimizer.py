@@ -7,8 +7,10 @@ NSU Optimizer processor — тепловая карта оптимальных �
 
 from __future__ import annotations
 
+import asyncio
 import gc
 import logging
+import time
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -17,7 +19,11 @@ from PIL import Image
 from geo.topography import latlng_to_pixel_xy, meters_per_pixel
 from services.coordinate_transformer import sk42_raw_to_gk
 from services.map_postprocessing import draw_control_point_triangle
-from services.processors.radio_horizon import _load_dem, _load_topo
+from services.processors.radio_horizon import (
+    _blend_coverage_with_topo,
+    _load_dem,
+    _load_topo,
+)
 from services.radio_horizon import (
     compute_and_colorize_nsu_optimizer,
 )
@@ -103,20 +109,34 @@ async def process_nsu_optimizer(ctx: MapDownloadContext) -> Image.Image:
     """
     use_retina = NSU_OPTIMIZER_USE_RETINA
 
-    # Load DEM
-    dem_full, ds_factor = await _load_dem(
-        ctx,
-        use_retina=use_retina,
-        label='НСУ Optimizer',
+    # Parallel DEM + topo load (same idiom as elev_color / radio_horizon).
+    # DEM is needed first for pixel-size math; topo continues loading in
+    # the background while we crunch coverage.
+    _t_loads = time.monotonic()
+    dem_task = asyncio.create_task(
+        _load_dem(ctx, use_retina=use_retina, label='НСУ Optimizer')
+    )
+    topo_task = asyncio.create_task(
+        _load_topo(ctx, use_retina=use_retina, label='НСУ Optimizer')
+    )
+    try:
+        dem_full, ds_factor = await dem_task
+    except BaseException:
+        topo_task.cancel()
+        raise
+    logger.info(
+        'НСУ: DEM ready in %.3fs (topo still loading in parallel)',
+        time.monotonic() - _t_loads,
     )
 
     full_eff_tile_px = 256 * (2 if use_retina else 1)
 
-    # Load topo base
-    topo_base = await _load_topo(
-        ctx,
-        use_retina=use_retina,
-        label='НСУ Optimizer',
+    # Wait for topo (likely already done while we computed pixel_size_m below).
+    _t_topo_wait = time.monotonic()
+    topo_base = await topo_task
+    logger.info(
+        'НСУ: topo ready after %.3fs additional wait',
+        time.monotonic() - _t_topo_wait,
     )
 
     # Pixel size for DEM (accounting for downsampling)
@@ -181,20 +201,14 @@ async def process_nsu_optimizer(ctx: MapDownloadContext) -> Image.Image:
             del dem_full
             gc.collect()
 
-            # Resize if downsampled
-            if ds_factor > 1:
-                target_size = (ctx.crop_rect[2], ctx.crop_rect[3])
-                result = result.resize(target_size, Image.Resampling.BILINEAR)
-
-            if topo_base.size != result.size:
-                topo_base = topo_base.resize(result.size, Image.Resampling.BILINEAR)
-
-            # Blend
-            blend_alpha = 1.0 - ctx.settings.nsu_overlay_alpha
-            topo_base = topo_base.convert('L').convert('RGBA')
-            result = result.convert('RGBA')
-            ctx.nsu_cache_coverage = result.copy()
-            result = Image.blend(topo_base, result, blend_alpha)
+            # Shared post-coverage block: numpy / cv2 resize + grayscale +
+            # blend, plus DEM-size cache halving. Same wins as RH/Radar.
+            result = _blend_coverage_with_topo(
+                ctx, result, topo_base,
+                'nsu_optimizer',
+                cache_attr='nsu_cache_coverage',
+                overlay_alpha=ctx.settings.nsu_overlay_alpha,
+            )
 
             # Draw target markers
             _draw_target_markers(
@@ -207,7 +221,6 @@ async def process_nsu_optimizer(ctx: MapDownloadContext) -> Image.Image:
                 dem_w,
             )
 
-            del topo_base
             gc.collect()
 
             logger.info(

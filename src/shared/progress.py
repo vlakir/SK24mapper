@@ -236,6 +236,7 @@ def publish_preview_image(
         try:
             cb(img, metadata, dem_grid, rh_cache)
         except Exception:
+            logger.exception('publish_preview_image: callback failed')
             return False
         else:
             return True
@@ -298,7 +299,11 @@ class LiveSpinner:
                     break
             msg = f'{self.label}: {self.frames[i % len(self.frames)]}'
             self._writer.write_line(msg)
-            time.sleep(self.interval)
+            # Event.wait вместо time.sleep — поток моментально просыпается,
+            # когда stop event ставится. Без этого join(timeout=1.0) в stop()
+            # ждал до 100ms (длина текущего тика sleep) на каждом завершении.
+            if self._stop.wait(self.interval):
+                break
             i += 1
 
     def start(self) -> None:

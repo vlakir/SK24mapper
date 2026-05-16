@@ -87,9 +87,6 @@ class MapDownloadContext:
     rh_cache_dem: Any | None = (
         None  # numpy array - DEM (даунсэмплированный для расчёта)
     )
-    rh_cache_dem_full: Any | None = (
-        None  # numpy array - DEM (полное разрешение для курсора)
-    )
     rh_cache_topo_base: Image.Image | None = None  # PIL Image - топооснова
     rh_cache_antenna_row: int | None = None  # позиция антенны в DEM (строка)
     rh_cache_antenna_col: int | None = None  # позиция антенны в DEM (столбец)

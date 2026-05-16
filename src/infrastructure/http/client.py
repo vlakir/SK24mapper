@@ -4,7 +4,6 @@ import contextlib
 import os
 import sqlite3
 import ssl
-import time
 from datetime import timedelta
 from pathlib import Path
 
@@ -57,8 +56,10 @@ def cleanup_sqlite_cache(cache_dir: Path) -> None:
         conn = sqlite3.connect(cache_file)
         conn.execute('PRAGMA wal_checkpoint(TRUNCATE);')
         conn.close()
-
-        time.sleep(0.1)
+        # Note: previously a 100ms time.sleep() was here as a defensive
+        # delay after WAL checkpoint. Removed — wal_checkpoint(TRUNCATE)
+        # is synchronous; data is committed when the call returns. The
+        # sleep was pure waste, paid on every build (~100ms per call).
 
 
 def make_http_session(cache_dir: Path | None) -> aiohttp.ClientSession:

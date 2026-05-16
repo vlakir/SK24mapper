@@ -1,17 +1,48 @@
 import asyncio
 import logging
 import math
+import time
 from collections.abc import Sequence
 from contextlib import suppress
 from http import HTTPStatus
 from io import BytesIO
 
 import aiohttp
+import cv2
 import numpy as np
 from PIL import Image
 from pyproj import CRS, Transformer
 from pyproj.transformer import TransformerGroup
 from scipy.ndimage import gaussian_filter
+
+from shared.tile_disk_cache import write_tile_bytes, xyz_disk_path
+from shared.tile_memory_cache import TileKey, get_global_cache
+from shared.tile_profiling import record_tile_fetch
+
+
+def _decode_rgb_image(data: bytes) -> Image.Image:
+    """
+    Synchronous decode — called from a thread to release the GIL.
+
+    cv2.imdecode → np → Image.fromarray vs PIL.Image.open().convert('RGB'):
+    on real Mapbox terrain-rgb tiles cv2 is ~50 % faster (decode bench:
+    1015 ms → 468 ms across 300 tiles), and on satellite JPEGs the gap is
+    similar — libjpeg-turbo / libpng paths in OpenCV release the GIL the
+    same way PIL does, but skip PIL's Python-side mode conversion plumbing
+    that runs in `.convert('RGB')`.
+
+    Output is RGB-ordered (cv2 returns BGR by default; one extra channel-
+    swap is still net cheaper than PIL's full re-pack). PIL fallback on
+    decode failure keeps behaviour identical for edge formats.
+    """
+    arr = np.frombuffer(data, dtype=np.uint8)
+    bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if bgr is None:
+        # cv2 returns None for malformed input or formats it can't handle;
+        # fall back to PIL which supports a wider range (e.g. P-mode PNG).
+        return Image.open(BytesIO(data)).convert('RGB')
+    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+    return Image.fromarray(rgb)
 
 from shared.constants import (
     EARTH_RADIUS_M,
@@ -394,6 +425,56 @@ async def async_fetch_xyz_tile(
     path = f'{MAPBOX_STATIC_BASE}/{style_id}/tiles/{ts}/{z}/{x}/{y}{scale_suffix}'
     url = f'{path}?access_token={api_key}'
 
+    # Cache layers tried in order: in-process memory LRU → on-disk bytes file
+    # → aiohttp SQLite (inside client.get) → network. Disk layer survives
+    # worker-subprocess restarts and bypasses aiohttp_client_cache's per-tile
+    # SQLite lock + CachedResponse deserialization (~210ms/tile warm).
+    mem_cache = get_global_cache()
+    mem_key = TileKey(
+        source=style_id, z=z, x=x, y=y, tile_size=ts, retina=use_retina
+    )
+    mem_data = mem_cache.get(mem_key)
+    if mem_data is not None:
+        t_decode_start = time.monotonic()
+        img = await asyncio.to_thread(_decode_rgb_image, mem_data)
+        decode_seconds = time.monotonic() - t_decode_start
+        record_tile_fetch(
+            fetch_seconds=0.0,
+            decode_seconds=decode_seconds,
+            from_cache=True,
+            from_memory=True,
+        )
+        return img
+
+    disk_path = xyz_disk_path(
+        style_id=style_id,
+        tile_size=ts,
+        use_retina=use_retina,
+        z=z, x=x, y=y,
+    )
+    if disk_path is not None and disk_path.exists():
+        try:
+            t_disk_start = time.monotonic()
+            data = disk_path.read_bytes()
+            disk_seconds = time.monotonic() - t_disk_start
+            t_decode_start = time.monotonic()
+            img = await asyncio.to_thread(_decode_rgb_image, data)
+            decode_seconds = time.monotonic() - t_decode_start
+            mem_cache.put(mem_key, data)
+            record_tile_fetch(
+                fetch_seconds=disk_seconds,
+                decode_seconds=decode_seconds,
+                from_cache=True,
+                from_disk=True,
+            )
+            return img
+        except OSError:
+            # File got corrupted/truncated — fall through to network refetch.
+            logging.getLogger(__name__).warning(
+                'XYZ disk cache read failed for z/x/y=%d/%d/%d, refetching',
+                z, x, y,
+            )
+
     def _fail(msg: str) -> None:
         raise RuntimeError(msg)
 
@@ -401,26 +482,46 @@ async def async_fetch_xyz_tile(
     for attempt in range(retries):
         try:
             timeout = aiohttp.ClientTimeout(total=async_timeout)
+            t_fetch_start = time.monotonic()
             resp = await client.get(url, timeout=timeout)
             try:
                 sc = resp.status
                 if sc == HTTPStatus.OK:
                     data = await resp.read()
+                    fetch_seconds = time.monotonic() - t_fetch_start
+                    from_cache = bool(getattr(resp, 'from_cache', False))
                     # Контент может быть png/jpg/webp — PIL откроет всё;
                     # конвертируем в RGB
-                    return Image.open(BytesIO(data)).convert('RGB')
+                    t_decode_start = time.monotonic()
+                    img = await asyncio.to_thread(_decode_rgb_image, data)
+                    decode_seconds = time.monotonic() - t_decode_start
+                    mem_cache.put(mem_key, data)
+                    if disk_path is not None:
+                        with suppress(OSError):
+                            write_tile_bytes(disk_path, data)
+                    record_tile_fetch(
+                        fetch_seconds=fetch_seconds,
+                        decode_seconds=decode_seconds,
+                        from_cache=from_cache,
+                    )
+                    return img
                 if sc in (HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN):
-                    msg = (
-                        f'Доступ запрещён (HTTP {sc}). Проверьте токен и права. '
-                        f'z/x/y={z}/{x}/{y} path={path}'
+                    logging.getLogger(__name__).error(
+                        'XYZ tile HTTP %d for z/x/y=%d/%d/%d path=%s',
+                        sc, z, x, y, path,
                     )
-                    _fail(msg)
+                    _fail(
+                        'Неверный или недействительный API-ключ Mapbox. '
+                        'Проверьте ключ и попробуйте снова.'
+                    )
                 if sc == HTTPStatus.NOT_FOUND:
-                    msg = (
-                        f'Ресурс не найден (404) для тайла '
-                        f'z/x/y={z}/{x}/{y} path={path}'
+                    logging.getLogger(__name__).error(
+                        'XYZ tile 404 for z/x/y=%d/%d/%d path=%s',
+                        z, x, y, path,
                     )
-                    _fail(msg)
+                    _fail(
+                        f'Ресурс не найден на сервере карт (тайл {z}/{x}/{y}).'
+                    )
                 is_rate_or_5xx = (sc == HTTPStatus.TOO_MANY_REQUESTS) or (
                     HTTP_5XX_MIN <= sc < HTTP_5XX_MAX
                 )
@@ -478,31 +579,62 @@ async def async_fetch_terrain_rgb_tile(
     path = f'{MAPBOX_TERRAIN_RGB_PATH}/{z}/{x}/{y}{scale_suffix}.pngraw'
     url = f'{path}?access_token={api_key}'
 
+    # In-memory bytes LRU before HTTP/SQLite (see async_fetch_xyz_tile)
+    mem_cache = get_global_cache()
+    mem_key = TileKey(
+        source='terrain_rgb', z=z, x=x, y=y, tile_size=256, retina=use_retina
+    )
+    mem_data = mem_cache.get(mem_key)
+    if mem_data is not None:
+        t_decode_start = time.monotonic()
+        img = await asyncio.to_thread(_decode_rgb_image, mem_data)
+        decode_seconds = time.monotonic() - t_decode_start
+        record_tile_fetch(
+            fetch_seconds=0.0,
+            decode_seconds=decode_seconds,
+            from_cache=True,
+            from_memory=True,
+        )
+        return img
+
     last_exc: Exception | None = None
     for attempt in range(retries):
         try:
             timeout = aiohttp.ClientTimeout(total=async_timeout)
+            t_fetch_start = time.monotonic()
             resp = await client.get(url, timeout=timeout)
             try:
                 sc = resp.status
                 if sc == HTTPStatus.OK:
                     data = await resp.read()
-                    return Image.open(BytesIO(data)).convert('RGB')
+                    fetch_seconds = time.monotonic() - t_fetch_start
+                    from_cache = bool(getattr(resp, 'from_cache', False))
+                    t_decode_start = time.monotonic()
+                    img = await asyncio.to_thread(_decode_rgb_image, data)
+                    decode_seconds = time.monotonic() - t_decode_start
+                    mem_cache.put(mem_key, data)
+                    record_tile_fetch(
+                        fetch_seconds=fetch_seconds,
+                        decode_seconds=decode_seconds,
+                        from_cache=from_cache,
+                    )
+                    return img
                 if sc in (HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN):
-                    msg = (
-                        f'Доступ запрещён (HTTP {sc}) для terrain тайла '
-                        f'z/x/y={z}/{x}/{y} path={path}'
+                    logging.getLogger(__name__).error(
+                        'Terrain-RGB HTTP %d for z/x/y=%d/%d/%d path=%s',
+                        sc, z, x, y, path,
                     )
                     raise RuntimeError(
-                        msg,
+                        'Неверный или недействительный API-ключ Mapbox '
+                        '(Terrain-RGB). Проверьте ключ и попробуйте снова.'
                     )
                 if sc == HTTPStatus.NOT_FOUND:
-                    msg = (
-                        f'Ресурс не найден (404) для terrain тайла '
-                        f'z/x/y={z}/{x}/{y} path={path}'
+                    logging.getLogger(__name__).error(
+                        'Terrain-RGB 404 for z/x/y=%d/%d/%d path=%s',
+                        z, x, y, path,
                     )
                     raise RuntimeError(
-                        msg,
+                        f'Terrain тайл не найден на сервере ({z}/{x}/{y}).'
                     )
                 is_rate_or_5xx = (sc == HTTPStatus.TOO_MANY_REQUESTS) or (
                     HTTP_5XX_MIN <= sc < HTTP_5XX_MAX

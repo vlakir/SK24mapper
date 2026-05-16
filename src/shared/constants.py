@@ -180,10 +180,43 @@ def map_type_to_style_id(map_type: MapType | str) -> str | None:
 
 # Предпочтительный размер тайла XYZ (256 или 512)
 XYZ_TILE_SIZE = 512
-# Использовать ретина-тайлы @2x
-XYZ_USE_RETINA = True
-# Использовать ретину для карт высот (Terrain-RGB) — контуры и overlay-DEM для курсора
-ELEVATION_USE_RETINA = True
+# Использовать ретина-тайлы @2x. По умолчанию ВЫКЛ для всех XYZ-стилей:
+# retina даёт ~16-20k² preview, упирающийся в CPU-лимит (rotate_and_crop
+# ~2.8 c на cv2.warpAffine) и под RLIMIT_AS=0.70×RAM срывает worker на
+# pre_rotation_crop → img.tobytes(). Non-retina @ том же conceptual-zoom
+# = 2× меньше линейный размер картинки (4× меньше пикселей) при ТЕХ ЖЕ
+# raw-тайлах — заметно дешевле postprocess при умеренной потере
+# детализации.
+XYZ_USE_RETINA = False
+# Per-style override: оставлены для возможности точечно вернуть retina
+# на отдельные стили без изменения общего дефолта (например, если для
+# OUTDOORS захочется max detail). По умолчанию = XYZ_USE_RETINA.
+SATELLITE_USE_RETINA = False
+HYBRID_USE_RETINA = False
+# Cap на количество пикселей итогового полотна для non-retina XYZ.
+# Удерживает choose_safe_zoom от «бесплатного» подъёма zoom, который при
+# non-retina даёт визуально-эквивалентную retina@(z-1) картинку, но
+# грузит в 4× больше raw-тайлов и срывает RLIMIT_AS на rotate. 200M ≈
+# 14k² — достаточно для типичных карт 6-10 км; для очень больших
+# областей всё равно сработает общий MAX_OUTPUT_PIXELS.
+XYZ_NON_RETINA_MAX_PIXELS = 200_000_000
+
+
+def xyz_use_retina_for_style(style_id: str | None) -> bool:
+    """
+    Pick the retina flag for the given Mapbox style. Per-style overrides
+    позволяют точечно вернуть retina при необходимости; по умолчанию
+    все = XYZ_USE_RETINA = False.
+    """
+    if style_id == 'mapbox/satellite-v9':
+        return SATELLITE_USE_RETINA
+    if style_id == 'mapbox/satellite-streets-v12':
+        return HYBRID_USE_RETINA
+    return XYZ_USE_RETINA
+# Использовать ретину для карт высот (Terrain-RGB) — контуры и overlay-DEM
+# для курсора. False = 256px тайлы, в 2-4× быстрее загрузка/сборка/contours
+# при потере точности высоты под курсором и сглаженности изолиний.
+ELEVATION_USE_RETINA = False
 # Использовать ретину для ELEVATION_COLOR (False = 256px, быстрее в 2-4 раза)
 ELEVATION_COLOR_USE_RETINA = False
 # --- Hillshade (теневая отмывка рельефа)
@@ -217,6 +250,22 @@ HTTP_CACHE_EXPIRE_HOURS = 168
 HTTP_CACHE_RESPECT_HEADERS = True
 # Разрешить использовать устаревший кэш при сетевых ошибках (часы); 0 — запретить
 HTTP_CACHE_STALE_IF_ERROR_HOURS = 72
+
+# --- Дисковый LRU для pre-rotation contour overlay (выживает между
+# рестартами приложения и worker-процесса). Один RGBA-слой 8404×8404 при
+# PNG-сжатии occupies ~5-25 MB на диске. Срок жизни = окно, в течение
+# которого пользователь, скорее всего, вернётся к тому же участку.
+CONTOUR_LAYER_DISK_CACHE_ENABLED = True
+CONTOUR_LAYER_DISK_CACHE_DAYS = 30
+
+# --- Двухуровневый кэш (in-memory + disk) для assembled DEM и topo
+# изображений, чтобы пропустить ~3 с decode + assembly на каждом warm
+# rebuild'е того же участка карты. In-memory держит 1 entry per kind
+# (~640 MB peak в worker'е) — переживает между builds в одном persistent
+# worker'е. Disk — .npy файлы (~640 MB на entry), переживают между
+# рестартами worker'а.
+DEM_TOPO_DISK_CACHE_ENABLED = True
+DEM_TOPO_DISK_CACHE_DAYS = 30
 
 # --- Толщина обводки текста сетки (перенесено из профиля в constants)
 GRID_TEXT_OUTLINE_WIDTH = 2
@@ -381,6 +430,20 @@ PREVIEW_UPRIGHT_TEXT_ANGLE_LIMIT = 90.0
 # Фиксированный угол поворота изображения в градусах для улучшения
 # видимости тонких линий
 PREVIEW_ROTATION_ANGLE = 0.0
+
+# Максимальный размер preview-изображения, отдаваемого в QPixmap.
+# Полноразмерный 16k² → QPixmap.fromImage блокирует main thread на ~500 мс
+# и заставка превью замирает. Уменьшаем до 4096 по длинной стороне
+# (cv2.resize в фоновом QThread) — экранное разрешение обычно 1920×1080,
+# 4k preview даёт хороший запас на zoom без видимой пикселизации.
+# Установить None или 0, чтобы отключить downscale.
+PREVIEW_MAX_DIM = 4096
+# Размер RGBA-overlay'я (grid + legend + contours), упакованного в shm
+# для publish. Worker строит overlay full-size (8404²); это ~282 MB
+# raw-сериализации в shared memory. GUI cv2.resize-ит overlay обратно
+# к result_image.size перед blend, так что без потерь логики можно
+# downsample слой здесь. 4096² → ~67 MB.
+PUBLISH_OVERLAY_MAX_DIM = 4096
 
 # --- События модели (GUI)
 MODEL_EVENT_SETTINGS_CHANGED = 'SETTINGS_CHANGED'
@@ -674,19 +737,63 @@ NSU_OPTIMIZER_POINT_COLORS: list[tuple[int, int, int]] = [
 
 # --- Логирование ---
 # Дублировать лог в файл с fsync (переживает OOM/crash)
-LOG_FSYNC_TO_FILE = False
+LOG_FSYNC_TO_FILE = True
 
 # --- OOM Prevention ---
 # Минимальный общий объём RAM для запуска приложения (МБ)
 MEMORY_MIN_TOTAL_MB = 6044
-# Доля доступной RAM, которую можно использовать
-MEMORY_SAFETY_RATIO = 0.75
+# Доля доступной RAM, которую можно использовать.
+# Формула бюджета зума: available × MEMORY_SAFETY_RATIO − MEMORY_MIN_FREE_MB.
+# Было 0.75 — слишком консервативно: после 2-3 elev_color билдов GUI набирает
+# ~400 MB heap-фрагментации glibc, и Available падает с 5.4GB до 3.8GB. С
+# бюджетом 0.75 это даёт 1855 MB при пике z=17=1914 MB → forced downgrade
+# до z=16 (4× меньше пикселей, пользователь жалуется на «прыгающее
+# разрешение»). RLIMIT_AS = total×0.85 ловит реальный OOM, плюс oom_score_adj
+# биасит killer на worker — система защищена и без излишнего запаса бюджета.
+MEMORY_SAFETY_RATIO = 0.85
 # Минимум свободной памяти, которую нужно оставить (МБ)
 MEMORY_MIN_FREE_MB = 1024
-# Доля total RAM для rlimit (Linux): процесс не сможет выделить больше.
-# При превышении → MemoryError вместо OOM killer → crash OS.
-MEMORY_RLIMIT_RATIO = 0.85
+# Доля physical RAM (НЕ RAM+swap) для RLIMIT_AS. Применяется к ОБОИМ
+# процессам — GUI и worker — независимо. Цель: каждый процесс должен
+# MemoryError СВОЁ задолго до того как system-wide OOM грозит унести
+# IDE с собой.
+#
+# Старая формула `(RAM+swap) × 0.85` разрешала worker'у адресовать
+# 14.8 GB на 13 GB машине → процесс рос пока не вылетал за RAM, swap
+# не успевал, kernel OOM killer убивал случайные процессы (вместе с
+# IDE) несмотря на oom_score_adj=+1000 на worker'е (race conditions
+# в OOM trigger'е).
+#
+# Подбор ratio:
+#  - 0.60 на 13 GB = 7985 MB — слишком тесно для интерактивного GUI:
+#    при drag'е link_profile накапливаются Qt-буферы + транзиентные
+#    PIL копии, GUI VMS дополз до 7689 MB, transient tobytes() (+280 MB)
+#    вылетел в MemoryError → чёрный preview (но IDE жив!).
+#  - 0.70 на 13 GB = 9316 MB — расширяет окно для GUI, worker не страдает
+#    (его реальный пик 3-5 GB всё равно укладывается), а в worst case
+#    оба процесса одновременно занимают 18.6 GB virtual, что выходит
+#    максимум на ~4 GB в swap — плавная деградация, не паника. Резерв
+#    на IDE+OS: 13 - 9.3 = ~3.7 GB гарантированно (если только ОДИН
+#    процесс на пике).
+MEMORY_RLIMIT_RATIO = 0.70
+
+# Pre-flight system memory check (MB). Применяется в GUI перед heavy
+# операциями: build, recompute, alpha-apply. Если psutil.virtual_memory
+# ().available ниже порога — операция отказывается с диалогом, чтобы
+# не дать kernel'у OOM-killer'у выбрать GUI/IDE.
+#
+# RLIMIT_AS защищает только сам GUI process; от system-wide pressure
+# (Vladimir's browser + IDE + worker + GUI ≈ 12.5 GB на 13 GB машине)
+# нужна именно пре-проверка.
+#
+# Числа — оценка peak transient по типу операции:
+#   recompute (RH/Radar/NSU/Alpha apply): peak ≈ +400-600 MB
+#       (DEM compute + cv2.resize + paste).
+#   full build (Скачать): peak ≈ +1-2 GB (worker tile fetch + decode +
+#       postprocess + publish-shm + GUI deserialize).
+MIN_MEMORY_FOR_RECOMPUTE_MB = 800
+MIN_MEMORY_FOR_BUILD_MB = 1500
 
 # --- Loading screen (Matrix rain) ---
-LOADING_FADE_OUT_MS = 2400  # Затухание матрицы → чёрный экран
-LOADING_FADE_IN_MS = 3600  # Проявление карты из темноты
+LOADING_FADE_OUT_MS = 0  # Затухание матрицы → чёрный экран (0 = мгновенно)
+LOADING_FADE_IN_MS = 0  # Проявление карты из темноты (0 = мгновенно)

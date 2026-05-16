@@ -59,6 +59,13 @@ class MatrixRainWidget(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        # Translucent background lets paintEvent's setOpacity actually
+        # produce partial transparency — without this Qt composites on
+        # an opaque widget surface and setOpacity has no visible effect
+        # below ~1.0. We need it so the fade-out can end at a fully
+        # transparent frame rather than at a fully black one (which the
+        # user perceived as a "black flash" after the overlay hid).
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self._bg_color = QColor(0, 0, 0)
 
         self._font = QFont('Consolas', _FONT_SIZE)
@@ -102,6 +109,11 @@ class MatrixRainWidget(QWidget):
     def fade_out(self, duration_ms: int = LOADING_FADE_OUT_MS) -> None:
         """Begin fading to black. Emits faded_out when fully dark."""
         self._fading_out = True
+        if duration_ms <= 0:
+            # Instant transition: jump straight to black and fire the signal.
+            self._fade_alpha = 0.0
+            self.faded_out.emit()
+            return
         ticks = max(1, duration_ms // _INTERVAL_MS)
         self._fade_step = self._fade_alpha / ticks
 
@@ -136,6 +148,11 @@ class MatrixRainWidget(QWidget):
             if self._fade_alpha <= 0:
                 self._fading_out = False
                 self._timer.stop()
+                # No synchronous repaint here — the final frame is
+                # paintEvent's early return (transparent), and any
+                # earlier in-flight paint at fa>0 only ever shows a
+                # partially-transparent matrix-rain, never the opaque
+                # black panel that used to be the "flash".
                 self.update()
                 self.faded_out.emit()
                 return
@@ -172,15 +189,23 @@ class MatrixRainWidget(QWidget):
         self.update()
 
     def paintEvent(self, _event: QPaintEvent) -> None:
+        fa = self._fade_alpha
+        if fa <= 0:
+            # Skip painting entirely on a fully-faded overlay — the
+            # widget's translucent background lets the scene below show
+            # through, so users never see a "final black frame" between
+            # the fade and the hide(). With WA_TranslucentBackground
+            # set, doing nothing here produces a transparent frame.
+            return
         painter = QPainter(self)
+        # Master opacity for the whole overlay (background + glyphs).
+        # Linear from 1.0 (fully visible) to 0 (transparent) as fade
+        # progresses, so the matrix-rain visually dissolves rather than
+        # collapsing onto a black panel.
+        painter.setOpacity(fa)
         painter.fillRect(self.rect(), self._bg_color)
         painter.setFont(self._font)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
-
-        fa = self._fade_alpha
-        if fa <= 0:
-            painter.end()
-            return
 
         w = self.width()
         x_offset = max(0, (w - self._num_cols * self._col_w) // 2)
