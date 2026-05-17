@@ -62,9 +62,12 @@ async def test_process_xyz_tiles_empty():
     ctx.tiles_y = 0
     ctx.crop_rect = (0, 0, 0, 0)
     ctx.client = AsyncMock()
-    
-    # assemble_and_crop might fail with empty tiles, but let's see
-    with patch('services.processors.xyz_tiles.assemble_and_crop') as mock_assemble:
-        mock_assemble.return_value = Image.new('RGB', (1, 1))
+
+    # Streaming helper was extracted to services.tile_streaming; mock it
+    # for the degenerate empty-tiles case.
+    with patch(
+        'services.processors.xyz_tiles.stream_fetch_assemble_xyz'
+    ) as mock_stream:
+        mock_stream.return_value = Image.new('RGB', (1, 1))
         result = await process_xyz_tiles(ctx)
         assert result.size == (1, 1)

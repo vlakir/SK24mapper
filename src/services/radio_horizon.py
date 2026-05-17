@@ -390,6 +390,39 @@ def _compute_coverage_grid_parallel(
     return grid_values
 
 
+def warmup_numba_kernels() -> None:
+    """
+    Trigger JIT compilation of all @njit kernels with tiny dummy inputs.
+
+    Numba's parallel=True kernels can take 2-5 s to compile on first
+    use even with cache=True (the AOT cache lookup is not always a
+    free hit, and the parallel loop body needs LLVM materialisation).
+    Calling them once at worker-startup with a 32×32 dummy DEM amortises
+    that cost out of the hot path so the user's first right-click /
+    drag / coverage-recompute is responsive.
+
+    Safe to call multiple times — Numba dispatch checks its cache on
+    every call; subsequent invocations are ~microseconds.
+    """
+    dem = np.zeros((32, 32), dtype=np.float32)
+    # Bilinear interp (kept as a separately-cached function — call it
+    # standalone so its JIT entry is materialised even if subsequent
+    # callers happen to inline it).
+    _bilinear_interpolate_numba(dem, 16.0, 16.0, 32, 32)
+    # LOS trace exercises bilinear_interp inside; small endpoint so
+    # only a few steps are taken.
+    _trace_line_of_sight_numba(
+        dem, 0, 0, 100.0, 16, 16, 1.0, 8.5e6, 32, 32,
+    )
+    # Both parallel kernels share the LOS path; compile them too.
+    _compute_grid_values_parallel(
+        dem, 0, 0, 100.0, 1.0, 8.5e6, 4, 32, 32,
+    )
+    _compute_coverage_grid_parallel(
+        dem, 0, 0, 100.0, 1.0, 8.5e6, 4, 32, 32,
+    )
+
+
 def _build_color_lut(
     color_ramp: list[tuple[float, tuple[int, int, int]]],
     unreachable_color: tuple[int, int, int],

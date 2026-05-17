@@ -27,21 +27,26 @@ def draw_text_with_outline(
     outline_width: int = GRID_TEXT_OUTLINE_WIDTH,
     anchor: str = 'lt',
 ) -> None:
-    """Рисует текст с «обводкой» для лучшей читаемости."""
+    """
+    Рисует текст с «обводкой» для лучшей читаемости.
+
+    Использует PIL.ImageDraw.text(stroke_width=, stroke_fill=) — нативный
+    FT_Stroker в C-коде Pillow (since 8.0). Раньше тут был Python-loop
+    из (2×outline_width+1)² draw.text вызовов: при outline_width=4 это
+    81 рендер glyph'ов на каждую подпись, отсюда legend.title=154ms +
+    legend.labels=95ms на ~7 надписях. С native stroke — один call,
+    обычно в 5-10× быстрее.
+    """
     x, y = xy
-    if outline_width > 0:
-        for dx in range(-outline_width, outline_width + 1):
-            for dy in range(-outline_width, outline_width + 1):
-                if dx == 0 and dy == 0:
-                    continue
-                draw.text(
-                    (x + dx, y + dy),
-                    text,
-                    font=font,
-                    fill=outline,
-                    anchor=anchor,
-                )
-    draw.text((x, y), text, font=font, fill=fill, anchor=anchor)
+    draw.text(
+        (x, y),
+        text,
+        font=font,
+        fill=fill,
+        anchor=anchor,
+        stroke_width=outline_width if outline_width > 0 else 0,
+        stroke_fill=outline if outline_width > 0 else None,
+    )
 
 
 def draw_label_with_bg(

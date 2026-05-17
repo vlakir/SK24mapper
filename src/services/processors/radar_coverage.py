@@ -8,7 +8,10 @@ from typing import TYPE_CHECKING
 
 from PIL import Image
 
-from services.processors.radio_horizon import _load_dem_and_topo
+from services.processors.radio_horizon import (
+    _blend_coverage_with_topo,
+    _load_dem_and_topo,
+)
 from services.radio_horizon import compute_and_colorize_coverage
 from shared.constants import RADAR_COVERAGE_USE_RETINA
 from shared.progress import LiveSpinner
@@ -70,25 +73,12 @@ async def process_radar_coverage(ctx: MapDownloadContext) -> Image.Image:
     del dem_full
     gc.collect()
 
-    # Resize if downsampled
-    if ds_factor > 1:
-        target_size = (ctx.crop_rect[2], ctx.crop_rect[3])
-        result = result.resize(target_size, Image.Resampling.BILINEAR)
-
-    # Resize topo base to match result for current blend
-    if topo_base.size != result.size:
-        topo_base = topo_base.resize(result.size, Image.Resampling.BILINEAR)
-
-    # Blend
-    blend_alpha = 1.0 - ctx.settings.radio_horizon_overlay_alpha
-    topo_base = topo_base.convert('L').convert('RGBA')
-    result = result.convert('RGBA')
-    # Сохраняем слой покрытия до blend для интерактивной альфы
-    ctx.rh_cache_coverage = result.copy()
-    result = Image.blend(topo_base, result, blend_alpha)
-
-    del topo_base
-    gc.collect()
+    # Shared post-coverage block — numpy / cv2 replacement for the old
+    # PIL .resize + .convert + .blend chain, plus DEM-size cache halving.
+    # Same wins as radio_horizon: ~−0.6 s post-coverage, ~−0.5 s save.
+    result = _blend_coverage_with_topo(
+        ctx, result, topo_base, 'radar_coverage'
+    )
 
     logger.info('Карта зоны обнаружения РЛС построена')
     return result

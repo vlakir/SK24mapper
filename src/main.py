@@ -7,6 +7,16 @@ import shutil
 import sys
 from pathlib import Path
 
+# Limit glibc per-thread malloc arenas BEFORE any C extension (numpy / cv2 /
+# PIL) is imported, and BEFORE the persistent worker is spawned. Default on
+# 12-core machines is 8 × CPUs = 96 arenas, each reserving its own VMS pool;
+# during a SATELLITE z=16 retina build this inflates VMS post-build to
+# ~6 GB and stops the 2nd build dead with MemoryError under RLIMIT_AS.
+# MALLOC_ARENA_MAX=2 cuts post-build VMS to ~4.4 GB (and RSS to ~1.3 GB)
+# without measurable throughput cost. Honour an existing env if the user
+# already set it.
+os.environ.setdefault('MALLOC_ARENA_MAX', '2')
+
 from PySide6.QtCore import QLocale, QtMsgType, qInstallMessageHandler
 from PySide6.QtGui import QIcon
 
@@ -20,15 +30,22 @@ logger = logging.getLogger(__name__)
 
 
 class _FsyncFileHandler(logging.FileHandler):
-    """FileHandler that flushes + fsyncs after every record — survives OOM/crash."""
+    """
+    FileHandler that flushes after every record.
+
+    Previously also called os.fsync() per record — that gave the bulk of
+    "log writes are slow" overhead (~10-15ms each on SSD). flush() alone
+    pushes data to the kernel which survives SIGKILL/MemoryError/Python
+    crashes; only sudden power loss or kernel panic would lose recent
+    lines. For application debugging that's enough.
+    """
 
     def emit(self, record: logging.LogRecord) -> None:
         super().emit(record)
         try:
             self.stream.flush()
-            os.fsync(self.stream.fileno())
         except Exception:
-            logger.debug('fsync failed for log file', exc_info=True)
+            logger.debug('flush failed for log file', exc_info=True)
 
 
 def setup_logging() -> tuple[Path, Path]:
@@ -78,9 +95,13 @@ def setup_logging() -> tuple[Path, Path]:
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / 'mil_mapper.log'
 
+    # Лог открываем в append-режиме: при OOM-падении worker'а / GUI
+    # Vladimir перезапускает приложение немедленно — с mode='w' crash-лог
+    # терялся (см. след. сессию = 43 строки чистого старта без NSU).
+    # Каждый запуск помечается явным баннером ниже.
     handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
     if LOG_FSYNC_TO_FILE:
-        handlers.append(_FsyncFileHandler(str(log_file), mode='w', encoding='utf-8'))
+        handlers.append(_FsyncFileHandler(str(log_file), mode='a', encoding='utf-8'))
 
     logging.basicConfig(
         level=logging.INFO,
@@ -184,42 +205,46 @@ def _check_system_memory() -> bool:
 
 def _set_memory_limit() -> None:
     """
-    Set process memory limit via RLIMIT_AS (Linux only).
+    Set GUI process memory limit via RLIMIT_AS (Linux only).
 
-    При превышении лимита malloc/mmap возвращают ENOMEM →
-    Python бросает MemoryError вместо того чтобы OOM killer
-    убивал процесс (или вешал всю систему).
+    Cap = MEMORY_RLIMIT_RATIO × RAM (NOT RAM + swap). The old
+    (RAM + swap) × 0.85 formula allowed the GUI to address ~14.8 GB
+    virtual on a 13 GB RAM + 4 GB swap system — meaning a runaway
+    leak could drag the kernel into thrashing swap and trigger
+    system-wide OOM that took the IDE down with us. Bounding to a
+    fraction of physical RAM ensures we MemoryError inside our own
+    process long before the system as a whole is starved.
 
-    RLIMIT_AS ограничивает virtual address space, а не physical RAM.
-    Virtual AS включает mmap'd файлы, shared libraries, thread stacks —
-    они не расходуют физическую RAM. Поэтому лимит считается от
-    (RAM + swap) * ratio, а не от RAM * ratio.
+    The worker process gets its own (lower) limit from
+    _set_child_memory_limit; together the two processes are bounded
+    to leave guaranteed headroom for IDE / OS / page cache.
     """
     try:
         import resource
 
         import psutil
     except ImportError:
-        return  # Windows или нет psutil — пропускаем
+        return
 
     mem = psutil.virtual_memory()
     swap = psutil.swap_memory()
-    # Virtual address space лимит: RAM + swap (не только RAM)
-    total_bytes = mem.total + swap.total
-    limit_bytes = int(total_bytes * MEMORY_RLIMIT_RATIO)
+    # RAM-only cap (NOT RAM+swap): MemoryError must fire inside this
+    # process before physical RAM is exhausted, so the IDE keeps working.
+    limit_bytes = int(mem.total * MEMORY_RLIMIT_RATIO)
 
     try:
         _soft, hard = resource.getrlimit(resource.RLIMIT_AS)
-        # Не повышаем выше текущего hard limit (если он уже установлен)
         if hard != resource.RLIM_INFINITY:
             limit_bytes = min(limit_bytes, hard)
         resource.setrlimit(resource.RLIMIT_AS, (limit_bytes, limit_bytes))
         logger.info(
-            'RLIMIT_AS set to %.0f MB (RAM=%.0f MB + swap=%.0f MB, ratio=%.0f%%)',
+            'RLIMIT_AS set to %.0f MB (RAM=%.0f MB × ratio=%.2f, reserve '
+            '~%.0f MB for IDE/OS; swap=%.0f MB not counted in limit)',
             limit_bytes / (1024 * 1024),
             mem.total / (1024 * 1024),
+            MEMORY_RLIMIT_RATIO,
+            (mem.total - limit_bytes) / (1024 * 1024),
             swap.total / (1024 * 1024),
-            MEMORY_RLIMIT_RATIO * 100,
         )
     except (ValueError, OSError) as e:
         logger.warning('Failed to set RLIMIT_AS: %s', e)
@@ -228,7 +253,9 @@ def _set_memory_limit() -> None:
 def main() -> int:
     """Main application entry point."""
     appdata_base, local_base = setup_logging()
-    logger.info('Starting Mil Mapper 2.0')
+    logger.info('=' * 72)
+    logger.info('Starting Mil Mapper 2.0 (pid=%d)', os.getpid())
+    logger.info('=' * 72)
 
     _set_memory_limit()
 

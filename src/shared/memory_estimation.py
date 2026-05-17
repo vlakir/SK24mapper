@@ -100,6 +100,41 @@ def get_available_memory_mb() -> float:
         return 0.0
 
 
+def _get_worker_memory_budget_mb() -> float:
+    """
+    Стабильный бюджет = total_RAM × 0.50.
+
+    Раньше budget = `available × safety_ratio − min_free_mb`, что
+    давало нестабильный результат между билдами: при росте кэша между
+    билдами `available` падает, бюджет следует за ним, и
+    choose_safe_zoom неожиданно ронял zoom 18→15 на повторном
+    LINK_PROFILE (image 2101² вместо 8404² при тех же параметрах —
+    «картинка стала крошечной»).
+
+    Прошлая попытка использовать `total × RLIMIT_RATIO × SAFETY` (=
+    ~80% от total) пропускала z=18 (peak~7.4GB) — без RLIMIT_AS в
+    perf_loop тот peak гарантированно срывал linux OOM-killer на 13GB
+    машине.
+
+    Сейчас: 50 % от physical RAM — безопасная середина:
+      * Под RLIMIT_AS = 70 % worker никогда не выйдет за бюджет.
+      * Без RLIMIT_AS (perf_loop / тесты) остаётся +50 % RAM на
+        kernel, GUI и transient peaks при rotate/contour.
+      * Не зависит от текущего `available`, поэтому повторные билды
+        одних и тех же параметров дают один и тот же zoom.
+
+    Возвращает 0 при отсутствии psutil — тогда вызов trust'ит
+    desired_zoom.
+    """
+    try:
+        import psutil
+
+        total_mb = psutil.virtual_memory().total / _MB
+        return total_mb * 0.50
+    except Exception:
+        return 0.0
+
+
 def choose_safe_zoom(
     center_lat: float,
     width_m: float,
@@ -113,13 +148,13 @@ def choose_safe_zoom(
     min_free_mb: float = MEMORY_MIN_FREE_MB,
 ) -> tuple[int, dict]:
     """
-    Choose maximum zoom that fits both pixel limit and available RAM.
+    Choose maximum zoom that fits both pixel limit and worker RLIMIT_AS budget.
 
     Returns (zoom, info_dict) where info_dict contains memory estimates
     and whether zoom was reduced.
     """
     available_mb = get_available_memory_mb()
-    memory_budget_mb = available_mb * safety_ratio - min_free_mb
+    memory_budget_mb = _get_worker_memory_budget_mb()
 
     zoom = desired_zoom
     while zoom >= 0:
@@ -151,8 +186,8 @@ def choose_safe_zoom(
             is_dem=is_dem,
         )
 
-        # If psutil unavailable (available_mb == 0), skip memory check
-        if available_mb > 0 and mem_est['peak_mb'] > memory_budget_mb:
+        # If psutil unavailable (memory_budget_mb == 0), skip memory check
+        if memory_budget_mb > 0 and mem_est['peak_mb'] > memory_budget_mb:
             logger.info(
                 'Zoom %d: peak ~%.0f MB > budget ~%.0f MB, снижаем',
                 zoom,

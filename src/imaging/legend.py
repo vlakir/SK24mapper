@@ -2,6 +2,7 @@
 
 import logging
 
+import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 from geo.topography import meters_per_pixel
@@ -240,76 +241,87 @@ def draw_elevation_legend(
         bg_y1 += shift_y
         bg_y2 += shift_y
 
-    # Рисуем фон через альфа-композитинг
-    if img.mode != 'RGBA':
-        # Создаём временное RGBA изображение для наложения фона
-        temp_rgba = img.convert('RGBA')
-        # Создаём слой с фоном
-        bg_overlay = Image.new('RGBA', img.size, (0, 0, 0, 0))
-        bg_draw = ImageDraw.Draw(bg_overlay)
-        bg_draw.rectangle(
-            [bg_x1, bg_y1, bg_x2, bg_y2],
-            fill=LEGEND_BACKGROUND_COLOR,
+    import time as _legend_time
+    _sub_t0 = _legend_time.monotonic()
+    _subs: list[tuple[str, float]] = []
+
+    def _mark(label: str) -> None:
+        nonlocal _sub_t0
+        now = _legend_time.monotonic()
+        _subs.append((label, now - _sub_t0))
+        _sub_t0 = now
+
+    _mark('setup')
+
+    # Рисуем полупрозрачный фон только в области легенды.
+    #
+    # Раньше создавался полноразмерный RGBA-оверлей и alpha_composite по
+    # всему изображению (на 9580² карты это ~600ms на фон одного маленького
+    # прямоугольника в углу!). Теперь:
+    #   1) clamp region до границ изображения,
+    #   2) crop кусок img (~800×400 px),
+    #   3) накладываем полупрозрачную заливку на этот crop,
+    #   4) paste обратно по координатам.
+    # Для 9580² карты ускорение ~0.6s → ~0.01s — bg-rect занимает ~1% пикселей.
+    bg_region = (
+        max(0, bg_x1),
+        max(0, bg_y1),
+        min(w, bg_x2),
+        min(h, bg_y2),
+    )
+    rx1, ry1, rx2, ry2 = bg_region
+    if rx2 > rx1 and ry2 > ry1:
+        bg_crop = img.crop(bg_region)
+        if bg_crop.mode != 'RGBA':
+            bg_crop_rgba = bg_crop.convert('RGBA')
+            bg_crop.close()
+            bg_crop = bg_crop_rgba
+        overlay_small = Image.new(
+            'RGBA', (rx2 - rx1, ry2 - ry1), LEGEND_BACKGROUND_COLOR
         )
-        # Накладываем фон — free intermediates eagerly
-        composited = Image.alpha_composite(temp_rgba, bg_overlay)
-        temp_rgba.close()
-        del temp_rgba
-        bg_overlay.close()
-        del bg_overlay
-        # Конвертируем обратно в RGB и обновляем исходное изображение
-        img_rgb = composited.convert('RGB')
-        composited.close()
-        del composited
-        img.paste(img_rgb)
-        img_rgb.close()
-        del img_rgb
-        # Обновляем draw object для дальнейшего рисования
-        draw = ImageDraw.Draw(img)
-    else:
-        # Изображение уже в RGBA — рисуем фон напрямую через альфа-композитинг
-        bg_overlay = Image.new('RGBA', img.size, (0, 0, 0, 0))
-        bg_draw = ImageDraw.Draw(bg_overlay)
-        bg_draw.rectangle(
-            [bg_x1, bg_y1, bg_x2, bg_y2],
-            fill=LEGEND_BACKGROUND_COLOR,
+        bg_blended = Image.alpha_composite(bg_crop, overlay_small)
+        bg_crop.close()
+        overlay_small.close()
+        if img.mode == 'RGB':
+            bg_paste = bg_blended.convert('RGB')
+            bg_blended.close()
+            img.paste(bg_paste, (rx1, ry1))
+            bg_paste.close()
+        else:
+            img.paste(bg_blended, (rx1, ry1))
+            bg_blended.close()
+    # Обновляем draw object для дальнейшего рисования
+    draw = ImageDraw.Draw(img)
+    _mark('background')
+
+    # Рисуем цветовую полосу одним vectorized paste вместо 600-900
+    # PIL.line() вызовов в Python-loop'е (на адаптивной 10%-высоте
+    # карты при mpp=0.78 м/px legend_height = 800+ строк = ~250 ms
+    # только на overhead Python→PIL→C на каждой линии).
+    #
+    # np.interp делает кусочно-линейную интерполяцию по color_ramp
+    # для всех y-позиций сразу, отдельно для каждого канала RGB.
+    # Результат — `column` shape (H, 3); broadcast в (H, W, 3) даёт
+    # gradient без копирования по width-оси. ascontiguousarray
+    # материализует один раз для Image.fromarray.
+    if legend_height > 0 and legend_width > 0:
+        ts_desc = (
+            1.0 - np.arange(legend_height, dtype=np.float64)
+            / max(1, legend_height - 1)
         )
-        # Накладываем фон на исходное RGBA изображение
-        composited = Image.alpha_composite(img, bg_overlay)
-        bg_overlay.close()
-        del bg_overlay
-        img.paste(composited)
-        composited.close()
-        del composited
-        # Обновляем draw object для дальнейшего рисования
-        draw = ImageDraw.Draw(img)
-
-    # Рисуем цветовую полосу (снизу вверх: от низких высот к высоким)
-    for i in range(legend_height):
-        # t идёт от 1.0 (вверху) до 0.0 (внизу) - высокие высоты сверху
-        t = 1.0 - (i / (legend_height - 1)) if legend_height > 1 else 0.0
-
-        # Найти цвет в палитре для данного t
-        color = None
-        for j in range(1, len(color_ramp)):
-            t0, c0 = color_ramp[j - 1]
-            t1, c1 = color_ramp[j]
-            if t <= t1 or j == len(color_ramp) - 1:
-                # Линейная интерполяция
-                local = 0.0 if t1 == t0 else (t - t0) / (t1 - t0)
-                r = int(c0[0] + (c1[0] - c0[0]) * local)
-                g = int(c0[1] + (c1[1] - c0[1]) * local)
-                b = int(c0[2] + (c1[2] - c0[2]) * local)
-                color = (r, g, b)
-                break
-
-        if color:
-            y_pos = legend_y + i
-            draw.line(
-                [(legend_x, y_pos), (legend_x + legend_width, y_pos)],
-                fill=color,
-                width=1,
-            )
+        ramp_ts = np.array([t for t, _ in color_ramp], dtype=np.float64)
+        ramp_rgb = np.array([rgb for _, rgb in color_ramp], dtype=np.float64)
+        channels = [
+            np.interp(ts_desc, ramp_ts, ramp_rgb[:, c]) for c in range(3)
+        ]
+        column = np.clip(np.stack(channels, axis=-1), 0, 255).astype(np.uint8)
+        gradient = np.broadcast_to(
+            column[:, None, :], (legend_height, legend_width, 3),
+        )
+        gradient_img = Image.fromarray(np.ascontiguousarray(gradient), 'RGB')
+        img.paste(gradient_img, (legend_x, legend_y))
+        gradient_img.close()
+    _mark('colorbar')
 
     # Рисуем рамку вокруг цветовой полосы
     border_width_px = max(1, round(LEGEND_BORDER_WIDTH_M * ppm))
@@ -318,6 +330,7 @@ def draw_elevation_legend(
         outline=(0, 0, 0),
         width=border_width_px,
     )
+    _mark('border')
 
     # Добавляем заголовок легенды
     if title_lines:
@@ -334,6 +347,7 @@ def draw_elevation_legend(
                 outline_width=max(1, round(LEGEND_TEXT_OUTLINE_WIDTH_M * ppm)),
                 anchor='lt',
             )
+    _mark('title')
 
     # Рисуем метки высоты
     for i in range(LEGEND_NUM_LABELS):
@@ -358,6 +372,11 @@ def draw_elevation_legend(
             outline_width=max(1, round(LEGEND_TEXT_OUTLINE_WIDTH_M * ppm)),
             anchor='lm',
         )
+    _mark('labels')
+    logger.info(
+        'legend sub-timings: %s',
+        ' '.join(f'{name}={t * 1000:.0f}ms' for name, t in _subs),
+    )
 
     # Возвращаем границы легенды с отступом для разрыва линий сетки
     # Используем увеличенные размеры фона плюс дополнительный отступ

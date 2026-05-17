@@ -5,6 +5,7 @@ with LOS and Fresnel zones.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 from typing import TYPE_CHECKING
@@ -625,8 +626,6 @@ async def _extract_profile_from_tiles(
     only the tiles intersected by the A→B line (typically 5-20 tiles).
     Memory usage: a few MB instead of hundreds.
     """
-    import asyncio
-
     from elevation.provider import ElevationTileProvider
     from infrastructure.http.client import resolve_cache_dir
 
@@ -709,12 +708,7 @@ async def process_link_profile(ctx: MapDownloadContext) -> Image.Image:
     logger.info('Профиль радиолинии: старт')
     crash_log('process_link_profile: START')
 
-    # 1. Load hybrid base
-    crash_log('process_link_profile: _load_topo START (HYBRID)')
-    base = await _load_topo(ctx, label='профиля радиолинии', style=MapType.HYBRID)
-    crash_log(f'process_link_profile: _load_topo DONE, base={base.size}')
-
-    # 2. Convert link point A and link point B to WGS84
+    # 1. Convert link point A and B to WGS84 (cheap CPU, needed for profile).
     crash_log(
         f'process_link_profile: RAW settings: '
         f'A_x={ctx.settings.link_point_a_x}, A_y={ctx.settings.link_point_a_y}, '
@@ -742,15 +736,34 @@ async def process_link_profile(ctx: MapDownloadContext) -> Image.Image:
         f'B=({lat_b_wgs:.4f},{lng_b_wgs:.4f})'
     )
 
-    # 3. Extract terrain profile — loads only DEM tiles along A→B (not full map!)
-    crash_log('process_link_profile: _extract_profile START')
-    profile = await _extract_profile_from_tiles(
-        ctx,
-        lat_a_wgs,
-        lng_a_wgs,
-        lat_b_wgs,
-        lng_b_wgs,
+    # 2. Load hybrid base AND extract A→B profile in parallel.
+    #
+    # Two independent tile fetches:
+    #   - base: HYBRID style tiles for the whole map (~360 tiles at z=15
+    #     via streaming-assembly + multi-thread JPEG decode, ~1.5-3s wall)
+    #   - profile: 5-20 Terrain-RGB DEM tiles along the A→B line,
+    #     hitting a different Mapbox endpoint and a separate cache key
+    #     (~0.3-1s wall, mostly disk-cache reads).
+    # No data dependency between them. asyncio.gather lets the topo fetch
+    # overlap with the DEM tile fetch + scipy.ndimage.map_coordinates
+    # interpolation; ~0.3-1s wall-clock saved per build.
+    crash_log('process_link_profile: launching base + profile in parallel')
+    base_task = asyncio.create_task(
+        _load_topo(ctx, label='профиля радиолинии', style=MapType.HYBRID)
     )
+    profile_task = asyncio.create_task(
+        _extract_profile_from_tiles(
+            ctx, lat_a_wgs, lng_a_wgs, lat_b_wgs, lng_b_wgs,
+        )
+    )
+    try:
+        base = await base_task
+    except BaseException:
+        profile_task.cancel()
+        raise
+    crash_log(f'process_link_profile: _load_topo DONE, base={base.size}')
+
+    profile = await profile_task
     crash_log(
         f'process_link_profile: _extract_profile DONE, '
         f'dist={profile["total_distance_m"]:.0f}m'

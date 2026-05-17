@@ -22,6 +22,9 @@ async def test_process_radio_horizon_basic():
     ctx.settings.radio_max_height_m = 50.0
     ctx.settings.radio_refraction_k = 1.33
     ctx.settings.radio_unreachable_color = (0, 0, 0)
+    ctx.settings.radio_horizon_overlay_alpha = 0.5
+    ctx.settings.antenna_height_m = 10.0
+    ctx.settings.max_flight_height_m = 500.0
     
     ctx.tiles = [(10, 20)]
     ctx.tiles_x = 1

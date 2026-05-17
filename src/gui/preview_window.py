@@ -7,8 +7,10 @@ import logging
 import math
 import time
 
+import cv2
+import numpy as np
 from PIL import Image
-from PySide6.QtCore import QEventLoop, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QEventLoop, QRectF, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import (
     QBrush,
     QColor,
@@ -38,12 +40,110 @@ from gui.matrix_rain import MatrixRainWidget
 from shared.constants import (
     CONTROL_POINT_SIZE_M,
     LOADING_FADE_IN_MS,
+    PREVIEW_MAX_DIM,
     PREVIEW_MIN_LINE_LENGTH_FOR_LABEL,
     PREVIEW_ROTATION_ANGLE,
     PREVIEW_UPRIGHT_TEXT_ANGLE_LIMIT,
 )
 
 logger = logging.getLogger(__name__)
+
+
+class _SetImageWorker(QThread):
+    """
+    Background QThread that turns a PIL image into QImage(s) ready for
+    QPixmap.fromImage on the main thread.
+
+    Two-pass pipeline:
+      Stage 1 (fast)  — cv2.resize INTER_AREA → PREVIEW_MAX_DIM along
+                        long side. Emit with is_final=False so main can
+                        display a small QPixmap immediately and fade out
+                        the loading overlay (~30 ms QPixmap on 4k²).
+      Stage 2 (refinement) — full-resolution buffer. Emit with
+                        is_final=True so main can setPixmap() on the
+                        same image_item, swapping the small preview for
+                        the crisp full-res view without any loading
+                        overlay or visible gap.
+
+    Buffers (small, full) are kept alive on the instance until the
+    receiving slot has run QPixmap.fromImage (deep-copies into Qt's
+    pixmap cache). After the final swap the caller releases them.
+
+    Each invocation carries a sequence number `seq` so the main thread
+    can ignore late stage-2 emits from a worker whose build was
+    superseded by a newer set_image() call.
+    """
+
+    finished_qimage = Signal(QImage, bool, int)  # (qimage, is_final, seq)
+
+    def __init__(
+        self, pil_image: Image.Image, max_dim: int | None,
+        seq: int, parent: object | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._pil = pil_image
+        self._max_dim = max_dim or 0
+        self._seq = seq
+        self._small_buffer: np.ndarray | None = None
+        self._full_buffer: np.ndarray | None = None
+
+    def run(self) -> None:
+        arr = np.asarray(self._pil)
+        h, w = arr.shape[:2]
+        long_side = max(h, w)
+        downsample_needed = (
+            self._max_dim > 0 and long_side > self._max_dim
+        )
+
+        # Stage 1: small preview (or pass-through if image is already
+        # under PREVIEW_MAX_DIM).
+        if downsample_needed:
+            scale = self._max_dim / long_side
+            new_w = max(1, int(round(w * scale)))
+            new_h = max(1, int(round(h * scale)))
+            t0 = time.monotonic()
+            small = cv2.resize(
+                arr, (new_w, new_h), interpolation=cv2.INTER_AREA,
+            )
+            logger.info(
+                'SetImageWorker stage1 resize %d×%d → %d×%d in %.3fs',
+                w, h, new_w, new_h, time.monotonic() - t0,
+            )
+            self._small_buffer = small
+            sh, sw = small.shape[:2]
+            qimg_small = QImage(
+                small.data, sw, sh, small.strides[0],
+                QImage.Format.Format_RGB888,
+            )
+            self.finished_qimage.emit(qimg_small, False, self._seq)
+        else:
+            # No downsample needed — there will be only one emit at
+            # full size below. Don't emit a stage-1 here.
+            pass
+
+        # Stage 2 cancellation point: main thread may have called
+        # requestInterruption() after a user input (right-click, drag,
+        # …) to skip the expensive full-res copy + setPixmap. Bail out
+        # before the np.ascontiguousarray.copy() — saves ~300 ms of
+        # memcpy AND prevents the setPixmap-on-16k blocking that would
+        # otherwise lag the user's status messages.
+        if self.isInterruptionRequested():
+            return
+
+        # Stage 2: full resolution. Always emit (in pass-through case
+        # this IS the first and only emit).
+        t1 = time.monotonic()
+        full = np.ascontiguousarray(arr).copy()
+        self._full_buffer = full
+        qimg_full = QImage(
+            full.data, w, h, full.strides[0],
+            QImage.Format.Format_RGB888,
+        )
+        logger.info(
+            'SetImageWorker stage2 full %d×%d ready in %.3fs',
+            w, h, time.monotonic() - t1,
+        )
+        self.finished_qimage.emit(qimg_full, True, self._seq)
 
 
 class OptimizedImageView(QGraphicsView):
@@ -69,6 +169,20 @@ class OptimizedImageView(QGraphicsView):
         # Image item for display
         self._image_item: QGraphicsPixmapItem | None = None
         self._original_image: Image.Image | None = None
+
+        # Two-pass set_image: each call increments this seq. The worker
+        # captures it on construction; late stage-2 emits from a superseded
+        # worker (newer set_image started before old stage-2 arrived) are
+        # ignored by comparing against the current seq.
+        self._set_image_seq = 0
+        self._active_set_image_worker: _SetImageWorker | None = None
+        # When the user triggers a new build (right-click on NSU, drag,
+        # etc.) we may have a pending Stage-2 setPixmap from the previous
+        # build sitting in the event queue — running it would block main
+        # thread for ~300-500 ms on 16k² images, lagging the user's input.
+        # cancel_pending_full_swap() sets this flag; _on_full_qimage_ready
+        # checks it and skips the heavy QPixmap.fromImage + setPixmap.
+        self._stage2_swap_cancelled = False
 
         # Prevent concurrent wheel event processing
         self._processing_wheel_event = False
@@ -172,14 +286,23 @@ class OptimizedImageView(QGraphicsView):
         Set the image to display with fixed rotation to improve thin line visibility.
 
         Keeps current zoom/center if an image is already displayed.
+
+        Loading-overlay timing: we DON'T fade out the matrix-rain loading
+        overlay before building the new QPixmap. PIL.tobytes + QImage +
+        QPixmap.fromImage block the main thread for ~1.5 s on 16k²
+        images, and on some setups (Linux X11/Wayland compositing under
+        a dark Qt theme) the GUI doesn't actually paint scene changes
+        until the main thread returns to the event loop. If we hid the
+        overlay first, Qt would queue the hide+repaint but never deliver
+        it until set_image returned, so the user kept seeing the
+        last-painted frame of the overlay (often nearly-transparent
+        matrix-rain over a dark theme background → "black flash").
+        Instead, leave the overlay shown — even frozen — across the
+        whole pixmap-build window, then fade it out only AFTER the new
+        image is on screen.
         """
         t0 = time.monotonic()
         was_loading = self._loading_overlay.isVisible()
-        if was_loading:
-            self._fade_out_loading_sync()
-        else:
-            self.stop_loading()
-        t_fade_out = time.monotonic()
         try:
             self._updating_image = True
 
@@ -206,65 +329,175 @@ class OptimizedImageView(QGraphicsView):
 
             width, height = pil_image.size
 
-            # Free old scene resources BEFORE allocating new QPixmap to avoid
-            # holding two full-size pixmaps simultaneously (~1GB each for 16k images)
+            # Don't clear the scene yet — keep the OLD pixmap visible while
+            # we build the new one (PIL.tobytes + QImage + QPixmap.fromImage
+            # cost 0.3–0.5 s on 16k² images). Clearing first leaves the
+            # viewport showing Qt's default black background, which is what
+            # users saw as a brief black flash on the final preview step.
+            #
+            # Free the cheap overlay items now (labels, crosses, lines —
+            # they don't pin large pixmap memory), then keep building the
+            # new pixmap. The old image is removed AFTER the new one is
+            # added, so the scene is never empty.
             self._fade_in_timer.stop()
-            self._scene.clear()
-            self._fade_rect = None
-            self._cp_cross_items = []
-            self._cp_line_item = None
-            self._cp_label_item = None
-            self._azimuth_line_item = None
-            self._azimuth_label_item = None
-            self._sector_line_items = []
-            self._nsu_marker_items = []
-            self._nsu_hide_items = []
-            self._drag_marker_items = []
-            self._drag_line_item = None
-            self._drag_other_point = None
-            self._inset_mask_item = None
+            old_image_item = self._image_item
             self._image_item = None
+            self._original_image = None
+            self._qimage_bytes = None
 
+            # Only the fade-in rect needs proactive removal here — it's an
+            # internal display-only artefact, not user-meaningful overlay.
+            # Other overlay items (cp_cross, cp_line, NSU markers, link
+            # line, drag markers, sector lines, etc.) MUST be left alone:
+            # they're managed by callers in view.py and represent things
+            # the user just interacted with (e.g. an NSU cross they just
+            # right-clicked into existence and that should morph straight
+            # into the triangle on the new map). Clearing them here made
+            # them blink out during the build window and only return as
+            # triangles after the recompute finished — the bug user
+            # reported. Callers do their own cleanup via
+            # clear_control_point_markers / clear_nsu_markers /
+            # clear_drag_feedback / set_draggable_points({}) when they
+            # actually need to drop stale overlay state (e.g. map-type
+            # change).
+            with contextlib.suppress(Exception):
+                if self._fade_rect is not None:
+                    self._scene.removeItem(self._fade_rect)
+            self._fade_rect = None
+
+            # Drop the stale-preview inset mask if it was painted before
+            # this build. _dim_stale_preview() adds a semi-transparent
+            # grey QGraphicsRectItem поверх inset-зоны при нажатии
+            # «Скачать», чтобы пользователь видел что текущий inset уже
+            # неактуален во время build. Без явного hide здесь mask
+            # оставался в scene и накладывался на свежий composite —
+            # inset выглядел «слегка затемнённым и далее всё время
+            # остаётся таким» (Vladimir, LINK_PROFILE second build).
+            self._hide_inset_mask()
+
+            # Off-main two-pass pipeline:
+            #
+            #  Stage 1 (synchronous wait via QEventLoop) — worker builds
+            #  a downsampled preview at PREVIEW_MAX_DIM. We block here
+            #  (Qt event loop active → loading anim keeps playing) until
+            #  Stage 1 arrives. QPixmap.fromImage on the 4k² result is
+            #  ~30 ms, so the user sees a usable map almost immediately.
+            #
+            #  Stage 2 (asynchronous swap) — same worker continues in
+            #  the background and produces the full-resolution QImage.
+            #  The receiving slot _on_full_qimage_ready calls
+            #  self._image_item.setPixmap(full), which atomically
+            #  swaps the displayed pixmap for the crisp version. No
+            #  loading overlay, no flash; the visual is a smooth
+            #  refinement.
+            #
+            # The worker carries a sequence number; late Stage-2 emits
+            # from a superseded build (newer set_image already running)
+            # are ignored.
+            self._set_image_seq += 1
+            seq = self._set_image_seq
+            self._stage2_swap_cancelled = False
             t1 = time.monotonic()
-            image_data = pil_image.tobytes()
-            t2 = time.monotonic()
-            # Keep a reference to the backing bytes to prevent premature GC
-            self._qimage_bytes = image_data
-            qimage = QImage(
-                self._qimage_bytes,
-                width,
-                height,
-                width * 3,
-                QImage.Format.Format_RGB888,
+            qimage_holder: list[QImage] = []
+            loop = QEventLoop()
+            worker = _SetImageWorker(
+                pil_image, PREVIEW_MAX_DIM, seq=seq, parent=self,
             )
+
+            def _on_qimage(qimg: QImage, is_final: bool, emit_seq: int) -> None:
+                # First emit always feeds the synchronous wait below —
+                # whether it's Stage 1 (small) or, for already-small
+                # source images, the single is_final emit. Any later
+                # emit (the Stage 2 swap) routes through the async
+                # slot.
+                if not qimage_holder:
+                    qimage_holder.append(qimg)
+                    loop.quit()
+                else:
+                    self._on_full_qimage_ready(qimg, emit_seq)
+
+            worker.finished_qimage.connect(_on_qimage)
+            self._active_set_image_worker = worker
+            worker.start()
+            # Watchdog timeout: если _SetImageWorker не emit'нет
+            # finished_qimage за 5 секунд (worker дёшев, реальное время
+            # на 8404² ~50 ms), главный event loop возвращается без
+            # qimage'а — и мы graceful'но возвращаемся вместо вечного
+            # ожидания. Vladimir поймал такое зависание в режиме НСУ:
+            # после нескольких добавлений точек handler упёрся в
+            # loop.exec(), индикатор статус-бара застрял, UI был
+            # blocked 3 минуты пока не закрыл окно.
+            QTimer.singleShot(5000, loop.quit)
+            loop.exec()
+            if not qimage_holder:
+                # Worker не emit'нул сигнал в окно 5s (или приложение
+                # закрывается — main event loop остановился раньше).
+                # Логируем и тихо выходим: caller'ы не critical-path,
+                # GUI всё ещё функционален.
+                logger.warning(
+                    'set_image: watchdog timeout / nested loop exit '
+                    '(_SetImageWorker did not emit finished_qimage)'
+                )
+                return
+            qimage = qimage_holder[0]
             t3 = time.monotonic()
             qpixmap = QPixmap.fromImage(qimage)
             t4 = time.monotonic()
 
-            # Release backing memory — QPixmap owns a deep copy of pixel data
+            # Release Stage-1 small buffer — QPixmap.fromImage deep-
+            # copies pixel data into Qt's pixmap cache, so the numpy
+            # buffer that backed qimage is no longer needed.
             del qimage
+            worker._small_buffer = None  # noqa: SLF001
             self._qimage_bytes = None
             self._original_image = None
+            t2 = t3  # legacy log slot — tobytes is gone
 
-            # Add image to scene
+            # Add new pixmap first, THEN remove old. Z-order: addPixmap
+            # appends to scene → new item drawn on top of old one. Between
+            # addPixmap and removeItem the scene is never empty, so there
+            # is no black flash. Peak memory during this overlap is ~1×
+            # image size higher than `scene.clear()` first; for 16k² that's
+            # +864 MB transient on the GUI process.
             self._image_item = self._scene.addPixmap(qpixmap)
             self._image_item.setFlag(
                 QGraphicsPixmapItem.GraphicsItemFlag.ItemClipsChildrenToShape
             )
+            if old_image_item is not None:
+                with contextlib.suppress(Exception):
+                    self._scene.removeItem(old_image_item)
             t5 = time.monotonic()
 
-            # Apply fixed rotation to improve thin line visibility
+            # CRITICAL for click-to-coord correctness:
+            # The Stage-1 pixmap may be downsampled (e.g. 4 k from a 16 k
+            # source), but scene coordinates MUST match the full-resolution
+            # source pixel space — callers convert scene-clicks to
+            # image-pixels via the metadata's full size, not via
+            # pixmap.width(). Scale the item up so its bounding box in
+            # scene units equals the FULL source size (= `width` ×
+            # `height` here). Stage 2 will setPixmap(full) + setScale(1.0)
+            # so the bounding box stays the same: click coordinates are
+            # stable across the swap. Source resolution is preserved in
+            # `width, height` from pil_image.size at function entry.
+            pixmap_w = qpixmap.width()
+            stage1_scale = (
+                width / pixmap_w if pixmap_w > 0 and pixmap_w != width
+                else 1.0
+            )
+            transform = QTransform()
             if PREVIEW_ROTATION_ANGLE != 0:
-                transform = QTransform()
                 transform.rotate(PREVIEW_ROTATION_ANGLE)
-                self._image_item.setTransform(transform)
+            if stage1_scale != 1.0:
+                transform.scale(stage1_scale, stage1_scale)
+            self._image_item.setTransform(transform)
 
-                # Update scene rect to account for rotation
+            # Scene rect is the displayed extent of image_item in scene
+            # coordinates — i.e. full source size in both stages.
+            if PREVIEW_ROTATION_ANGLE != 0:
                 rotated_rect = transform.mapRect(qpixmap.rect())
                 self._scene.setSceneRect(rotated_rect)
             else:
-                # Set scene rect to image bounds
-                self._scene.setSceneRect(qpixmap.rect())
+                self._scene.setSceneRect(QRectF(0, 0, width, height))
 
             # Fit or restore transform
             if preserve_transform and current_transform is not None:
@@ -274,25 +507,151 @@ class OptimizedImageView(QGraphicsView):
             else:
                 self.fit_to_window()
 
+            # NOW that the new pixmap is on screen, fade out the loading
+            # overlay. The new image is already rendered behind it (Qt
+            # will composite in the next paint cycle once we yield),
+            # so the fade reveals the finished map directly — no black
+            # gap between overlay hide and map show.
+            t_fade_out_start = time.monotonic()
+            if was_loading:
+                self._fade_out_loading_sync()
+            else:
+                self.stop_loading()
+            t_fade_out = time.monotonic() - t_fade_out_start
+
             # Smooth fade-in when replacing the loading screen
             if was_loading:
                 self._start_fade_in()
 
             logger.info(
-                'set_image %dx%d: fade_out=%.3fs  tobytes=%.3fs  '
-                'QImage=%.3fs  QPixmap=%.3fs  scene=%.3fs  TOTAL=%.3fs',
+                'set_image %dx%d: tobytes=%.3fs  '
+                'QImage=%.3fs  QPixmap=%.3fs  scene=%.3fs  '
+                'fade_out=%.3fs  TOTAL=%.3fs',
                 width,
                 height,
-                t_fade_out - t0,
                 t2 - t1,
                 t3 - t2,
                 t4 - t3,
                 t5 - t4,
+                t_fade_out,
                 time.monotonic() - t0,
             )
 
         finally:
             self._updating_image = False
+
+    def cancel_pending_full_swap(self) -> None:
+        """
+        Skip any pending Stage-2 full-res setPixmap from a previous
+        build. Call this from user-input handlers that are about to
+        trigger a new build (right-click, drag start, etc.) — the
+        Stage-2 swap costs ~300-500 ms of blocking QPixmap.fromImage +
+        setPixmap on a 16k² image and would lag the user's response.
+
+        Both layers cooperate:
+          - worker.requestInterruption() so the Stage-2 copy in the
+            worker thread bails out before doing the 800 MB memcpy
+            (if it hasn't started yet);
+          - self._stage2_swap_cancelled so if the worker already
+            emitted finished_qimage(is_final=True) and the slot is
+            sitting in the event queue, the slot returns immediately
+            instead of running setPixmap.
+        """
+        if self._active_set_image_worker is not None:
+            with contextlib.suppress(Exception):
+                self._active_set_image_worker.requestInterruption()
+        self._stage2_swap_cancelled = True
+
+    def _on_full_qimage_ready(self, qimg: QImage, emit_seq: int) -> None:
+        """
+        Stage-2 slot for _SetImageWorker. Called via QueuedConnection on
+        the main thread.
+
+        Critically, this slot DOES NOT run the heavy QPixmap.fromImage +
+        setPixmap synchronously. Reason: Qt's event queue is FIFO, and
+        the user's right-click MouseRelease event is queued AFTER the
+        worker's finished_qimage emit — so by the time the click handler
+        gets to call cancel_pending_full_swap(), the slot is already
+        mid-setPixmap and the cancel arrives too late. The user feels
+        300-500 ms of lag between releasing the mouse and seeing the
+        status messages / recompute spinner.
+
+        Defer the heavy work to a QTimer.singleShot(0, ...): that posts
+        the do-swap callback to the END of the event queue. Click event
+        is now ahead of it, runs first, sets _stage2_swap_cancelled, and
+        the deferred swap bails out without doing any heavy work.
+
+        On an idle scene (no queued user input), the deferred swap fires
+        within ~one paint cycle — visually indistinguishable from the
+        previous sync behaviour.
+        """
+        # Stale emit: a newer set_image() superseded this build.
+        if emit_seq != self._set_image_seq:
+            return
+        # Already cancelled — release worker buffers without scheduling.
+        if self._stage2_swap_cancelled:
+            self._release_set_image_worker()
+            return
+        # Defer the actual swap so that any queued user input (mouse
+        # release, key press) processes first and can cancel us.
+        QTimer.singleShot(
+            0, lambda: self._do_stage2_swap(qimg, emit_seq),
+        )
+
+    def _do_stage2_swap(self, qimg: QImage, emit_seq: int) -> None:
+        """
+        Deferred body of _on_full_qimage_ready. Runs when the event
+        queue is otherwise empty (or when its singleShot turn comes up).
+        Bails out if the user cancelled in the interim.
+
+        Invariant: the image item's displayed extent in scene units is
+        the FULL source size in both stages — Stage 1 sets `setScale(
+        full_w/small_w)`; Stage 2 sets `setScale(1.0)`. The bounding box
+        stays identical, so scene → image-pixel conversions (right-
+        click → SK-42 coord, draggable point positions, etc.) give the
+        same answer in both stages.
+        """
+        if emit_seq != self._set_image_seq:
+            self._release_set_image_worker()
+            return
+        if self._stage2_swap_cancelled:
+            logger.info('set_image stage-2 swap cancelled by user input')
+            self._release_set_image_worker()
+            return
+        if self._image_item is None:
+            self._release_set_image_worker()
+            return
+        try:
+            old_pixmap_w = self._image_item.pixmap().width()
+            t0 = time.monotonic()
+            full_pixmap = QPixmap.fromImage(qimg)
+            t1 = time.monotonic()
+            new_pixmap_w = full_pixmap.width()
+            self._image_item.setPixmap(full_pixmap)
+            # Stage 2 has the full-res pixmap; revert to identity scale
+            # (the bounding box in scene coords is already `width` since
+            # Stage 1 scaled the small pixmap up to match).
+            t = QTransform()
+            if PREVIEW_ROTATION_ANGLE != 0:
+                t.rotate(PREVIEW_ROTATION_ANGLE)
+            self._image_item.setTransform(t)
+            logger.info(
+                'set_image stage-2 swap: pixmap %d → %d  '
+                'QPixmap=%.3fs  setPixmap=%.3fs',
+                old_pixmap_w, new_pixmap_w,
+                t1 - t0, time.monotonic() - t1,
+            )
+        finally:
+            self._release_set_image_worker()
+
+    def _release_set_image_worker(self) -> None:
+        """Drop the worker reference + free its numpy buffers."""
+        worker = self._active_set_image_worker
+        if worker is not None:
+            worker._small_buffer = None  # noqa: SLF001
+            worker._full_buffer = None  # noqa: SLF001
+            worker.deleteLater()
+            self._active_set_image_worker = None
 
     def clear(self) -> None:
         """Clear the preview area and release pixmap resources."""
@@ -849,26 +1208,86 @@ class OptimizedImageView(QGraphicsView):
         """
         Pre-render and cache QPixmap of the clean base map for instant swap on drag.
 
+        При MemoryError (тесный GUI VMS под RLIMIT_AS) функция тихо
+        логирует ошибку и оставляет существующий `_clean_base_pixmap`
+        как есть — drag покажет stale dim inset, но preview не
+        упадёт. Это лучше чем рушить весь _show_preview, который
+        зовёт нас.
+
         Args:
             pil_image: Clean base (map only, no overlay).
             full_image: Full composite (map + inset). Inset area is blended with grey.
 
         """
+        try:
+            self._set_clean_base_pixmap_impl(pil_image, full_image)
+        except MemoryError:
+            logger.exception(
+                'set_clean_base_pixmap: not enough memory — keeping stale _clean_base_pixmap',
+            )
+
+    def _set_clean_base_pixmap_impl(
+        self,
+        pil_image: Image.Image,
+        full_image: Image.Image | None = None,
+    ) -> None:
+        """Implementation; wrapped by set_clean_base_pixmap for MemoryError safety."""
+        # Streamed-chunk path. Pre-my-fix старая PIL-логика делала
+        # tobytes на extended 8404×10505 RGB → peak ~530 MB transient
+        # → MemoryError на тесном GUI RLIMIT_AS. Первый мой numpy-fix
+        # (5a5d7ce) тоже peak'ил ~530 MB т.к. np.asarray(full_image)
+        # внутри зовёт PIL.tobytes — рандомно валился, см. mil_mapper
+        # .log 23:36:33.
+        #
+        # Сейчас собираем canvas построчно через PIL.crop стрипами по
+        # ~1024 строк: tobytes-peak per-стрипа ~25 MB (= STRIPE_H × W ×
+        # 3 × 2 transient в b"".join). Net peak: canvas (265 MB, kept) +
+        # stripe (25 MB, transient) = ~290 MB вместо 530 MB.
+        #
+        # Если даже это не пройдёт по памяти — try/except MemoryError
+        # outside: dim-pixmap fall back на stale (drag покажет старый
+        # dim inset, но preview не упадёт).
+        STRIPE_H = 1024
         if pil_image.mode != 'RGB':
             pil_image = pil_image.convert('RGB')
         w, h = pil_image.size
         if full_image is not None and full_image.height > h:
-            # Blend inset portion with grey for semi-transparent mask effect
-            inset_region = full_image.crop((0, h, w, full_image.height)).convert('RGB')
-            grey = Image.new('RGB', inset_region.size, (128, 128, 128))
-            dimmed = Image.blend(inset_region, grey, alpha=0.55)
-            extended = Image.new('RGB', (w, full_image.height), (128, 128, 128))
-            extended.paste(pil_image, (0, 0))
-            extended.paste(dimmed, (0, h))
-            pil_image = extended
-            h = full_image.height
-        data = pil_image.tobytes()
-        qimg = QImage(data, w, h, w * 3, QImage.Format.Format_RGB888)
+            full_h = full_image.height
+            canvas = np.empty((full_h, w, 3), dtype=np.uint8)
+            # Top: clean map as-is, streamed.
+            for y0 in range(0, h, STRIPE_H):
+                y1 = min(y0 + STRIPE_H, h)
+                stripe = pil_image.crop((0, y0, w, y1))
+                canvas[y0:y1] = np.asarray(stripe)
+                stripe.close()
+            # Bottom: inset blended with mid-grey at alpha=0.55, streamed.
+            # blend formula matches PIL.Image.blend(inset, grey=128, 0.55):
+            #   out = inset*0.45 + 128*0.55 ≈ (inset*115 + 17_664) >> 8
+            need_convert = full_image.mode != 'RGB'
+            for y0 in range(h, full_h, STRIPE_H):
+                y1 = min(y0 + STRIPE_H, full_h)
+                stripe = full_image.crop((0, y0, w, y1))
+                if need_convert:
+                    rgb_stripe = stripe.convert('RGB')
+                    stripe.close()
+                    stripe = rgb_stripe
+                arr = np.asarray(stripe).astype(np.uint16)
+                canvas[y0:y1] = ((arr * 115 + 17_664) >> 8).astype(np.uint8)
+                stripe.close()
+            h = full_h
+            buffer = canvas
+        else:
+            buffer = np.asarray(pil_image)
+        # QImage takes the numpy buffer via Buffer Protocol (zero-copy);
+        # QPixmap.fromImage deep-copies into Qt's pixmap cache, so the
+        # numpy buffer can be released as soon as we return. bytes() copy
+        # was wasteful here — caused full +265 MB transient.
+        buffer = np.ascontiguousarray(buffer)
+        qimg = QImage(
+            buffer.data,
+            w, h, w * 3,
+            QImage.Format.Format_RGB888,
+        )
         self._clean_base_pixmap = QPixmap.fromImage(qimg)
 
     def _start_drag_feedback(self, point_id: str) -> None:
@@ -1037,11 +1456,31 @@ class OptimizedImageView(QGraphicsView):
         finally:
             self._fade_out_in_progress = False
         self._loading_overlay.stop()
+        # Lower the overlay below the viewport so even any stale frame Qt
+        # already buffered won't render on top of the scene.
+        self._loading_overlay.lower()
         self._loading_overlay.hide()
+        # Pump Qt events so the widget-state change from hide() actually
+        # propagates to the rendered viewport before the caller's
+        # tobytes/QPixmap block (~1.5 s on 16k² images) steals the main
+        # thread. A bare viewport().repaint() isn't enough — the loading
+        # overlay is a child of the viewport, and hide() only takes
+        # visible effect after Qt processes the widget-state event.
+        # processEvents flushes both the hide and the resulting paint.
+        from PySide6.QtWidgets import QApplication
+        QApplication.processEvents()
+        # Belt-and-braces: now that the overlay is logically out of the
+        # way, force an immediate scene paint so the old image is on the
+        # screen before tobytes() takes the thread.
+        self.viewport().repaint()
 
     def _start_fade_in(self, duration_ms: int = LOADING_FADE_IN_MS) -> None:
         """Add a black rect on top of the scene that dissolves to reveal the map."""
         self._remove_fade_rect()
+        if duration_ms <= 0:
+            # No fade — map is shown immediately, no overlay added at all.
+            self.fade_in_finished.emit()
+            return
         scene_rect = self._scene.sceneRect()
         self._fade_rect = self._scene.addRect(
             scene_rect,

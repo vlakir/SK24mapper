@@ -65,12 +65,17 @@ _AIOHTTP_CACHE_AVAILABLE = True
 
 
 # ─── Crash-safe log ───────────────────────────────────────────────────
-# Пишет в файл с fsync после каждой строки — переживёт OOM kill.
+# Пишет в файл с flush после каждой строки. Раньше делали os.fsync — но
+# это давало ~10-15ms на каждую запись (на сборке набегало 260-400ms).
+# Достаточно flush() — он переносит данные из user-space в kernel-space,
+# а ядро доберёт остальное. SIGKILL/MemoryError/Python crash не теряют
+# содержимое — только потеря питания или panic ядра. Для нашей задачи
+# (понять что упало) этого хватает с большим запасом.
 _CRASH_LOG_PATH = Path.home() / '.sk42_crash_log.txt'
 
 
 def crash_log(msg: str) -> None:
-    """Write one line to the crash-safe log file (fsync'd immediately)."""
+    """Write one line to the crash-safe log file (kernel-buffered)."""
     ts = time.strftime('%H:%M:%S')
     rss = '?'
     avail = '?'
@@ -85,7 +90,6 @@ def crash_log(msg: str) -> None:
         with _CRASH_LOG_PATH.open('a', encoding='utf-8') as f:
             f.write(line)
             f.flush()
-            os.fsync(f.fileno())
     except Exception:
         logger.debug('crash_log: failed to write log', exc_info=True)
 
@@ -98,7 +102,6 @@ def crash_log_reset() -> None:
                 f'=== SK42mapper crash log — {time.strftime("%Y-%m-%d %H:%M:%S")} ===\n'
             )
             f.flush()
-            os.fsync(f.fileno())
     except Exception:
         logger.debug('crash_log_reset: failed to reset log', exc_info=True)
 

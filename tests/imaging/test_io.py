@@ -37,20 +37,24 @@ class TestBuildSaveKwargs:
         kwargs = build_save_kwargs(Path('test.jpg'))
         assert kwargs['format'] == 'JPEG'
 
-    def test_optimize_enabled(self):
-        """Optimize should be enabled."""
+    def test_optimize_not_set(self):
+        """Optimize is intentionally not set: cost ~+800 ms per save
+        for ~10% smaller files at q=95 on map imagery — bad trade-off."""
         kwargs = build_save_kwargs(Path('test.jpg'))
-        assert kwargs['optimize'] is True
+        assert 'optimize' not in kwargs
 
-    def test_progressive_enabled(self):
-        """Progressive should be enabled."""
+    def test_progressive_not_set(self):
+        """Progressive is intentionally not set: ~+100 ms per save and
+        no perceptible benefit for files we never stream over a network."""
         kwargs = build_save_kwargs(Path('test.jpg'))
-        assert kwargs['progressive'] is True
+        assert 'progressive' not in kwargs
 
-    def test_subsampling_zero(self):
-        """Subsampling should be 0 (best quality)."""
+    def test_subsampling_default(self):
+        """Subsampling is intentionally left at libjpeg default (4:2:0),
+        not forced to 0 (4:4:4) — chroma in satellite/elevation maps is
+        already smooth, the extra precision isn't worth the encode cost."""
         kwargs = build_save_kwargs(Path('test.jpg'))
-        assert kwargs['subsampling'] == 0
+        assert 'subsampling' not in kwargs
 
     def test_exif_empty(self):
         """EXIF should be empty bytes."""
