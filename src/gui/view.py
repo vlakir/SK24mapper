@@ -5831,6 +5831,12 @@ class MainWindow(QMainWindow):
         """Remove all target points."""
         self._nsu_table.setRowCount(0)
         self._sync_ui_to_model_now()
+        # _trigger_nsu_recompute может уйти в early-return (нет кэша,
+        # pre-flight памяти, worker занят → defer), и overlay/маркеры
+        # останутся «висеть». Сбрасываем визуал безусловно.
+        if self._has_nsu_cache():
+            logger.info('NSU: clear all → reset overlay')
+            self._nsu_reset_overlay()
         self._trigger_nsu_recompute()
 
     def _is_nsu_point_in_bounds(self, x_sk42: int, y_sk42: int) -> bool:
@@ -5976,15 +5982,30 @@ class MainWindow(QMainWindow):
         """Clear NSU heatmap overlay and markers when all points deleted."""
         import contextlib
 
+        # 0. Отменить pending refine от предыдущего drag — иначе он
+        # запустит recompute поверх свежесброшенного состояния.
+        self._nsu_refine_timer.stop()
+        # И pending stage-2 swap от предыдущего set_image — иначе
+        # full-res QImage с маркерами «всплывёт» поверх чистой topo.
+        self._preview_area.cancel_pending_full_swap()
+        # И pending recompute, чтобы deferred worker не дорисовал
+        # старые маркеры поверх свежесброшенного состояния.
+        self._nsu_pending_recompute = False
+
         # 1. Remove coverage layer from cache
         old_cov = self._rh_cache.pop('coverage_layer', None)
         if old_cov is not None and hasattr(old_cov, 'close'):
             with contextlib.suppress(Exception):
                 old_cov.close()
 
-        # 2. Remove all T* draggable points
-        for i in range(10):
-            self._preview_area.remove_draggable_point(f'T{i}')
+        # 2. Полностью сбросить draggable points через set ({}), не
+        # remove_draggable_point(T0..T9) — если у пользователя было
+        # >10 точек, T10+ оставались в кэше.
+        self._preview_area.set_draggable_points({})
+        # Снять drag-feedback (crosshair/линия от hover/drag), если
+        # последний drag не успел очиститься естественно.
+        with contextlib.suppress(Exception):
+            self._preview_area.clear_drag_feedback()
 
         # 3. Clear NSU markers (crosses on map)
         self._preview_area.clear_nsu_markers()
@@ -6017,7 +6038,21 @@ class MainWindow(QMainWindow):
                     display = display.convert('RGBA')
                 display = Image.alpha_composite(display, overlay_layer)
                 display = display.convert('RGB')
+            # Обновляем _base/_current_image, иначе alpha-слайдер или
+            # следующий recompute восстановят старое изображение с
+            # маркерами/coverage из этих кэшей.
+            self._base_image = display
+            self._current_image = display
+            logger.info(
+                'NSU reset: set_image clean topo size=%s mode=%s',
+                display.size, display.mode,
+            )
             self._preview_area.set_image(display)
+        else:
+            logger.warning(
+                'NSU reset: topo_base отсутствует в кэше — '
+                'визуал НЕ обновлён, маркеры останутся на экране',
+            )
 
     def _trigger_nsu_recompute(self, low_res_factor: int = 2) -> None:
         """
