@@ -1,11 +1,15 @@
 """Main entry point for Mil Mapper 2.0 with PySide6 MVC architecture."""
 
 import argparse
+import faulthandler
 import logging
 import os
 import shutil
 import sys
 from pathlib import Path
+
+# Python traceback on SIGSEGV/SIGFPE/etc from C++ extensions (Qt/numpy/PIL).
+faulthandler.enable()
 
 # Limit glibc per-thread malloc arenas BEFORE any C extension (numpy / cv2 /
 # PIL) is imported, and BEFORE the persistent worker is spawned. Default on
@@ -352,11 +356,24 @@ def main() -> int:
 
     # Suppress harmless "qt.svg: Duplicate unique style id" warnings
     # originating from broken SVGs in system icon themes (e.g. elementary).
+    # Все остальные Qt-сообщения маршрутизируем в Python-лог — раньше шли
+    # в stderr и терялись при крэше; warnings часто предвестники падений.
     _orig_handler = None
+    _qt_logger = logging.getLogger('Qt')
+    _qt_level_map = {
+        QtMsgType.QtDebugMsg: logging.DEBUG,
+        QtMsgType.QtInfoMsg: logging.INFO,
+        QtMsgType.QtWarningMsg: logging.WARNING,
+        QtMsgType.QtCriticalMsg: logging.ERROR,
+        QtMsgType.QtFatalMsg: logging.CRITICAL,
+    }
 
     def _qt_msg_filter(msg_type, context, message) -> None:  # noqa: ANN001
         if msg_type == QtMsgType.QtWarningMsg and message.startswith('qt.svg:'):
             return  # swallow
+        level = _qt_level_map.get(msg_type, logging.WARNING)
+        cat = getattr(context, 'category', None) or ''
+        _qt_logger.log(level, '[%s] %s', cat, message)
         if _orig_handler is not None:
             _orig_handler(msg_type, context, message)
 
