@@ -62,6 +62,25 @@ class TestStructural:
 
 
 # ---------------------------------------------------------------------------
+# Structural: _nsu_clear_all_points calls _nsu_reset_overlay unconditionally
+# ---------------------------------------------------------------------------
+
+class TestClearAllResets:
+    """Regression: Clear-All must invoke reset_overlay directly, not rely on
+    _trigger_nsu_recompute (which can early-return on memory pre-flight or
+    when a worker is busy → defer). Otherwise overlay/markers stay on screen.
+    """
+
+    def test_clear_all_calls_reset_overlay(self) -> None:
+        src = _get_source('_nsu_clear_all_points')
+        assert '_nsu_reset_overlay' in src, (
+            '_nsu_clear_all_points must call _nsu_reset_overlay directly '
+            '— relying on _trigger_nsu_recompute leaves overlay stale on '
+            'early-return paths (memory pre-flight, worker busy → defer).'
+        )
+
+
+# ---------------------------------------------------------------------------
 # Structural: _apply_interactive_alpha restores NSU points after set_image
 # ---------------------------------------------------------------------------
 
@@ -107,8 +126,15 @@ class TestBehavior:
             'final_size': (200, 100),
         }
 
-        # Mock preview area
+        # Mock preview area (cancel_pending_full_swap + set_image + ...)
         stub._preview_area = MagicMock()
+        # Mock refine timer (stop() called by reset to cancel pending drag refine)
+        stub._nsu_refine_timer = MagicMock()
+        # Mock _base_image/_current_image fields (reset assigns them)
+        stub._base_image = None
+        stub._current_image = None
+        # Mock pending recompute flag (reset clears it)
+        stub._nsu_pending_recompute = False
 
         # Bind the real method
         stub._nsu_reset_overlay = types.MethodType(
@@ -125,11 +151,9 @@ class TestBehavior:
     def test_draggable_points_removed(self) -> None:
         stub = self._make_stub()
         stub._nsu_reset_overlay()
-        # Should call remove_draggable_point for T0..T9
-        calls = stub._preview_area.remove_draggable_point.call_args_list
-        expected_ids = {f'T{i}' for i in range(10)}
-        actual_ids = {c.args[0] for c in calls}
-        assert expected_ids == actual_ids
+        # Reset должен полностью очистить draggable points через
+        # set_draggable_points({}) — гарантия что T10+ тоже уйдут.
+        stub._preview_area.set_draggable_points.assert_called_with({})
 
     def test_nsu_markers_cleared(self) -> None:
         stub = self._make_stub()
