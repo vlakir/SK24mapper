@@ -20,6 +20,7 @@ def _gui_rss_mb() -> float:
         return _proc.memory_info().rss / (1024 * 1024)
     except Exception:
         return -1.0
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -44,6 +45,7 @@ from PySide6.QtGui import (
     QAction,
     QCloseEvent,
     QColor,
+    QIntValidator,
     QPainter,
     QPixmapCache,
     QResizeEvent,
@@ -1238,6 +1240,76 @@ class ApiKeyDialog(QDialog):
             self.accept()
         else:
             QMessageBox.critical(self, 'Ошибка', 'Не удалось сохранить API ключ.')
+
+
+class NsuAddPointDialog(QDialog):
+    """Dialog for manually entering SK-42 coordinates of an NSU target point."""
+
+    def __init__(
+        self,
+        x_default: int,
+        y_default: int,
+        bounds_check: Callable[[int, int], bool] | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle('Добавить точку НСУ')
+        self.setMinimumWidth(360)
+        self._bounds_check = bounds_check
+        layout = QVBoxLayout(self)
+
+        # Отдельный QIntValidator на каждое поле: shared validator в Qt6
+        # вызывает SIGSEGV при разрушении диалога (double-free dangling
+        # pointer в одном из QLineEdit).
+        self._x_widget = CoordinateInputWidget('X (вертикаль):')
+        self._x_widget.set_coordinate(int(x_default))
+        self._x_widget.coordinate_edit.setValidator(QIntValidator(0, 9999999, self))
+        layout.addWidget(self._x_widget)
+
+        self._y_widget = CoordinateInputWidget('Y (горизонталь):')
+        self._y_widget.set_coordinate(int(y_default))
+        self._y_widget.coordinate_edit.setValidator(QIntValidator(0, 9999999, self))
+        layout.addWidget(self._y_widget)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def get_coordinates(self) -> tuple[int, int]:
+        """Return (X northing, Y easting) entered by user."""
+        return self._x_widget.get_coordinate(), self._y_widget.get_coordinate()
+
+    def accept(self) -> None:
+        x_text = self._x_widget.coordinate_edit.text().strip()
+        y_text = self._y_widget.coordinate_edit.text().strip()
+        if not x_text or not y_text:
+            QMessageBox.warning(
+                self, 'Некорректный ввод', 'Заполните оба поля координат.'
+            )
+            return
+        try:
+            x_val = int(x_text)
+            y_val = int(y_text)
+        except ValueError:
+            QMessageBox.warning(
+                self, 'Некорректный ввод', 'X и Y должны быть целыми числами.'
+            )
+            return
+        if self._bounds_check is not None and not self._bounds_check(x_val, y_val):
+            reply = QMessageBox.question(
+                self,
+                'Точка за пределами карты',
+                'Введённая точка находится за пределами текущей карты '
+                'и не будет участвовать в оптимизации НСУ.\nВсё равно добавить?',
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+        super().accept()
 
 
 class AdvancedSettingsDialog(QDialog):
@@ -5802,13 +5874,19 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _nsu_add_point_from_button(self) -> None:
-        """Add a point at map center via button."""
+        """Open dialog for manual entry of NSU point SK-42 coordinates."""
         settings = self._model.settings
         if settings is None:
             return
-        # Default to map center (rough)
-        x_val = settings.control_point_x
-        y_val = settings.control_point_y
+        dialog = NsuAddPointDialog(
+            int(settings.control_point_x),
+            int(settings.control_point_y),
+            bounds_check=self._is_nsu_point_in_bounds,
+            parent=self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        x_val, y_val = dialog.get_coordinates()
         self._nsu_add_point(x_val, y_val)
 
     @Slot()
