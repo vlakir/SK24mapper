@@ -90,6 +90,7 @@ jobs:
           name: SK42-win64-installer
           path: |
             SK42-*-setup.exe
+          retention-days: 7
 
       - name: Build portable version with PyInstaller
         run: poetry run pyinstaller SK42_portable.spec --noconfirm --clean
@@ -176,6 +177,7 @@ jobs:
           name: SK42-portable
           path: |
             SK42-*-portable.zip
+          retention-days: 7
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
