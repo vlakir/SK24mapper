@@ -71,6 +71,7 @@ exclude = [
     "migrations",
     "draft",
     "tests",
+    ".worktrees",
 ]
 
 target-version = "py313"

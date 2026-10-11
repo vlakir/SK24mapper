@@ -1,3 +1,6 @@
+# Рабочие папки задач (git worktree) — внутри проекта, не в репозитории
+/.worktrees/
+
 .idea/
 .zencoder/
 venv/

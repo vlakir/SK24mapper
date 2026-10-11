@@ -86,6 +86,13 @@ API: Mapbox (токен в `.env` или `.secrets.env`)
 
 ---
 
+## Рабочие папки задач (git worktree)
+Параллельные задачи ведутся в `git worktree` **внутри проекта**:
+`git worktree add .worktrees/<ветка> -b <ветка> origin/master`.
+Каталог `.worktrees/` в `.gitignore` и в `exclude` ruff (`ruff format .` из
+`check.sh` в него не заходит); pytest пропускает его по умолчанию
+(`norecursedirs` содержит `.*`). Прежний вариант `../<repo>-<ветка>` — история.
+
 ## ПРИОРИТЕТНАЯ ЗАДАЧА: Hillshade — проблема грубой сетки высот
 
 ### Статус: IN PROGRESS — требуется исследование
